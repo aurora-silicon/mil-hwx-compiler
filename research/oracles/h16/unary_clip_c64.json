@@ -1,0 +1,41 @@
+{
+  "case": "unary_clip_c64",
+  "compiler": {
+    "command": [
+      "/tmp/w73-t7/tool/ane-compile-hwx",
+      "CAPTURE_DIR",
+      "OUTPUT_DIR",
+      "h16"
+    ],
+    "decoder_sha256": "125da0249ca3c3ba0ca1f9f0cabfd1db54a965abb75f9f4cdcc2598e255c8fbc",
+    "driver_sha256": "88e2e31797cc154befc9be7fb2ccb5156a41099c7f1a85483c4dd45585c1ea42",
+    "host": "MacStudio.local",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "tool": "/tmp/w73-t7/tool/ane-compile-hwx",
+    "tool_sha256": "2060776c98e385d091ca244a2083be25919ed0c340ba1c8c89840208473b05d5"
+  },
+  "constant_section": null,
+  "error": "callback_status=1",
+  "family": "unary",
+  "hwx_bytes": null,
+  "hwx_sha256": null,
+  "mil": "program(1.3)\n[buildInfo = dict<string, string>({})]\n{\n  func main<ios18>(tensor<fp16, [1, 64, 1, 1]> x) {\n    tensor<fp16, [1, 64, 1, 1]> y = clip(x = x, alpha = fp32(-1.0), beta = fp32(1.0))[name = string(\"y\")];\n  } -> (y);\n}\n",
+  "parameters": {
+    "operation": "clip",
+    "shape": [
+      1,
+      64,
+      1,
+      1
+    ]
+  },
+  "program_descriptor": null,
+  "schema_version": 1,
+  "source_commit": "5271ab0d",
+  "target": "h16",
+  "task_descriptors": [],
+  "tensor_descriptors": [],
+  "weights": {
+    "storage": "none"
+  }
+}
