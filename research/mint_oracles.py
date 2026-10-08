@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Mint and decode H13/H14 ANE compiler oracles without retaining HWX bytes."""
+"""Mint ANE compiler oracle records without retaining HWX bytes.
+
+H13/H14 records carry fully decoded task streams. H15/H16 have no decoder yet:
+their records keep raw task-section words and Mach-O/section facts and are
+marked `decoded: false`."""
 from __future__ import annotations
 
 import argparse
@@ -21,7 +25,8 @@ from typing import Any
 from h13_td import decode_task, split_h13_tasks, split_h14_tasks
 
 MAGIC = 0xBEEFFACE
-SUBTYPES = {"h13": 4, "h14": 5}
+SUBTYPES = {"h13": 4, "h14": 5, "h15": 6, "h16": 7}
+DECODABLE_TARGETS = ("h13", "h14")
 DEFAULT_TOOL = "/tmp/h13-oracle/bin/ane-compile-hwx"
 COMPILE_TIMEOUT_SECONDS = 900
 
@@ -726,8 +731,8 @@ def decode_task_safely(task: bytes, target: str) -> dict[str, Any]:
 def parse_hwx(data: bytes, target: str) -> dict[str, Any]:
     if len(data) < 32:
         raise ValueError("HWX Mach-O header is truncated")
-    magic, _, subtype, _, command_count, command_bytes, _, _ = struct.unpack_from(
-        "<8I", data)
+    magic, cputype, subtype, filetype, command_count, command_bytes, flags, _ = \
+        struct.unpack_from("<8I", data)
     if magic != MAGIC:
         raise ValueError(f"invalid HWX magic 0x{magic:08x}")
     if subtype != SUBTYPES[target]:
@@ -801,8 +806,8 @@ def parse_hwx(data: bytes, target: str) -> dict[str, Any]:
         raise ValueError("HWX load command sizes do not match the header")
     text = sections.get(("__TEXT", "__text")) or sections.get(("__TEXT", "__TEXT"))
     constants = sections.get(("__TEXT", "__const"))
-    if not text or not constants or not programs:
-        raise ValueError("HWX lacks text, constant, or program descriptor metadata")
+    if not text or not constants:
+        raise ValueError("HWX lacks text or constant section metadata")
     text_end = text["offset"] + text["size"]
     constant_end = constants["offset"] + constants["size"]
     if text_end > len(data):
@@ -823,6 +828,46 @@ def parse_hwx(data: bytes, target: str) -> dict[str, Any]:
         for offset in range(0, len(constant_data), chunk_bytes)
         for chunk in (constant_data[offset:offset + chunk_bytes],)
     ] if len(constant_data) <= 0x10000 else []
+    constant_facts = {
+        "size": len(constant_data),
+        "sha256": hashlib.sha256(constant_data).hexdigest(),
+        "nonzero_bytes": sum(value != 0 for value in constant_data),
+        "prefix_128_sha256": hashlib.sha256(prefix).hexdigest(),
+        "prefix_128_nonzero_bytes": sum(value != 0 for value in prefix),
+        "tail_after_128_nonzero_bytes": sum(
+            value != 0 for value in constant_data[128:]),
+        "nonzero_fp16_words": decode_constant_half_words(constant_data),
+        "chunk_bytes": chunk_bytes,
+        "chunk_count": (len(constant_data) + chunk_bytes - 1) // chunk_bytes,
+        "chunks": chunks,
+    }
+    header_facts = {
+        "magic": f"0x{magic:08x}", "cputype": f"0x{cputype:x}",
+        "cpusubtype": subtype, "filetype": f"0x{filetype:x}",
+        "command_count": command_count, "command_bytes": command_bytes,
+    }
+    if target not in DECODABLE_TARGETS:
+        # No decoder covers this generation: keep raw words and facts only.
+        return {
+            "hwx_sha256": hashlib.sha256(data).hexdigest(),
+            "hwx_bytes": len(data),
+            "mach_o_header": header_facts,
+            "sections": [
+                {"segment": segment, "section": section,
+                 "address": f"0x{facts['address']:x}", "size": facts["size"],
+                 "offset": facts["offset"]}
+                for (segment, section), facts in sorted(sections.items())],
+            "constant_section": constant_facts,
+            "task_section": {
+                "size": len(text_data),
+                "word_count": len(text_data) // 4,
+                "words": [f"0x{word:08x}" for word in struct.unpack(
+                    f"<{len(text_data) // 4}I", text_data)],
+            },
+            "decoded": False,
+        }
+    if not programs:
+        raise ValueError("HWX lacks program descriptor metadata")
     raw_tasks = []
     for index, (program, region) in enumerate(
             zip(programs, program_regions(programs, text, len(text_data)))):
@@ -838,25 +883,15 @@ def parse_hwx(data: bytes, target: str) -> dict[str, Any]:
     return {
         "hwx_sha256": hashlib.sha256(data).hexdigest(),
         "hwx_bytes": len(data),
+        "mach_o_header": header_facts,
         "program_descriptor": programs[-1],
         "program_count": len(programs),
         "programs": programs,
         "tensor_descriptors": tensors,
-        "constant_section": {
-            "size": len(constant_data),
-            "sha256": hashlib.sha256(constant_data).hexdigest(),
-            "nonzero_bytes": sum(value != 0 for value in constant_data),
-            "prefix_128_sha256": hashlib.sha256(prefix).hexdigest(),
-            "prefix_128_nonzero_bytes": sum(value != 0 for value in prefix),
-            "tail_after_128_nonzero_bytes": sum(
-                value != 0 for value in constant_data[128:]),
-            "nonzero_fp16_words": decode_constant_half_words(constant_data),
-            "chunk_bytes": chunk_bytes,
-            "chunk_count": (len(constant_data) + chunk_bytes - 1) // chunk_bytes,
-            "chunks": chunks,
-        },
+        "constant_section": constant_facts,
         "task_descriptors": descriptors,
         "task_decode_errors": sum("decode_error" in item for item in descriptors),
+        "decoded": not any("decode_error" in item for item in descriptors),
     }
 
 
@@ -904,7 +939,7 @@ def run_case(item: dict[str, Any], target: str, output: Path,
             if result.returncode == 0 and hwx.is_file():
                 record.update(parse_hwx(hwx.read_bytes(), target))
                 record["error"] = None
-                status = "decoded"
+                status = "decoded" if record.get("decoded") else "raw"
             else:
                 record.update({
                     "hwx_sha256": None, "hwx_bytes": None,
@@ -931,9 +966,14 @@ def source_commit() -> str:
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
+def select_cases(patterns: list[str] | None) -> list[dict[str, Any]]:
+    return [item for item in campaign()
+            if not patterns
+            or any(fnmatch.fnmatch(item["name"], pattern) for pattern in patterns)]
+
+
 def local_run(args: argparse.Namespace) -> int:
-    selected = [item for item in campaign()
-                if not args.case or fnmatch.fnmatch(item["name"], args.case)]
+    selected = select_cases(args.case)
     if args.limit is not None:
         selected = selected[:args.limit]
     if args.list:
@@ -946,21 +986,27 @@ def local_run(args: argparse.Namespace) -> int:
         raise SystemExit("--local requires macOS")
     if not os.access(tool, os.X_OK):
         raise SystemExit(f"oracle tool is not executable: {tool}")
-    decoded = rejected = 0
+    decoded = rejected = raw = 0
     output = Path(args.output)
     for target in args.targets:
         for item in selected:
             destination = output / target / f"{item['name']}.json"
             if destination.exists() and not args.force:
                 existing = json.loads(destination.read_text())
-                decoded += existing.get("error") is None
-                rejected += existing.get("error") is not None
+                if existing.get("error") is not None:
+                    rejected += 1
+                elif existing.get("decoded"):
+                    decoded += 1
+                else:
+                    raw += 1
                 continue
             status = run_case(item, target, output, tool, args.source_commit)
             decoded += status == "decoded"
+            raw += status == "raw"
             rejected += status == "rejected"
             print(f"{target} {item['name']} {status}", flush=True)
-    print(f"SUMMARY cases={len(selected) * len(args.targets)} decoded={decoded} rejected={rejected}")
+    print(f"SUMMARY cases={len(selected) * len(args.targets)} decoded={decoded} "
+          f"raw={raw} rejected={rejected}")
     return 0
 
 
@@ -985,7 +1031,7 @@ def remote_run(args: argparse.Namespace) -> int:
             "--source-commit", args.source_commit, "--targets", *args.targets,
         ]
         if args.case:
-            command.extend(["--case", args.case])
+            command.extend(["--case", *args.case])
         if args.limit is not None:
             command.extend(["--limit", str(args.limit)])
         if args.force:
@@ -1015,7 +1061,8 @@ def parse_arguments() -> argparse.Namespace:
                         default=sorted(SUBTYPES))
     parser.add_argument("--oracle-tool", default=DEFAULT_TOOL)
     parser.add_argument("--output", default="research/oracles")
-    parser.add_argument("--case", help="shell pattern selecting case names")
+    parser.add_argument("--case", nargs="+",
+                        help="shell patterns selecting case names (any match)")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--list", action="store_true")

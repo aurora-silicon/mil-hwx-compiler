@@ -10,6 +10,7 @@ HWX_MAGIC = 0xBEEFFACE
 ARCHITECTURES = {
     5: ("H14", 11),
     4: ("H13", 7),
+    6: ("H15", None),
     7: ("H16G", 17),
 }
 
