@@ -1,0 +1,38 @@
+== mil-hwx-compiler H14 programs on the M2 2026-10-10T23:48:33Z dry=0 kernel=7.1.12-2-12.6-sep-ARCH module=bd34a12
+compiler: mil-hwx-compiler origin/main 6f46c6a4d1af617cb190de38f14e444a66f2448f
+compiler binary sha256: 0a79d9c1a1236e99751499be1ca0a78ecd83d3073786686854cdedd810b6f62e
+built on the CT (Linux x86) with the documented GNUstep toolchain; target H14, format anec, per-op schedule
+program sha256 (first 16) | MIL sha256 (first 16) | identical to omarchy-ane fixtures/h14-anec/<op>/program-0.anec:
+  add              b416b9d14059a091 | 80911d1beb3ccef8 | yes
+  mul              b32fef9f18eaf2a9 | 8d031566c9626ab0 | yes
+  relu             429d991a07fcc8a1 | c2a57a18c845ca8c | yes
+  add-scalar       f601839f49b8904c | 061cdcfde957c506 | yes
+  mul-scalar       a8c5a9441f5313df | 5fefab19f5700d74 | yes
+  real-div-scalar  05e3a0c1c60ba180 | e7d686c289c959fa | yes
+  clip-low         1b2c143310945eee | 78162b64c91a8afe | yes
+  clip-high        abe78b1292775e36 | 46706408767b30dc | yes
+-- add program sha256 b416b9d14059a091
+512/512 lanes bit-exact vs the add reference, padding lanes zero: PASS
+rc(add)=0
+-- mul program sha256 b32fef9f18eaf2a9
+512/512 lanes bit-exact vs the mul reference, padding lanes zero: PASS
+rc(mul)=0
+-- relu program sha256 429d991a07fcc8a1
+512/512 lanes bit-exact vs the relu reference, padding lanes zero: PASS
+rc(relu)=0
+-- add-scalar program sha256 f601839f49b8904c
+512/512 lanes bit-exact vs the add-scalar reference, padding lanes zero: PASS
+rc(add-scalar)=0
+-- mul-scalar program sha256 a8c5a9441f5313df
+512/512 lanes bit-exact vs the mul-scalar reference, padding lanes zero: PASS
+rc(mul-scalar)=0
+-- real-div-scalar program sha256 05e3a0c1c60ba180
+512/512 lanes bit-exact vs the real-div-scalar reference, padding lanes zero: PASS
+rc(real-div-scalar)=0
+-- clip-low program sha256 1b2c143310945eee
+512/512 lanes bit-exact vs the clip-low reference, padding lanes zero: PASS
+rc(clip-low)=0
+-- clip-high program sha256 abe78b1292775e36
+512/512 lanes bit-exact vs the clip-high reference, padding lanes zero: PASS
+rc(clip-high)=0
+SUMMARY pass=8 fail=0 dry=0
