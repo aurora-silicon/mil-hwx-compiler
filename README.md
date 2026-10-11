@@ -29,7 +29,7 @@ The compiler does not guess.
 
 | Target | Chip | Output | Device runs |
 | --- | --- | --- | --- |
-| H13 | M1 | ANEC package, or HWX with `--format hwx` | Runs on Linux M1 hardware through omarchy-ane |
+| H13 | M1 | ANEC package, or HWX with `--format hwx` | Runs on Linux M1 hardware through omarchy-ane. Eight elementwise programs built by this compiler ran on a 13-inch M1 and an M1 Max through omarchy-ane. Each was bit-exact on 64 of 64 lanes ([receipt](receipts/2026-10-11-h13-elementwise-m1/)). |
 | H14 | M2 | ANEC package, or HWX with `--format hwx` | Matches decoded Apple output byte for byte. Eight elementwise programs built by this compiler ran on an M2 Max through omarchy-ane. Each was bit-exact on 512 of 512 lanes ([receipt](receipts/2026-10-10-h14-elementwise-m2/README.md)). Larger H14 programs have not run from this backend |
 | H16G | M4 | HWX object | Research compiler. Exercised by the macOS hardware tests in `tests/` |
 
