@@ -1,0 +1,19 @@
+== mil-hwx-compiler H14 matvec programs on the M2 2026-10-11T00:43:42Z dry=0 kernel=7.1.12-2-12.6-sep-ARCH module=bd34a12
+compiler: mil-hwx-compiler origin/main 6f46c6a4d1af617cb190de38f14e444a66f2448f
+compiler binary sha256: 0a79d9c1a1236e99751499be1ca0a78ecd83d3073786686854cdedd810b6f62e
+target H14, format anec; MIL = matmul(x[1,K], w[N,K], transpose_y) with BLOBFILE fp16 weights (random, seeded from K and N)
+size | program bytes | program sha256 (16) | MIL sha256 (16)
+  k256n256      135744 55f870b1f400db9a d6e66e8132ceed7c
+  k512n512      528960 67d43ea85cff2558 1584f83079f6e739
+  k1024n1024   2101824 a48631165f5ae689 a50bc4a43104befa
+k256n256: bytes 0..4671 (header and task streams) identical to omarchy-ane fixtures/h14-anec/matvec/program-0.anec; the 131072-byte weight section differs by design (different weights)
+-- k256n256 program sha256 55f870b1f400db9a
+matvec M=1 K=256 N=256: 256/256 lanes within 2 ulp or 4 cond-units (240 bit-exact), max 1.000 ulp, max 0.114 cond-units; padding lanes zero: PASS
+rc(k256n256)=0
+-- k512n512 program sha256 67d43ea85cff2558
+matvec M=1 K=512 N=512: 512/512 lanes within 2 ulp or 4 cond-units (482 bit-exact), max 15.000 ulp, max 0.122 cond-units; padding lanes zero: PASS
+rc(k512n512)=0
+-- k1024n1024 program sha256 a48631165f5ae689
+matvec M=1 K=1024 N=1024: 1024/1024 lanes within 2 ulp or 4 cond-units (971 bit-exact), max 16.000 ulp, max 0.111 cond-units; padding lanes zero: PASS
+rc(k1024n1024)=0
+SUMMARY pass=3 fail=0 dry=0

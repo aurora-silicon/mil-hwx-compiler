@@ -4,6 +4,16 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+### 2026-10-11
+- Test: `tests/test_h14_matvec_programs.py` compiles an H14 fp16 matvec at K = N = 256, 512 and 1024 and pins each program's
+  size and the sha256 of its first 4,672 bytes (header and task streams), which do not depend on the weights. It checks
+  that two different weight sets give the same head and different weight sections. For 256 the head equals the omarchy-ane
+  fixture's. Weights come from the standard library, so no numpy. Wired into `make test-h14-parity`.
+- Device status: the three matvec programs ran on an M2 Max through omarchy-ane's `ane-run --check matvec`. Every lane
+  was inside the 2 ulp or 4 condition-unit band (256 of 256, 512 of 512, 1024 of 1024), with 240, 482 and 971 lanes
+  bit-exact and padding zero (receipt `receipts/2026-10-11-h14-matvec-m2/`). One run, M = 1, square shapes only, no
+  speed claim.
+
 ### 2026-10-10
 - Test: `tests/test_h13_fixture_programs.py` compiles eight H13 elementwise programs (add, mul, relu, add-scalar,
   mul-scalar, real-div-scalar, clip-low, clip-high; MIL in `tests/fixtures/h13/`) and checks each result against a pinned
