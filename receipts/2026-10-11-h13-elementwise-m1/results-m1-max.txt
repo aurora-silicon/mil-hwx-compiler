@@ -1,0 +1,24 @@
+== mil-hwx-compiler H13 programs 2026-10-11T03:07:00Z dry=0 kernel=7.1.12-2-12.6-sep-ARCH chip_dt=apple,j316capple,t6001apple,arm-platform
+runner /var/tmp/m1slot/tree/tools/ane-run sha256 480040b5f700f407
+compiler: mil-hwx-compiler origin/main 6f46c6a4d1af617cb190de38f14e444a66f2448f
+compiler binary sha256: 0a79d9c1a1236e99751499be1ca0a78ecd83d3073786686854cdedd810b6f62e
+target H13, format anec, per-op schedule, shape [1,64,1,1] fp16; MIL real_div, maximum, minimum with constant 0x1p-1
+op | encoder | program bytes | program sha256 (16) | MIL sha256 (16)
+  add              h13-source-qualified     4736 ac97b46653e5f0dd 631d517cba9f548b
+  mul              h13-source-qualified     4736 99f082c20036cfa2 4ec7f63266291dd2
+  relu             h13-oracle-parity       20992 c7cc9781af1bd2c0 fb1bbbec34b71712
+  add-scalar       h13-oracle-parity       20992 44c9d1d5f4a1ce0a 1d8d2ed8e8ab3905
+  mul-scalar       h13-source-qualified     4736 99f082c20036cfa2 a7c1e1ca9eacbe00
+  real-div-scalar  h13-oracle-parity        5376 7920c55dfc4f17b1 64fa8491374d051e
+  clip-low         h13-oracle-parity        6784 cfc9bee528fa9b45 f6c5e158cdd2da8a
+  clip-high        h13-oracle-parity        6784 1859b3760a246bbf 901095e7c1bb7ccc
+add              h13-source-qualified     4736 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+mul              h13-source-qualified     4736 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+relu             h13-oracle-parity       20992 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+add-scalar       h13-oracle-parity       20992 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+mul-scalar       h13-source-qualified     4736 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+real-div-scalar  h13-oracle-parity        5376 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+clip-low         h13-oracle-parity        6784 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+clip-high        h13-oracle-parity        6784 B  64/64 lanes bit-exact, padding nonzero 0: PASS
+SUMMARY pass=8 fail=0
+gate rc=0
