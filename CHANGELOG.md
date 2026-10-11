@@ -4,7 +4,19 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+## 0.2.0 (2026-10-11)
+
+New since 0.1.0:
+- `--target H17` and `--target H18` emit Apple's exact HWX for the 165 decoded elementwise, unary and scalar-constant points of each generation and
+  refuse every other shape, constant and family by name (PR #4). Byte parity with decoded Apple output, not device execution.
+- Test subprocess timeouts scale with `MIL_HWX_TEST_TIMEOUT_SCALE` (PR #2). The README is rewritten for first-time users (PR #3).
+  The pre-commit hook runs the fleet identity check.
+- Device-verified compiler output: 27 program runs in the committed receipts. H13: 8 elementwise programs on a 13-inch M1 and the same 8 on an
+  M1 Max, each bit-exact on 64 of 64 lanes. H14: 8 elementwise programs bit-exact on 512 of 512 lanes and 3 matvec programs (K = N of 256,
+  512 and 1024) inside a 2 ulp or 4 condition-unit band, on an M2 Max. 19 distinct programs. One run per receipt; no speed claim.
+
 ### 2026-10-11
+- Docs: the README targets table and usage line list H17 and H18.
 - Test: `tests/test_h14_matvec_programs.py` compiles an H14 fp16 matvec at K = N = 256, 512 and 1024 and pins each program's
   size and the sha256 of its first 4,672 bytes (header and task streams), which do not depend on the weights. It checks
   that two different weight sets give the same head and different weight sections. For 256 the head equals the omarchy-ane
