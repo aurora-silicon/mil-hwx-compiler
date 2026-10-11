@@ -11,14 +11,17 @@ were a 13-inch M1 (T8103) and a 16-inch M1 Max (T6001). All 8 passed on both.
 - Two H13 encoders produced them. `h13-source-qualified` made add, mul and mul-scalar (4,736 bytes each). Mul and
   mul-scalar are the same program, because the scalar travels as a second operand surface. `h13-oracle-parity` made relu,
   add-scalar, real-div-scalar, clip-low and clip-high.
-- Runner: `ane-run` from omarchy-ane main plus the `--tile-shift` option, under the `ane-run` lock.
-- `gate_h13.py` writes the inputs and runs the program once. It compares all 64 lanes with an exact reference (round half
+- Runner: `ane-run` from omarchy-ane main, called by `gate_h13.py` with `--anec`, `--in`, `--out` and `--repeat 5`, under the
+  `ane-run` lock. The `--tile-shift` option is not used; these small programs use the default tile unit.
+- `gate_h13.py` writes one random input per operand and runs the program with `--repeat 5`. It compares all 64 lanes with an exact reference (round half
   away from zero, exact comparison) and checks that padding is zero. `run.sh` is the ticket that calls it.
 - Kernel 7.1.12-2-12.6-sep, in-tree `ane` module. Nothing else ran on the ANE during a run.
 
 ## Result
 All 8 programs passed on both chips: 64 of 64 lanes bit-exact, zero nonzero padding lanes. `results-m1.txt` and
-`results-m1-max.txt` hold the latest run on each chip. The last three runs on each chip passed 8 of 8.
+`results-m1-max.txt` hold one run on each chip. `run-log-m1.txt` and `run-log-m1-max.txt` are the last three entries of the
+ticket log on each chip, all `SUMMARY pass=8 fail=0`. The results files are the 01:54Z run on the 13-inch M1 and the
+03:07Z run on the M1 Max, the second entry of each log.
 
 ## Limits
 - One input per operand per run, 64 lanes. These are single elementwise programs. Matvec, normalization, convolution and
