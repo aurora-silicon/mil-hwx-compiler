@@ -1,0 +1,19 @@
+compiler source c8506137c2001dd7f5f77abbbda4a5515ae7d954
+target H13 ANEC; fp16 matmul x[1,K] by constant W[N,K], transpose_y=true; K=N
+runner SHA256 prefix 480040b5f700f407; repeat request 20
+
+shape | programs | package bytes | 13-inch M1 | M1 Max
+256 | 1 | 529024 | init failure, no comparisons | init failure, no comparisons
+512 | 1 | 529024 | unexpected io shape, no comparisons | unexpected io shape, no comparisons
+1024 | 5 | four x 529024 + 20992 combine | not run | not run
+
+K=256 program SHA256 7dbac5036b00136e367d54e669e0bdf8eeb4e7bde9f6aa88d54719e83f1785e5
+K=512 program SHA256 3128f95559d3b758c416e34728aa534fc93d2b3d9e6c9875d64d75718daabd9a
+K=1024 program dispatch: four 529024-byte matmul programs and one 20992-byte combine program.
+
+M1, K=256: LIBANE surface channel 5 needs 32768 bytes but is allocated 16384; ane_init failed.
+M1, K=512: --check matvec: unexpected io shape.
+M1 Max, K=256: LIBANE surface channel 5 needs 32768 bytes but is allocated 16384; ane_init failed.
+M1 Max, K=512: --check matvec: unexpected io shape.
+
+No lane counts or ULP data were produced.
