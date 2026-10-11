@@ -2,8 +2,8 @@
 """Each H14 elementwise MIL under tests/fixtures/h14 compiles to the exact ANEC bytes pinned here.
 
 The pinned hashes are the hashes of the programs the omarchy-ane project checks in as H14 fixtures for the
-M2 (fixtures/h14-anec/<op>/program-0.anec). The `add` program is proven on the device; the other seven are
-compiled byte-identical to their fixtures and wait for a device run (see CHANGELOG.md for the status).
+M2 (fixtures/h14-anec/<op>/program-0.anec). The test proves byte reproduction only and no device behavior.
+All eight fixtures ran on an M2 Max earlier; see CHANGELOG.md for the receipts.
 Usage: tests/test_h14_fixture_programs.py [path-to-mil-hwxc]
 """
 import hashlib

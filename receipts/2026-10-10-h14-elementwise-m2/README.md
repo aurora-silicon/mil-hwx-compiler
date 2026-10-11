@@ -12,7 +12,7 @@ Eight programs were compiled with `mil-hwxc --target H14`. They ran on an Apple 
 ## Result
 All 8 passed. Each of add, mul, relu, add-scalar, mul-scalar, real-div-scalar, clip-low and clip-high had 512 of 512 valid lanes bit-exact against the reference, zero padding lanes and exit code 0. The raw output is `results.txt`. `run.sh` is the script that ran it.
 
-Each program is also byte-identical to the H14 fixture program that omarchy-ane checks in (`fixtures/h14-anec/<op>/program-0.anec`). The `add` program was proven on this chip before. The other seven had not run from a compiler-built package.
+Each program is also byte-identical to the H14 fixture program that omarchy-ane checks in (`fixtures/h14-anec/<op>/program-0.anec`). The same fixture programs ran on an M2 Max earlier, in the omarchy-ane receipts `2026-10-03-t6021-v042-gate` (all eight) and `2026-10-01-t6021-disk-boot` (six). This run repeats the device check with this compiler's output, which has the same bytes.
 
 ## Limits
 - One run on one boot. 20 calls per program. One random input per operand, in the sparse planes the runner generates.
