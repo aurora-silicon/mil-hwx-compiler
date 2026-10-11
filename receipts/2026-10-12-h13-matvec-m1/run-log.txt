@@ -1,0 +1,31 @@
+=== 13-inch M1 ===
+H13 matvec device run start=2026-10-11T21:50:17Z kernel=7.1.12-2-12.6-sep-ARCH
+chip=apple,j293apple,t8103apple,arm-platform runner_sha256=480040b5f700f407
+
+== k256n256 program_sha256=7dbac5036b00136e ==
+LIBANE: ERR: /var/tmp/m1slot/mil-h13-matvec/k256n256/program-0.anec: surface channel 5 needs 32768 bytes but is allocated 16384; refusing the program
+LIBANE: ERR: failed to init memory-mapped chans
+ane_init failed on /var/tmp/m1slot/mil-h13-matvec/k256n256/program-0.anec
+rc(k256n256)=1
+
+== k512n512 program_sha256=3128f95559d3b758 ==
+--check matvec: unexpected io shape
+rc(k512n512)=255
+
+SUMMARY pass=0 fail=2
+
+=== M1 Max ===
+H13 matvec device run start=2026-10-11T21:50:06Z kernel=7.1.12-2-12.6-sep-ARCH
+chip=apple,j316capple,t6001apple,arm-platform runner_sha256=480040b5f700f407
+
+== k256n256 program_sha256=7dbac5036b00136e ==
+LIBANE: ERR: /var/tmp/m1slot/mil-h13-matvec/k256n256/program-0.anec: surface channel 5 needs 32768 bytes but is allocated 16384; refusing the program
+LIBANE: ERR: failed to init memory-mapped chans
+ane_init failed on /var/tmp/m1slot/mil-h13-matvec/k256n256/program-0.anec
+rc(k256n256)=1
+
+== k512n512 program_sha256=3128f95559d3b758 ==
+--check matvec: unexpected io shape
+rc(k512n512)=255
+
+SUMMARY pass=0 fail=2
