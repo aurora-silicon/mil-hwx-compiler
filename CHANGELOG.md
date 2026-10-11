@@ -13,7 +13,8 @@ New since 0.1.0:
   The pre-commit hook runs the fleet identity check.
 - Device-verified compiler output: 27 program runs in the committed receipts. H13: 8 elementwise programs on a 13-inch M1 and the same 8 on an
   M1 Max, each bit-exact on 64 of 64 lanes. H14: 8 elementwise programs bit-exact on 512 of 512 lanes and 3 matvec programs (K = N of 256,
-  512 and 1024) inside a 2 ulp or 4 condition-unit band, on an M2 Max. 19 distinct programs. One run per receipt; no speed claim.
+  512 and 1024) inside a 2 ulp or 4 condition-unit band, on an M2 Max. That is 19 programs by name and 18 distinct by bytes (the H13
+  mul and mul-scalar programs are the same bytes). One run per receipt; no speed claim.
 
 ### 2026-10-11
 - Docs: the README targets table and usage line list H17 and H18.
