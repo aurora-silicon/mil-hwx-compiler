@@ -5,7 +5,9 @@ Usage: compare-offline.py SETDIR OUTDIR [results.txt]
 SETDIR holds the shape directories from build-rows.py (x.f16, w.raw.f16). OUTDIR holds mMkKnN.cal.y.f16, the output file that
 ane-run wrote. Per lane: want = float64 sum of the fp16 products rounded to fp16, ties away from zero; a lane is in band when it is within
 2 ulp of want or within 4 condition units (4 * 2^-11 * the sum of the absolute products). Padding lanes after the M * N lanes must be zero.
-With results.txt, every shape that ane-run itself checked must give the same counts, which validates this comparator."""
+With results.txt, every shape that ane-run itself checked must give the same counts, which validates this comparator.
+Exit status 0 only when every shape in SETDIR has an output, every shape passes, no padding lane is nonzero, and every printed count
+is reproduced. Anything else exits 1."""
 import re
 import sys
 from pathlib import Path
@@ -56,11 +58,17 @@ for d in sorted(set_dir.glob("m*k*n*")):
     in_band = int(((diff <= 2.0) | (nerr <= 4.0)).sum())
     exact = int((got.view(np.uint16) == want.view(np.uint16)).sum())
     pad = int(np.count_nonzero(y[m * n:].view(np.uint16)))
-    rows.append(((m, k, n), in_band, m * n, exact, float(round(diff.max() * 1000)) / 1000, round(float(nerr.max()), 3), pad))
+    worst_ulp = float(np.max(np.nan_to_num(diff, nan=np.inf)))
+    worst_nerr = float(np.max(np.nan_to_num(nerr, nan=np.inf)))
+    rows.append(((m, k, n), in_band, m * n, exact, round(worst_ulp, 3) if np.isfinite(worst_ulp) else worst_ulp,
+                 round(worst_nerr, 3) if np.isfinite(worst_nerr) else worst_nerr, pad))
 
 bad = 0
+failed = 0
+compared = {shape for shape, *_ in rows}
 for (m, k, n), in_band, lanes, exact, max_ulp, max_nerr, pad in rows:
     status = "PASS" if in_band == lanes and pad == 0 else "FAIL"
+    failed += status == "FAIL"
     note = ""
     if (m, k, n) in printed:
         p = printed[(m, k, n)]
@@ -69,5 +77,12 @@ for (m, k, n), in_band, lanes, exact, max_ulp, max_nerr, pad in rows:
         bad += not same
     print(f"M={m:<2} K={k:<4} N={n:<4} {in_band}/{lanes} lanes in band, {exact} bit-exact, max {max_ulp:g} ulp, "
           f"max {max_nerr} cond-units, padding nonzero {pad}: {status}{note}")
-print(f"{len(rows)} shapes compared; {len(printed)} had ane-run counts to reproduce; {bad} mismatches")
-sys.exit(1 if bad else 0)
+missing = [d.name for d in sorted(set_dir.glob("m*k*n*")) if not (out_dir / f"{d.name}.cal.y.f16").exists()]
+for name in missing:
+    print(f"{name}: MISSING output file {name}.cal.y.f16")
+unmatched = [shape for shape in printed if shape not in compared]
+for m, k, n in unmatched:
+    print(f"M={m} K={k} N={n}: ane-run printed counts but there is no output to compare")
+print(f"{len(rows)} shapes compared; {len(printed)} had ane-run counts to reproduce; {bad} mismatches; "
+      f"{failed} failed; {len(missing)} missing outputs; {len(unmatched)} printed shapes without output")
+sys.exit(1 if (bad or failed or missing or unmatched or not rows) else 0)

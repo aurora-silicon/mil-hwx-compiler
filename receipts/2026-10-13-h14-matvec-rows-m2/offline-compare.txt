@@ -25,4 +25,4 @@ M=8  K=256  N=512  4096/4096 lanes in band, 3837 bit-exact, max 112 ulp, max 0.2
 M=8  K=512  N=1024 8192/8192 lanes in band, 7670 bit-exact, max 153 ulp, max 0.134 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
 M=8  K=512  N=256  2048/2048 lanes in band, 1918 bit-exact, max 90 ulp, max 0.133 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
 M=8  K=512  N=512  4096/4096 lanes in band, 3865 bit-exact, max 1554 ulp, max 0.197 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
-27 shapes compared; 21 had ane-run counts to reproduce; 0 mismatches
+27 shapes compared; 21 had ane-run counts to reproduce; 0 mismatches; 0 failed; 0 missing outputs; 0 printed shapes without output

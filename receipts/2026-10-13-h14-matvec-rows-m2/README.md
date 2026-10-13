@@ -54,6 +54,7 @@ A lane is in band within 2 ulp or 4 condition units. Padding must be zero.
 On the 21 shapes that `ane-run` checked, the script reproduced `ane-run`'s printed counts exactly.
 That covers lanes, bit-exact lanes, largest ulp and largest condition units. `offline-compare.txt` shows 0 mismatches. The six outputs are in `device-output/`.
 `SHA256SUMS` covers all 27 output files.
+`test-compare-offline.py` tests the comparator's exit status: a wrong, missing, padded or empty set of outputs must fail.
 
 ## Why six shapes were refused
 `ane-run` stopped with "io channel sizes disagree". It requires the input and output surfaces to have the same size. Those sizes come in
@@ -81,3 +82,6 @@ The M = 1 non-square shapes passed only because they fit one tile.
 - Not run: row counts other than 2, 8 and 64 (1 row ran earlier), shapes outside 256, 512 and 1024.
 - Not run: normalization, convolution, chained programs.
 - The refusal rule is read from `ane-run`'s check and fits this run. Another checker version could differ.
+- The first version of `compare-offline.py` in this receipt (0f9d99e9) exited 0 for a failed shape, a wrong output and a missing output.
+  Only a mismatch with `ane-run`'s printed counts gave a nonzero status. Its printed per-shape lines were right, and they are unchanged in the fixed script.
+- The six offline results have not been checked by a second, independent comparator. They rest on this one.
