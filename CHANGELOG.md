@@ -11,6 +11,18 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   `receipts/2026-10-13-h13-matvec-k512-m1max/`). One run, one call, no speed claim. K = N = 256 and 1024 have not run: the 256 program is
   refused at load, and the 1024 package has five programs. Device-verified compiler output is now 28 program runs; H13 matvec is 1 of 3
   shapes.
+- Test: `tests/test_h14_matvec_programs.py` now covers nine H14 matvec shapes, the three square ones and the six non-square ones of 256, 512
+  and 1024. Each shape pins its program size and the sha256 of its weight-independent 4,672-byte head. The six new shapes failed first
+  with empty pins and pass with the compiler's output.
+- Device status: the six non-square programs (256x512, 256x1024, 512x256, 512x1024, 1024x256, 1024x512) ran on an M2 Max through
+  omarchy-ane's `ane-run --check matvec`. All six passed: every lane inside 2 ulp or 4 condition units (largest error 0.239 condition
+  units), 92.3 to 95.7 percent of lanes bit-exact, padding zero. Each ran a long back-to-back loop of 268,292 to 308,123 calls after a
+  20-call calibration. Engine duty over the 645 second ticket was 99.7 percent. The median call time was 0.356 to 0.357 ms for every shape,
+  which contradicted the preregistered prediction that it would rise with the weight size. The fastest calls rose slightly, from
+  0.217 ms to 0.255 ms across the 4x weight range. The mean call time (loop wall time over calls) rose 13.6 microseconds between the
+  smallest and largest weight classes, less than the 39 microsecond gap between the two smallest shapes. Receipt:
+  `receipts/2026-10-13-h14-matvec-nonsquare-m2/`. One run, M = 1, no speed claim.
+- Device-verified compiler output is now 34 program runs (28 before the six M2 programs), 26 programs by name and 25 distinct by bytes.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
