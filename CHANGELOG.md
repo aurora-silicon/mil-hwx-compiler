@@ -23,6 +23,22 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   smallest and largest weight classes, less than the 39 microsecond gap between the two smallest shapes. Receipt:
   `receipts/2026-10-13-h14-matvec-nonsquare-m2/`. One run, M = 1, no speed claim.
 - Device-verified compiler output is now 34 program runs (28 before the six M2 programs), 26 programs by name and 25 distinct by bytes.
+- Test: `tests/test_h14_matvec_row_programs.py` pins 27 H14 matvec programs with 2, 8 and 64 rows (K and N of 256, 512, 1024): size, the sha256 of the
+  weight-independent 4,672-byte head, and the dense-row layout rules. It failed first with empty pins.
+- Device status: the 27 row-variant matvec programs ran on an M2 Max. 21 passed `ane-run --check matvec` (every lane inside 2 ulp or 4 condition units).
+  `ane-run` refused the six 64-row shapes with K different from N ("io channel sizes disagree": it needs equal input and output tile counts). Their
+  output was compared off the device and is in band; they are not counted below. Engine duty was 99.5 percent over the 832 second ticket. Two
+  preregistered predictions did not hold. Receipt: `receipts/2026-10-13-h14-matvec-rows-m2/`. One run, M = 2, 8 and 64, no speed claim.
+- Test: `tests/test_h14_unary_programs.py` pins the 23 H14 unary programs that have Apple output in the oracle records (abs at seven sizes, and
+  exp, gelu, leaky_relu, rsqrt, sigmoid, silu, sqrt and tanh at 64 and 512 channels): whole-program size and sha256, and the header layout. It failed
+  first with empty pins. clip and log have oracle records without Apple output, so the compiler refuses them.
+- Device status: the 23 unary programs ran on an M2 Max. Preregistered bounds were met by 21: abs bit-exact, leaky_relu, sqrt, rsqrt, sigmoid, silu,
+  tanh and gelu. exp missed its relative-error bound at both sizes: 11 lanes outside, the largest 0.446 percent against 0.391 percent. silu passed with
+  little margin (0.0148 absolute against 0.0156). Engine duty was 99.7 percent over the 716 second ticket, reported apart from the numerical verdict.
+  The offline gate was corrected after review and gives the same result on every program. Receipt: `receipts/2026-10-13-h14-unary-m2/`. One run, fp16.
+- Device-verified compiler output is now 76 program runs (55 before the unary programs), 68 programs by name and 67 distinct by bytes. The count
+  includes the 21 row-variant programs that passed `ane-run`'s check and the 21 unary programs inside their bound. It leaves out the six offline-compared
+  programs and the two exp programs.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
