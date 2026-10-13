@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the 27 H14 matvec programs with 2, 8 and 64 rows (K and N each 256, 512, 1024) for a device run. No device is touched.
 
-Usage: build-rows.py OUTDIR [path-to-mil-hwxc]   (default compiler: build/mil-hwxc in this repository)
+Usage: build-rows.py OUTDIR [path-to-mil-hwxc] [--only SHAPE,SHAPE]   (default compiler: build/mil-hwxc in this repository)
 Each shape directory mMkKnN holds matvec.mil, model/weights.bin, w.raw.f16 (fp16 [N, K]), x.f16 (M * K dense halves, zero padded to
 256 KiB) and out/program-0.anec. Weights and input come from numpy, seeded from M, K and N, so a rerun gives the same files.
 """
@@ -12,8 +12,14 @@ from pathlib import Path
 
 import numpy as np
 
-out_root = Path(sys.argv[1])
-compiler = Path(sys.argv[2] if len(sys.argv) > 2 else Path(__file__).resolve().parents[2] / "build/mil-hwxc").resolve()
+args = sys.argv[1:]
+only = None
+if "--only" in args:
+    i = args.index("--only")
+    only = set(args[i + 1].split(","))
+    del args[i:i + 2]
+out_root = Path(args[0])
+compiler = Path(args[1] if len(args) > 1 else Path(__file__).resolve().parents[2] / "build/mil-hwxc").resolve()
 
 MIL = """program(1.3)
 [buildInfo = dict<string, string>({{}})]
@@ -31,6 +37,8 @@ bad = 0
 for m in (2, 8, 64):
     for k in (256, 512, 1024):
         for n in (256, 512, 1024):
+            if only is not None and f"m{m}k{k}n{n}" not in only:
+                continue
             d = out_root / f"m{m}k{k}n{n}"
             (d / "model").mkdir(parents=True, exist_ok=True)
             rng = np.random.default_rng((m * 1000 + k) * 100003 + n)

@@ -52,9 +52,20 @@ It applies the rules of `ane-run --check matvec`.
 The reference is a float64 sum of the fp16 products, rounded to fp16.
 A lane is in band within 2 ulp or 4 condition units. Padding must be zero.
 On the 21 shapes that `ane-run` checked, the script reproduced `ane-run`'s printed counts exactly.
-That covers lanes, bit-exact lanes, largest ulp and largest condition units. `offline-compare.txt` shows 0 mismatches. The six outputs are in `device-output/`.
-`SHA256SUMS` covers all 27 output files.
-`test-compare-offline.py` tests the comparator's exit status: a wrong, missing, padded or empty set of outputs must fail.
+That covers lanes, bit-exact lanes, largest ulp and largest condition units. `offline-compare.txt` shows 0 mismatches. Only the six outputs that `ane-run` refused are archived, in `device-output/`.
+`SHA256SUMS` lists those six, with paths that check from this directory. `SHA256SUMS-not-archived` lists the other 21 hashes.
+Those 21 output files are not in the repository, so that second list cannot be checked from here.
+
+## Reproduce the six offline lines
+Run both commands from the repository root. The first needs a built `mil-hwxc` and numpy.
+```
+python3 receipts/2026-10-13-h14-matvec-rows-m2/build-rows.py /tmp/rows-six build/mil-hwxc --only m64k256n512,m64k256n1024,m64k512n256,m64k512n1024,m64k1024n256,m64k1024n512
+python3 receipts/2026-10-13-h14-matvec-rows-m2/compare-offline.py /tmp/rows-six receipts/2026-10-13-h14-matvec-rows-m2/device-output
+```
+Expected: six PASS lines, equal to the six `offline` rows above, then "6 shapes compared", 0 failed, 0 missing, exit status 0.
+To check the archived files: `cd receipts/2026-10-13-h14-matvec-rows-m2 && sha256sum -c SHA256SUMS`.
+`test-compare-offline.py` runs 16 checks of the comparator's exit status. It then runs the same checks against 7 deliberately broken copies
+of the comparator and requires every copy to be caught.
 
 ## Why six shapes were refused
 `ane-run` stopped with "io channel sizes disagree". It requires the input and output surfaces to have the same size. Those sizes come in
@@ -85,3 +96,8 @@ The M = 1 non-square shapes passed only because they fit one tile.
 - The first version of `compare-offline.py` in this receipt (0f9d99e9) exited 0 for a failed shape, a wrong output and a missing output.
   Only a mismatch with `ane-run`'s printed counts gave a nonzero status. Its printed per-shape lines were right, and they are unchanged in the fixed script.
 - The six offline results have not been checked by a second, independent comparator. They rest on this one.
+- A second fault was found afterwards. When the sum of the absolute products was zero, the comparator counted the condition-unit error as 0.
+  Any output then passed the "or" test, including all ones and all NaN for a zero input. It now accepts only an exact zero there.
+  A NaN or infinite lane is never in band. None of the 27 real shapes has such a lane, so no reported row changed.
+- `ane-run --check matvec` computes the condition-unit error the same way (it uses 0 when the sum is 0). It shares this flaw.
+  That does not affect the 21 shapes it checked here, since none has a zero-sum lane.

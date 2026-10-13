@@ -52,10 +52,15 @@ for d in sorted(set_dir.glob("m*k*n*")):
     acc = x @ w.T
     sumabs = np.abs(x) @ np.abs(w).T
     want = round_half_away(acc.reshape(-1))
-    got = y[:m * n]
+    got = np.full(m * n, np.nan, dtype=np.float16)  # a short output leaves NaN lanes, which fail
+    got[:min(len(y), m * n)] = y[:m * n]
     diff = np.abs(got.astype(np.float64) - want.astype(np.float64)) / ulp(want)
-    nerr = np.where(sumabs.reshape(-1) > 0, np.abs(got.astype(np.float64) - acc.reshape(-1)) / (sumabs.reshape(-1) * 2.0 ** -11), 0.0)
-    in_band = int(((diff <= 2.0) | (nerr <= 4.0)).sum())
+    err = np.abs(got.astype(np.float64) - acc.reshape(-1))
+    sa = sumabs.reshape(-1)
+    # A condition unit is 2^-11 * the sum of the absolute products. When that sum is 0 every product is 0, the exact result is 0, and the
+    # only acceptable output is 0: any other error is infinite in condition units. (Treating it as 0 let any output pass the "or" below.)
+    nerr = np.where(sa > 0, err / np.where(sa > 0, sa, 1.0) / 2.0 ** -11, np.where(err == 0, 0.0, np.inf))
+    in_band = int((np.isfinite(got) & ((diff <= 2.0) | (nerr <= 4.0))).sum())  # a NaN or infinite lane is never in band
     exact = int((got.view(np.uint16) == want.view(np.uint16)).sum())
     pad = int(np.count_nonzero(y[m * n:].view(np.uint16)))
     worst_ulp = float(np.max(np.nan_to_num(diff, nan=np.inf)))
