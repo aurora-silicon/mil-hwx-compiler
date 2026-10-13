@@ -33,7 +33,8 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   exp, gelu, leaky_relu, rsqrt, sigmoid, silu, sqrt and tanh at 64 and 512 channels): whole-program size and sha256, and the header layout. It failed
   first with empty pins. clip and log have oracle records without Apple output, so the compiler refuses them.
 - Device status: the 23 unary programs ran on an M2 Max. Preregistered bounds were met by 21: abs bit-exact, leaky_relu, sqrt, rsqrt, sigmoid, silu,
-  tanh and gelu. exp missed its relative-error bound at both sizes: 11 lanes outside, the largest 0.446 percent against 0.391 percent. silu passed with
+  tanh and gelu. exp missed its relative-error bound at both sizes: 11 lanes outside the gate's bound (13 without its 2^-24 absolute
+  allowance), the largest 0.446 percent against 0.391 percent. silu passed with
   little margin (0.0148 absolute against 0.0156). Engine duty was 99.7 percent over the 716 second ticket, reported apart from the numerical verdict.
   The offline gate was corrected after review and gives the same result on every program. Receipt: `receipts/2026-10-13-h14-unary-m2/`. One run, fp16.
 - Device-verified compiler output is now 76 program runs (55 before the unary programs), 68 programs by name and 67 distinct by bytes. The count

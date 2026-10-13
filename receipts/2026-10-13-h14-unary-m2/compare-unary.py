@@ -6,8 +6,8 @@ The cases required are exactly those of unary_cases.expected_cases(DIR), the lis
 research/oracles/h14 of this repository). SETDIR must hold exactly one directory per case, each with x.f16 (the input surface: lane j
 is one fp16 at half index j * 32, one value per 64-byte channel) and op.mil. OUTDIR holds <case>.cal.y.f16 and <case>.long.y.f16, the files
 ane-run wrote after the 20-call calibration and after the long loop.
-The reference is read from each case's own MIL: the operation, and its parameters (leaky_relu alpha, rsqrt epsilon, both fp32). A parameter
-the gate does not know, or a missing one, fails the case.
+The reference is read from each case's own MIL: the operation, and its parameters (leaky_relu alpha, rsqrt epsilon, both fp32). The MIL in the
+case directory must equal the oracle record's MIL, the text the program was built from. A parameter the gate does not know, or a missing one, fails the case.
 A case passes only when both output files exist, are bit-identical to each other, hold no NaN or infinity, have zero padding, and every lane
 meets the bound in BOUNDS (abs: the same bits as the reference, so -0.0 for +0.0 fails).
 Exit status 0 only when the case set is exactly the expected one and every case passes. A missing, extra or failing case, or an empty
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from unary_cases import CASE_NAME, expected_cases  # noqa: E402
+from unary_cases import CASE_NAME, expected_cases, oracle_mil  # noqa: E402
 
 LANE_STRIDE = 32  # half-index distance between lanes: one fp16 per 64-byte channel
 FLOOR = 2.0 ** -24  # smallest fp16 subnormal, the absolute floor of a relative bound
@@ -108,7 +108,7 @@ def padding_nonzero(surface, count):
     return int(np.count_nonzero(surface[mask].view(np.uint16)))
 
 
-def check_case(case_dir, out_dir):
+def check_case(case_dir, out_dir, oracle_dir):
     """Return (ok, line) for one program directory."""
     m = CASE_NAME.fullmatch(case_dir.name)
     if not m or m.group(1) not in BOUNDS:
@@ -118,6 +118,9 @@ def check_case(case_dir, out_dir):
     gone = [p.name for p in (cal, long) if not p.exists()]
     if gone:
         return False, f"{case_dir.name}: MISSING output file(s) {', '.join(gone)}"
+    oracle_mil_text = oracle_mil(oracle_dir, case_dir.name)
+    if oracle_mil_text != (case_dir / "op.mil").read_text():
+        return False, f"{case_dir.name}: FAIL: op.mil differs from the oracle record's MIL (the reference would not describe the program that ran)"
     try:
         params = parse_mil((case_dir / "op.mil").read_text(), op)
     except (OSError, ValueError) as error:
@@ -182,7 +185,7 @@ def main():
         failed += 1
     judged = 0
     for name in sorted(set(expected) & set(present)):
-        ok, line = check_case(set_dir / name, out_dir)
+        ok, line = check_case(set_dir / name, out_dir, oracles)
         print(line)
         judged += 1
         failed += not ok

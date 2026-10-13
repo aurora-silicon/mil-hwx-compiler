@@ -44,12 +44,21 @@ bits as the correctly rounded result.
 | unary_tanh_c512 | 512 | 350 | 0.00143 | 0.00514 | abs 0.0039062 | PASS |
 | unary_tanh_c64 | 64 | 42 | 0.00135 | 0.00401 | abs 0.0039062 | PASS |
 
+The column `max relative error` covers only lanes whose reference is above 2^-6 in magnitude. Small-output lanes are left out of it.
+That is why `unary_exp_c64` shows 0.00337 next to FAIL: its failing lanes have outputs below 2^-6. The `exp` section gives the full figures.
+
 Result: 23 expected cases, 23 judged, 2 failed. Both failures are `exp`.
 
 ### exp
-Nine lanes of the 512-channel program and two lanes of the 64-channel program are outside the bound of 2^-8 (0.391 percent).
-The largest relative error is 0.446 percent. The failing lanes are in the tails, at inputs from 5.9 to 7.5 and from -7.6 to -6.1.
-Over [-4, 4] the largest relative error is 0.233 percent. Over the tails it is 0.43 percent (`analysis.txt`).
+The gate's relative bound is 2^-8 (0.391 percent) of the reference plus an absolute allowance of 2^-24, the smallest fp16 subnormal.
+The preregistration did not state the allowance. It matters only where the output is tiny.
+By the gate's rule, nine lanes of the 512-channel program and two lanes of the 64-channel program are outside the bound, 11 in all.
+Against a plain 2^-8 relative rule with no allowance, 13 lanes are outside: 11 at 512 channels and 2 at 64.
+Two 512-channel lanes (inputs -7.168 and -7.266, relative error 0.392 percent) pass the gate only through the allowance. The cell fails either way.
+The largest relative error over all lanes is 0.446 percent at 64 channels and 0.429 percent at 512 channels.
+The failing lanes are in the tails, at inputs from 5.9 to 7.5 and from -7.6 to -6.1.
+For |x| of 4 or less the largest relative error is 0.161 percent (64 channels) and 0.233 percent (512 channels).
+For |x| above 4 it is 0.446 and 0.429 percent. These cutoffs are at |x| = 4.
 This run does not show why the error grows with the input magnitude, and no cause is claimed.
 
 ### silu and gelu
@@ -97,7 +106,7 @@ Numerical predictions:
 1. `abs` bit-exact at all seven sizes. Held. Every lane matched the same bits.
 2. `leaky_relu` within 1 ulp. Held. Every lane is bit-exact.
 3. `sqrt` and `rsqrt` within a relative error of 2^-9. Held. The largest are 0.00092 and 0.00148. The bound is 0.00195.
-4. `exp` within a relative error of 2^-8. Did not hold. 11 lanes are outside. The largest is 0.446 percent.
+4. `exp` within a relative error of 2^-8. Did not hold. 11 lanes are outside the gate's bound and 13 against a plain 2^-8 rule. The largest is 0.446 percent.
 5. `sigmoid` and `tanh` within 2^-8 absolute. `silu` and `gelu` within 2^-6. Held. The largest are 0.0031, 0.0014, 0.0148 and 0.0045.
 6. `gelu` closer to the erf form than to the tanh form. Did not hold by lane count. The tanh form is closer on most lanes. The mean absolute error is nearly equal.
 7. Every program runs to completion with finite output and zero padding. Held.
@@ -111,13 +120,15 @@ reference through. It did not know that 23 cases were expected. It accepted `-0.
 `leaky_relu` slope of the MIL.
 The corrected gate requires exactly the case list the builder uses (`unary_cases.py`). It compares `abs` bit for bit. It reads each operation's
 parameters from the case's own MIL, as fp32. It fails on any parameter or string argument it does not know. It prints the input hash.
-`test-compare-unary.py` has 26 checks. It also runs them against 13 deliberately broken copies of the gate and requires each to be caught.
+A later review added one more check: the `op.mil` in each case directory must equal the oracle record's MIL, so a copy edited to change the
+reference is rejected.
+`test-compare-unary.py` has 28 checks. It also runs them against 14 deliberately broken copies of the gate and requires each to be caught.
 On the first gate, 10 of the first 23 checks failed.
 The corrected gate gives the same result as the first one on every program, number for number (`verdict-preregistered-gate-ed6b75aa.txt`).
 The change did not alter any verdict.
 
 ## Reproduce
-From this directory. The first line checks the archived files and the second judges them.
+From this directory. The first line checks the archived files (the 23 inputs and their MIL files, and the 46 outputs). The second judges them.
 ```
 sha256sum -c SHA256SUMS-inputs && sha256sum -c SHA256SUMS-outputs
 python3 compare-unary.py inputs device-output

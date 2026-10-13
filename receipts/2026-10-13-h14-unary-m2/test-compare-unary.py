@@ -32,7 +32,15 @@ def surface(values, tiles=1):
     return s
 
 
-def run(script, set_dir, out_dir, oracle_dir):
+def run(script, set_dir, out_dir, oracle_dir, sync=True):
+    """sync=True makes each oracle record carry the MIL of the case directory it describes (an honest set). sync=False leaves them as written."""
+    if sync:
+        for case in Path(set_dir).glob("unary_*"):
+            record = Path(oracle_dir) / f"{case.name}.json"
+            if record.exists() and (case / "op.mil").exists():
+                data = json.loads(record.read_text())
+                data["mil"] = (case / "op.mil").read_text()
+                record.write_text(json.dumps(data))
     cmd = [sys.executable, str(script), str(set_dir), str(out_dir), "--oracles", str(oracle_dir)]
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
@@ -174,6 +182,13 @@ def checks(script):
         check("gelu with a mode other than EXACT exits nonzero", run(script, set_g2, f.root / "g_ok", oracle_g).returncode != 0)
         set_s2 = f.case_set("set_s2", {S: (x, mil("silu", 'mode = string("EXACT")'))})
         check("a string argument on an operation that takes none exits nonzero", run(script, set_s2, f.root / "good", oracle_s).returncode != 0)
+        # the case's op.mil must be the oracle record's MIL: a copy edited to change the reference is rejected even if the output matches it
+        set_eps0 = f.case_set("set_eps0", {R: (rx, mil("rsqrt", "epsilon = fp32(0.0)"))})
+        no_eps_out = f.outputs("r_eps0", {R: (no_eps, no_eps)})  # correct for epsilon 0, so only the oracle comparison can reject it
+        r = run(script, set_eps0, no_eps_out, oracle_r, sync=False)
+        check("an op.mil that differs from the oracle record exits nonzero even when the output matches it", r.returncode != 0 and "differs from the oracle" in r.stdout)
+        r = run(script, set_r, f.root / "r_eps", oracle_r, sync=False)
+        check("an op.mil equal to the oracle record exits 0", r.returncode == 0)
         set_unknown = f.case_set("set_unk", {S: (x, mil("silu", "bogus = fp32(1.0)"))})
         check("a MIL call with an unknown parameter exits nonzero", run(script, set_unknown, f.root / "good", oracle_s).returncode != 0)
         set_noparam = f.case_set("set_np", {R: (rx, mil("rsqrt"))})
@@ -198,6 +213,7 @@ MUTANTS = {
     "the rsqrt epsilon is ignored": ('return 1.0 / np.sqrt(x + params["epsilon"])', "return 1.0 / np.sqrt(x)"),
     "the leaky_relu slope is fixed at 0.125": ('params["alpha"] * x)', "0.125 * x)"),
     "unknown MIL parameters are accepted": ('    if set(params) != REQUIRED_PARAMS.get(op, set()):\n', "    if False:\n"),
+    "op.mil is not compared with the oracle record": ("    if oracle_mil_text != (case_dir / \"op.mil\").read_text():\n", "    if False:\n"),
     "any gelu mode is accepted": ("    if strings != ALLOWED_STRINGS.get(op, {}):\n", "    if False:\n"),
 }
 

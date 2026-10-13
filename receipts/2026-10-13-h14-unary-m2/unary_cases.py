@@ -18,3 +18,8 @@ def expected_cases(oracle_dir):
         if m and m.group(1) != "relu" and json.loads(oracle.read_text()).get("error") is None:
             cases.append(oracle.stem)
     return cases
+
+
+def oracle_mil(oracle_dir, case):
+    """Return the MIL text of the oracle record of a case. The programs were built from exactly this text."""
+    return json.loads((Path(oracle_dir) / f"{case}.json").read_text())["mil"]
