@@ -1,0 +1,142 @@
+H14 unary cell start=2026-10-13T13:53:14Z kernel=7.1.12-2-20261012.16-sep-ARCH target_s=30
+chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a
+
+== unary_abs_c64 program_sha256=bcbfd0a70370c026 ==
+exec ms over 20 calls: min 0.386 p10 0.426 p25 0.458 median 0.508 p75 0.508 p90 0.558 p99 0.560 max 0.560
+rc_cal(unary_abs_c64)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.356 p10 0.409 p25 0.458 median 0.464 p75 0.558 p90 0.559 p99 0.610 max 0.710
+rc_long(unary_abs_c64)=0 repeat=59055 wall_s=29.2 loop_duty_pct=99.8
+
+== unary_abs_c128 program_sha256=d63fdf800086b429 ==
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.458 median 0.458 p75 0.542 p90 0.593 p99 0.660 max 0.660
+rc_cal(unary_abs_c128)=0 median_ms=0.458
+exec ms over 65502 calls: min 0.356 p10 0.458 p25 0.458 median 0.462 p75 0.510 p90 0.559 p99 0.609 max 0.709
+rc_long(unary_abs_c128)=0 repeat=65502 wall_s=32.3 loop_duty_pct=99.8
+
+== unary_abs_c256 program_sha256=2d3314e471740ff7 ==
+exec ms over 20 calls: min 0.457 p10 0.458 p25 0.458 median 0.508 p75 0.558 p90 0.559 p99 0.610 max 0.610
+rc_cal(unary_abs_c256)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.359 p10 0.461 p25 0.462 median 0.512 p75 0.517 p90 0.563 p99 0.616 max 0.713
+rc_long(unary_abs_c256)=0 repeat=59055 wall_s=29.8 loop_duty_pct=99.7
+
+== unary_abs_c512 program_sha256=9327a678c3ae29c3 ==
+exec ms over 20 calls: min 0.438 p10 0.457 p25 0.458 median 0.508 p75 0.558 p90 0.609 p99 0.610 max 0.610
+rc_cal(unary_abs_c512)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.378 p10 0.458 p25 0.458 median 0.508 p75 0.559 p90 0.609 p99 0.659 max 0.760
+rc_long(unary_abs_c512)=0 repeat=59055 wall_s=30.5 loop_duty_pct=99.8
+
+== unary_abs_c1024 program_sha256=6ace4bd1a0ee66f3 ==
+exec ms over 20 calls: min 0.458 p10 0.458 p25 0.458 median 0.538 p75 0.543 p90 0.547 p99 0.593 max 0.593
+rc_cal(unary_abs_c1024)=0 median_ms=0.538
+exec ms over 55762 calls: min 0.407 p10 0.457 p25 0.458 median 0.508 p75 0.558 p90 0.608 p99 0.659 max 1.259
+rc_long(unary_abs_c1024)=0 repeat=55762 wall_s=28.8 loop_duty_pct=99.8
+
+== unary_abs_c2048 program_sha256=ffae3199bb1799a2 ==
+exec ms over 20 calls: min 0.458 p10 0.458 p25 0.461 median 0.508 p75 0.558 p90 0.563 p99 0.613 max 0.613
+rc_cal(unary_abs_c2048)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.407 p10 0.457 p25 0.458 median 0.508 p75 0.558 p90 0.562 p99 0.659 max 3.439
+rc_long(unary_abs_c2048)=0 repeat=59055 wall_s=30.3 loop_duty_pct=99.8
+
+== unary_abs_c4096 program_sha256=5a26389a9e2df618 ==
+exec ms over 20 calls: min 0.435 p10 0.461 p25 0.461 median 0.512 p75 0.567 p90 0.612 p99 0.697 max 0.697
+rc_cal(unary_abs_c4096)=0 median_ms=0.512
+exec ms over 58593 calls: min 0.407 p10 0.458 p25 0.458 median 0.508 p75 0.559 p90 0.609 p99 0.660 max 0.815
+rc_long(unary_abs_c4096)=0 repeat=58593 wall_s=30.3 loop_duty_pct=99.8
+
+== unary_exp_c64 program_sha256=e0465c7c74733e65 ==
+exec ms over 20 calls: min 0.425 p10 0.458 p25 0.458 median 0.472 p75 0.559 p90 0.609 p99 0.710 max 0.710
+rc_cal(unary_exp_c64)=0 median_ms=0.472
+exec ms over 63559 calls: min 0.409 p10 0.458 p25 0.458 median 0.508 p75 0.559 p90 0.609 p99 0.663 max 3.305
+rc_long(unary_exp_c64)=0 repeat=63559 wall_s=33.2 loop_duty_pct=99.8
+
+== unary_exp_c512 program_sha256=8599331bcf5da53b ==
+exec ms over 20 calls: min 0.437 p10 0.458 p25 0.458 median 0.508 p75 0.609 p90 0.647 p99 0.660 max 0.660
+rc_cal(unary_exp_c512)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.409 p10 0.458 p25 0.458 median 0.508 p75 0.559 p90 0.610 p99 0.663 max 0.766
+rc_long(unary_exp_c512)=0 repeat=59055 wall_s=31.0 loop_duty_pct=99.8
+
+== unary_gelu_c64 program_sha256=ff592b23887cfe80 ==
+exec ms over 20 calls: min 0.423 p10 0.458 p25 0.458 median 0.508 p75 0.576 p90 0.659 p99 0.813 max 0.813
+rc_cal(unary_gelu_c64)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.410 p10 0.458 p25 0.458 median 0.509 p75 0.609 p90 0.659 p99 0.710 max 0.811
+rc_long(unary_gelu_c64)=0 repeat=59055 wall_s=31.5 loop_duty_pct=99.8
+
+== unary_gelu_c512 program_sha256=0721ecf5664c34e6 ==
+exec ms over 20 calls: min 0.426 p10 0.458 p25 0.458 median 0.508 p75 0.609 p90 0.659 p99 0.710 max 0.710
+rc_cal(unary_gelu_c512)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.410 p10 0.458 p25 0.461 median 0.512 p75 0.609 p90 0.659 p99 0.713 max 0.865
+rc_long(unary_gelu_c512)=0 repeat=59055 wall_s=31.8 loop_duty_pct=99.7
+
+== unary_leaky_relu_c64 program_sha256=1a78e07cd66b7a3b ==
+exec ms over 20 calls: min 0.422 p10 0.458 p25 0.458 median 0.508 p75 0.609 p90 0.659 p99 0.710 max 0.710
+rc_cal(unary_leaky_relu_c64)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.409 p10 0.458 p25 0.458 median 0.508 p75 0.609 p90 0.659 p99 0.760 max 0.911
+rc_long(unary_leaky_relu_c64)=0 repeat=59055 wall_s=31.8 loop_duty_pct=99.8
+
+== unary_leaky_relu_c512 program_sha256=a7b7266821a2a510 ==
+exec ms over 20 calls: min 0.457 p10 0.458 p25 0.458 median 0.532 p75 0.611 p90 0.659 p99 0.659 max 0.659
+rc_cal(unary_leaky_relu_c512)=0 median_ms=0.532
+exec ms over 56390 calls: min 0.407 p10 0.457 p25 0.458 median 0.508 p75 0.609 p90 0.659 p99 0.760 max 0.964
+rc_long(unary_leaky_relu_c512)=0 repeat=56390 wall_s=30.3 loop_duty_pct=99.8
+
+== unary_rsqrt_c64 program_sha256=f4e706dbac78af30 ==
+exec ms over 20 calls: min 0.442 p10 0.457 p25 0.457 median 0.508 p75 0.609 p90 0.709 p99 0.760 max 0.760
+rc_cal(unary_rsqrt_c64)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.408 p10 0.458 p25 0.458 median 0.508 p75 0.609 p90 0.664 p99 0.810 max 3.226
+rc_long(unary_rsqrt_c64)=0 repeat=59055 wall_s=32.2 loop_duty_pct=99.8
+
+== unary_rsqrt_c512 program_sha256=a60f80a6a2d3f713 ==
+exec ms over 20 calls: min 0.440 p10 0.459 p25 0.508 median 0.509 p75 0.609 p90 0.710 p99 0.760 max 0.760
+rc_cal(unary_rsqrt_c512)=0 median_ms=0.509
+exec ms over 58939 calls: min 0.413 p10 0.458 p25 0.461 median 0.509 p75 0.609 p90 0.664 p99 0.765 max 0.968
+rc_long(unary_rsqrt_c512)=0 repeat=58939 wall_s=32.4 loop_duty_pct=99.8
+
+== unary_sigmoid_c64 program_sha256=2ec95a9b3ae8165b ==
+exec ms over 20 calls: min 0.457 p10 0.457 p25 0.508 median 0.508 p75 0.608 p90 0.658 p99 0.659 max 0.659
+rc_cal(unary_sigmoid_c64)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.411 p10 0.458 p25 0.461 median 0.508 p75 0.609 p90 0.663 p99 0.811 max 1.011
+rc_long(unary_sigmoid_c64)=0 repeat=59055 wall_s=32.4 loop_duty_pct=99.8
+
+== unary_sigmoid_c512 program_sha256=52f904988eae89b1 ==
+exec ms over 20 calls: min 0.457 p10 0.457 p25 0.507 median 0.508 p75 0.609 p90 0.709 p99 0.759 max 0.759
+rc_cal(unary_sigmoid_c512)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.425 p10 0.458 p25 0.508 median 0.508 p75 0.609 p90 0.663 p99 0.861 max 3.923
+rc_long(unary_sigmoid_c512)=0 repeat=59055 wall_s=32.7 loop_duty_pct=99.8
+
+== unary_silu_c64 program_sha256=d52fa9cc7cf9201a ==
+exec ms over 20 calls: min 0.508 p10 0.508 p25 0.508 median 0.609 p75 0.609 p90 0.609 p99 0.661 max 0.661
+rc_cal(unary_silu_c64)=0 median_ms=0.609
+exec ms over 49261 calls: min 0.420 p10 0.507 p25 0.511 median 0.517 p75 0.612 p90 0.659 p99 0.764 max 1.012
+rc_long(unary_silu_c64)=0 repeat=49261 wall_s=27.6 loop_duty_pct=99.7
+
+== unary_silu_c512 program_sha256=f5d62c9529a76cb6 ==
+exec ms over 20 calls: min 0.489 p10 0.508 p25 0.508 median 0.559 p75 0.659 p90 0.665 p99 0.710 max 0.710
+rc_cal(unary_silu_c512)=0 median_ms=0.559
+exec ms over 53667 calls: min 0.434 p10 0.508 p25 0.508 median 0.514 p75 0.609 p90 0.614 p99 0.760 max 3.275
+rc_long(unary_silu_c512)=0 repeat=53667 wall_s=30.2 loop_duty_pct=99.8
+
+== unary_sqrt_c64 program_sha256=caf97d4fa1b55aaf ==
+exec ms over 20 calls: min 0.467 p10 0.508 p25 0.509 median 0.559 p75 0.660 p90 0.711 p99 0.716 max 0.716
+rc_cal(unary_sqrt_c64)=0 median_ms=0.559
+exec ms over 53667 calls: min 0.425 p10 0.508 p25 0.509 median 0.559 p75 0.610 p90 0.660 p99 0.760 max 0.862
+rc_long(unary_sqrt_c64)=0 repeat=53667 wall_s=30.7 loop_duty_pct=99.8
+
+== unary_sqrt_c512 program_sha256=c39db681df469d4a ==
+exec ms over 20 calls: min 0.508 p10 0.508 p25 0.508 median 0.558 p75 0.659 p90 0.709 p99 0.759 max 0.759
+rc_cal(unary_sqrt_c512)=0 median_ms=0.558
+exec ms over 53763 calls: min 0.442 p10 0.508 p25 0.508 median 0.559 p75 0.659 p90 0.664 p99 0.760 max 0.866
+rc_long(unary_sqrt_c512)=0 repeat=53763 wall_s=31.2 loop_duty_pct=99.8
+
+== unary_tanh_c64 program_sha256=559f14f9624dcadd ==
+exec ms over 20 calls: min 0.491 p10 0.508 p25 0.508 median 0.559 p75 0.660 p90 0.710 p99 0.810 max 0.810
+rc_cal(unary_tanh_c64)=0 median_ms=0.559
+exec ms over 53667 calls: min 0.457 p10 0.508 p25 0.508 median 0.558 p75 0.659 p90 0.709 p99 0.811 max 0.962
+rc_long(unary_tanh_c64)=0 repeat=53667 wall_s=31.4 loop_duty_pct=99.8
+
+== unary_tanh_c512 program_sha256=52ccd9028698828c ==
+exec ms over 20 calls: min 0.490 p10 0.507 p25 0.508 median 0.508 p75 0.659 p90 0.759 p99 0.922 max 0.922
+rc_cal(unary_tanh_c512)=0 median_ms=0.508
+exec ms over 59055 calls: min 0.457 p10 0.508 p25 0.508 median 0.512 p75 0.659 p90 0.713 p99 0.814 max 1.069
+rc_long(unary_tanh_c512)=0 repeat=59055 wall_s=34.6 loop_duty_pct=99.8
+
+SUMMARY pass=23 fail=0 skipped_loops=0 total_wall_s=716.4 ticket_duty_pct=99.7

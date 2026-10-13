@@ -7,7 +7,6 @@ already ran on a device. The oracle's MIL is used unchanged. Per case directory 
 the input surface: lane j is one fp16 at half index j * 32 (one value per 64-byte channel), zero elsewhere, padded to the whole 16 KiB
 tiles of the input channel. Inputs are seeded from the case name, so a rerun gives the same files."""
 import json
-import re
 import struct
 import subprocess
 import sys
@@ -15,6 +14,9 @@ import zlib
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from unary_cases import CASE_NAME, expected_cases  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 out_root = Path(sys.argv[1])
@@ -41,15 +43,10 @@ def inputs(op, count, case):
 
 
 bad = 0
-oracles = sorted((ROOT / "research/oracles/h14").glob("unary_*_c*.json"))
-for oracle in oracles:
-    m = re.fullmatch(r"unary_([a-z_]+?)_c(\d+)", oracle.stem)
-    if not m or m.group(1) == "relu":
-        continue
-    record = json.loads(oracle.read_text())
-    if record.get("error") is not None:
-        continue
-    op, count, case = m.group(1), int(m.group(2)), oracle.stem
+for case in expected_cases(ROOT / "research/oracles/h14"):
+    m = CASE_NAME.fullmatch(case)
+    op, count = m.group(1), int(m.group(2))
+    record = json.loads((ROOT / "research/oracles/h14" / f"{case}.json").read_text())
     d = out_root / case
     (d / "model").mkdir(parents=True, exist_ok=True)
     (d / "op.mil").write_text(record["mil"])
