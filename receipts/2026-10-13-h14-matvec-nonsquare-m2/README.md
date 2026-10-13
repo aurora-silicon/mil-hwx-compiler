@@ -36,7 +36,16 @@ Duty over the whole run was 99.7 percent.
    The weights span 262,144 to 1,048,576 bytes. One calibration median differs (0.410 ms for 1024 x 512, from 20 calls). Its long loop gave 0.357.
 5. Total wall time of 12 to 14 minutes. Did not hold. It took 10.8 minutes. Each loop ran 98 to 114 seconds, near the 110 second target.
 
-Call time does not depend on weight size over this range. This run does not show why, and no cause is claimed.
+The median call time is flat across the 4x range of weight sizes. That is all the prediction covered. The low end of the
+distribution is not flat. In the long loops the fastest call (min) is 0.217 and 0.237 ms for the 262,144-byte shapes, 0.232 and
+0.237 ms for the 524,288-byte shapes, and 0.253 and 0.255 ms for the 1,048,576-byte shapes. The p10 of the two largest shapes
+(0.307 and 0.356 ms) is the highest of the six. These are small differences of 16 to 38 microseconds in single samples. They
+suggest a weak rise with weight size, and this run does not establish one or show its cause.
+
+Context from another run (not tested here): the M2 add cell of 2026-10-13 shows call times only in steps of about 51 microseconds,
+and a fit over batched jobs gives a fixed cost near 0.36 ms per call. If so, a weight-size term smaller than one step cannot move
+the median. The long loops here have 268,000 or more calls, so their mean would resolve below one step. `results.txt` does not
+print the mean, so this run cannot answer that.
 
 ## Limits
 - One run on one boot, one weight set and one input per shape, M = 1, fp16.
