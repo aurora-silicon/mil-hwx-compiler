@@ -49,9 +49,10 @@ def compare(raw, x, w):
                                  (np.abs(got - exact) <= 4 * 2.0 ** -11 * sumabs))
     padding = surface.reshape(N, STRIDE)[:, 1:]
     padbad = int(np.count_nonzero(padding.view(np.uint16)))
+    err = float(np.max(np.abs(got - exact)))
     return {"pass": bool(in_band.all() and padbad == 0),
             "lanes_in_band": int(in_band.sum()), "lanes": N,
-            "padding_nonzero": padbad, "max_abs_error": float(np.max(np.abs(got - exact)))}
+            "padding_nonzero": padbad, "max_abs_error": err if np.isfinite(err) else None}
 
 
 def validate(manifest, blob):
@@ -90,6 +91,12 @@ def self_test():
     assert not compare(bad, x, w)["pass"]
     bad = bytearray(raw); struct.pack_into("<H", bad, 0, 0x7e00)
     assert not compare(bad, x, w)["pass"]
+    # a failing device output with NaN or infinity must still give a strictly valid JSON report
+    for word in (0x7e00, 0x7c00, 0xfc00):
+        bad = bytearray(raw); struct.pack_into("<H", bad, 0, word)
+        report = compare(bad, x, w)
+        assert not report["pass"]
+        json.loads(json.dumps(report, allow_nan=False))
     assert compare(pack(np.zeros(K)), np.zeros(K), w)["pass"]
     try:
         compare(raw[:-2], x, w)
@@ -129,8 +136,8 @@ def main():
         print(f"runner failed rc={result.returncode}; see {out / 'runner.log'}"); return 1
     report = compare(outfile.read_bytes(), x, w)
     report["program_sha256"] = hashlib.sha256(blob).hexdigest()
-    (out / "results.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps(report))
+    (out / "results.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    print(json.dumps(report, allow_nan=False))
     return 0 if report["pass"] else 1
 
 
