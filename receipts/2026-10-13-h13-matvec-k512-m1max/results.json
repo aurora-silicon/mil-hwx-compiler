@@ -1,0 +1,8 @@
+{
+  "pass": true,
+  "lanes_in_band": 512,
+  "lanes": 512,
+  "padding_nonzero": 0,
+  "max_abs_error": 0.00755472993478179,
+  "program_sha256": "3128f95559d3b758c416e34728aa534fc93d2b3d9e6c9875d64d75718daabd9a"
+}

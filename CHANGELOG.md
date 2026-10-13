@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+### 2026-10-13
+- Test and device status: `tests/hardware/gate_h13_matvec.py` runs a K = N = 512 H13 matvec through `ane-run` with the program's own
+  channel layout (one fp16 value per 64-byte channel), which `ane-run --check matvec` does not read. It ran on an M1 Max: 512 of 512
+  lanes inside 2 ulp or 4 condition units, padding zero, largest absolute difference 0.00755 (receipt
+  `receipts/2026-10-13-h13-matvec-k512-m1max/`). One run, one call, no speed claim. K = N = 256 and 1024 have not run: the 256 program is
+  refused at load, and the 1024 package has five programs. Device-verified compiler output is now 28 program runs; H13 matvec is 1 of 3
+  shapes.
+
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
 - Device attempt: the 256 and 512 programs were submitted on a 13-inch M1 and an M1 Max. Neither reached numerical comparison. K=256 was refused during ANE initialization because channel 5 needed 32,768 bytes but the program allocated 16,384; K=512 was rejected by `ane-run --check matvec` as an unexpected I/O shape. K=1024 compiled to five programs and was not passed to the single-program checker. No lane or ULP results are claimed ([run record](receipts/2026-10-12-h13-matvec-m1/README.md)).
