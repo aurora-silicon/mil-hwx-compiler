@@ -5,6 +5,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 ## Unreleased
 
 ### 2026-10-13
+- Test and device status: `tests/hardware/gate_h13_matvec.py` runs a K = N = 512 H13 matvec through `ane-run` with the program's own
+  channel layout (one fp16 value per 64-byte channel), which `ane-run --check matvec` does not read. It ran on an M1 Max: 512 of 512
+  lanes inside 2 ulp or 4 condition units, padding zero, largest absolute difference 0.00755 (receipt
+  `receipts/2026-10-13-h13-matvec-k512-m1max/`). One run, one call, no speed claim. K = N = 256 and 1024 have not run: the 256 program is
+  refused at load, and the 1024 package has five programs. Device-verified compiler output is now 28 program runs; H13 matvec is 1 of 3
+  shapes.
 - Test: `tests/test_h14_matvec_programs.py` now covers nine H14 matvec shapes, the three square ones and the six non-square ones of 256, 512
   and 1024. Each shape pins its program size and the sha256 of its weight-independent 4,672-byte head. The six new shapes failed first
   with empty pins and pass with the compiler's output.
@@ -17,12 +23,6 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   smallest and largest weight classes, less than the 39 microsecond gap between the two smallest shapes. Receipt:
   `receipts/2026-10-13-h14-matvec-nonsquare-m2/`. One run, M = 1, no speed claim.
 - Device-verified compiler output is now 34 program runs (28 before the six M2 programs), 26 programs by name and 25 distinct by bytes.
-- Test and device status: `tests/hardware/gate_h13_matvec.py` runs a K = N = 512 H13 matvec through `ane-run` with the program's own
-  channel layout (one fp16 value per 64-byte channel), which `ane-run --check matvec` does not read. It ran on an M1 Max: 512 of 512
-  lanes inside 2 ulp or 4 condition units, padding zero, largest absolute difference 0.00755 (receipt
-  `receipts/2026-10-13-h13-matvec-k512-m1max/`). One run, one call, no speed claim. K = N = 256 and 1024 have not run: the 256 program is
-  refused at load, and the 1024 package has five programs. Device-verified compiler output is now 28 program runs; H13 matvec is 1 of 3
-  shapes.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
