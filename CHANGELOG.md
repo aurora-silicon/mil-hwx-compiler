@@ -13,7 +13,8 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   units), 92.3 to 95.7 percent of lanes bit-exact, padding zero. Each ran a long back-to-back loop of 268,292 to 308,123 calls after a
   20-call calibration. Engine duty over the 645 second ticket was 99.7 percent. The median call time was 0.356 to 0.357 ms for every shape,
   which contradicted the preregistered prediction that it would rise with the weight size. The fastest calls rose slightly, from
-  0.217 ms to 0.255 ms across the 4x weight range. Receipt:
+  0.217 ms to 0.255 ms across the 4x weight range. The mean call time (loop wall time over calls) rose 13.6 microseconds between the
+  smallest and largest weight classes, less than the 39 microsecond gap between the two smallest shapes. Receipt:
   `receipts/2026-10-13-h14-matvec-nonsquare-m2/`. One run, M = 1, no speed claim.
 - Device-verified compiler output is now 34 program runs (28 before the six M2 programs), 26 programs by name and 25 distinct by bytes.
 - Test and device status: `tests/hardware/gate_h13_matvec.py` runs a K = N = 512 H13 matvec through `ane-run` with the program's own

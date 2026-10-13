@@ -42,10 +42,16 @@ distribution is not flat. In the long loops the fastest call (min) is 0.217 and 
 (0.307 and 0.356 ms) is the highest of the six. These are small differences of 16 to 38 microseconds in single samples. They
 suggest a weak rise with weight size, and this run does not establish one or show its cause.
 
+The mean call time can be read from the loop wall time and the call count in `results.txt` (seconds divided by calls):
+331.4 and 370.4 microseconds for the 262,144-byte shapes, 355.4 and 358.7 for the 524,288-byte shapes, and 362.5 and 366.4 for
+the 1,048,576-byte shapes. The three class means are 350.9, 357.1 and 364.5 microseconds, a rise of 13.6 over the 4x range.
+The two 262,144-byte shapes differ by 39 microseconds, which is more than that rise. So the six shapes do not order by weight
+size. The loop wall time may include a few microseconds per call of setup. One loop per shape cannot separate a small
+weight-size effect from variation between loops. Repeated, interleaved loops per shape could.
+
 Context from another run (not tested here): the M2 add cell of 2026-10-13 shows call times only in steps of about 51 microseconds,
 and a fit over batched jobs gives a fixed cost near 0.36 ms per call. If so, a weight-size term smaller than one step cannot move
-the median. The long loops here have 268,000 or more calls, so their mean would resolve below one step. `results.txt` does not
-print the mean, so this run cannot answer that.
+the median.
 
 ## Limits
 - One run on one boot, one weight set and one input per shape, M = 1, fp16.
