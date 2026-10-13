@@ -1,0 +1,28 @@
+M=2  K=1024 N=1024 2048/2048 lanes in band, 1932 bit-exact, max 29 ulp, max 0.109 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=1024 N=256  512/512 lanes in band, 478 bit-exact, max 27 ulp, max 0.065 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=1024 N=512  1024/1024 lanes in band, 948 bit-exact, max 23 ulp, max 0.111 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=256  N=1024 2048/2048 lanes in band, 1919 bit-exact, max 19 ulp, max 0.214 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=256  N=256  512/512 lanes in band, 479 bit-exact, max 8 ulp, max 0.124 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=256  N=512  1024/1024 lanes in band, 953 bit-exact, max 12 ulp, max 0.193 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=512  N=1024 2048/2048 lanes in band, 1904 bit-exact, max 8 ulp, max 0.121 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=512  N=256  512/512 lanes in band, 480 bit-exact, max 83 ulp, max 0.117 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=2  K=512  N=512  1024/1024 lanes in band, 965 bit-exact, max 16 ulp, max 0.126 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=64 K=1024 N=1024 65536/65536 lanes in band, 61604 bit-exact, max 1039 ulp, max 0.129 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=64 K=1024 N=256  16384/16384 lanes in band, 15399 bit-exact, max 471 ulp, max 0.118 cond-units, padding nonzero 0: PASS
+M=64 K=1024 N=512  32768/32768 lanes in band, 30712 bit-exact, max 543 ulp, max 0.125 cond-units, padding nonzero 0: PASS
+M=64 K=256  N=1024 65536/65536 lanes in band, 61678 bit-exact, max 240 ulp, max 0.243 cond-units, padding nonzero 0: PASS
+M=64 K=256  N=256  16384/16384 lanes in band, 15367 bit-exact, max 2097 ulp, max 0.232 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=64 K=256  N=512  32768/32768 lanes in band, 30759 bit-exact, max 185 ulp, max 0.255 cond-units, padding nonzero 0: PASS
+M=64 K=512  N=1024 65536/65536 lanes in band, 61523 bit-exact, max 2035 ulp, max 0.185 cond-units, padding nonzero 0: PASS
+M=64 K=512  N=256  16384/16384 lanes in band, 15418 bit-exact, max 1049 ulp, max 0.132 cond-units, padding nonzero 0: PASS
+M=64 K=512  N=512  32768/32768 lanes in band, 30686 bit-exact, max 2210 ulp, max 0.135 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=1024 N=1024 8192/8192 lanes in band, 7690 bit-exact, max 125 ulp, max 0.117 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=1024 N=256  2048/2048 lanes in band, 1919 bit-exact, max 11 ulp, max 0.064 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=1024 N=512  4096/4096 lanes in band, 3849 bit-exact, max 77 ulp, max 0.117 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=256  N=1024 8192/8192 lanes in band, 7687 bit-exact, max 120 ulp, max 0.214 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=256  N=256  2048/2048 lanes in band, 1932 bit-exact, max 51 ulp, max 0.234 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=256  N=512  4096/4096 lanes in band, 3837 bit-exact, max 112 ulp, max 0.213 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=512  N=1024 8192/8192 lanes in band, 7670 bit-exact, max 153 ulp, max 0.134 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=512  N=256  2048/2048 lanes in band, 1918 bit-exact, max 90 ulp, max 0.133 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+M=8  K=512  N=512  4096/4096 lanes in band, 3865 bit-exact, max 1554 ulp, max 0.197 cond-units, padding nonzero 0: PASS | ane-run's counts reproduced
+27 shapes compared; 21 had ane-run counts to reproduce; 0 mismatches; 0 failed; 0 missing outputs; 0 printed shapes without output

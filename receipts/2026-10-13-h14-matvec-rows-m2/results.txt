@@ -1,0 +1,208 @@
+H14 row-variant matvec cell start=2026-10-13T12:26:57Z kernel=7.1.12-2-20261012.16-sep-ARCH target_s=40
+chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a
+
+== m2k256n256 program_sha256=b28dce3f26457a5c ==
+exec ms over 20 calls: min 0.259 p10 0.310 p25 0.360 median 0.405 p75 0.411 p90 0.414 p99 0.462 max 0.462
+matvec M=2 K=256 N=256: 512/512 lanes within 2 ulp or 4 cond-units (479 bit-exact), max 8.000 ulp, max 0.124 cond-units; padding lanes zero: PASS
+rc_cal(m2k256n256)=0 median_ms=0.405
+exec ms over 98765 calls: min 0.251 p10 0.306 p25 0.357 median 0.357 p75 0.407 p90 0.411 p99 0.462 max 0.838
+matvec M=2 K=256 N=256: 512/512 lanes within 2 ulp or 4 cond-units (479 bit-exact), max 8.000 ulp, max 0.124 cond-units; padding lanes zero: PASS
+rc_long(m2k256n256)=0 repeat=98765 wall_s=35.3 loop_duty_pct=99.7
+
+== m2k256n512 program_sha256=9cebf7a16ab7fca0 ==
+exec ms over 20 calls: min 0.258 p10 0.360 p25 0.360 median 0.361 p75 0.411 p90 0.461 p99 0.476 max 0.476
+matvec M=2 K=256 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (953 bit-exact), max 12.000 ulp, max 0.193 cond-units; padding lanes zero: PASS
+rc_cal(m2k256n512)=0 median_ms=0.361
+exec ms over 110803 calls: min 0.255 p10 0.357 p25 0.357 median 0.361 p75 0.407 p90 0.412 p99 0.461 max 0.519
+matvec M=2 K=256 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (953 bit-exact), max 12.000 ulp, max 0.193 cond-units; padding lanes zero: PASS
+rc_long(m2k256n512)=0 repeat=110803 wall_s=42.0 loop_duty_pct=99.7
+
+== m2k256n1024 program_sha256=c23d41f8d0dae871 ==
+exec ms over 20 calls: min 0.345 p10 0.357 p25 0.357 median 0.407 p75 0.408 p90 0.457 p99 0.457 max 0.457
+matvec M=2 K=256 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1919 bit-exact), max 19.000 ulp, max 0.214 cond-units; padding lanes zero: PASS
+rc_cal(m2k256n1024)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.255 p10 0.357 p25 0.357 median 0.362 p75 0.407 p90 0.457 p99 0.462 max 0.608
+matvec M=2 K=256 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1919 bit-exact), max 19.000 ulp, max 0.214 cond-units; padding lanes zero: PASS
+rc_long(m2k256n1024)=0 repeat=98280 wall_s=38.2 loop_duty_pct=99.7
+
+== m2k512n256 program_sha256=063bd177286114d9 ==
+exec ms over 20 calls: min 0.357 p10 0.357 p25 0.357 median 0.407 p75 0.457 p90 0.458 p99 0.461 max 0.461
+matvec M=2 K=512 N=256: 512/512 lanes within 2 ulp or 4 cond-units (480 bit-exact), max 83.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_cal(m2k512n256)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.255 p10 0.357 p25 0.357 median 0.362 p75 0.408 p90 0.458 p99 0.463 max 3.238
+matvec M=2 K=512 N=256: 512/512 lanes within 2 ulp or 4 cond-units (480 bit-exact), max 83.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_long(m2k512n256)=0 repeat=98280 wall_s=38.4 loop_duty_pct=99.7
+
+== m2k512n512 program_sha256=841fbe9af8337f0d ==
+exec ms over 20 calls: min 0.331 p10 0.357 p25 0.357 median 0.407 p75 0.408 p90 0.459 p99 0.508 max 0.508
+matvec M=2 K=512 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (965 bit-exact), max 16.000 ulp, max 0.126 cond-units; padding lanes zero: PASS
+rc_cal(m2k512n512)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.256 p10 0.357 p25 0.357 median 0.407 p75 0.412 p90 0.458 p99 0.508 max 0.609
+matvec M=2 K=512 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (965 bit-exact), max 16.000 ulp, max 0.126 cond-units; padding lanes zero: PASS
+rc_long(m2k512n512)=0 repeat=98280 wall_s=39.1 loop_duty_pct=99.7
+
+== m2k512n1024 program_sha256=4d467c8b0be8a135 ==
+exec ms over 20 calls: min 0.357 p10 0.357 p25 0.357 median 0.407 p75 0.458 p90 0.459 p99 0.489 max 0.489
+matvec M=2 K=512 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1904 bit-exact), max 8.000 ulp, max 0.121 cond-units; padding lanes zero: PASS
+rc_cal(m2k512n1024)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.306 p10 0.357 p25 0.357 median 0.407 p75 0.411 p90 0.458 p99 0.508 max 0.558
+matvec M=2 K=512 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1904 bit-exact), max 8.000 ulp, max 0.121 cond-units; padding lanes zero: PASS
+rc_long(m2k512n1024)=0 repeat=98280 wall_s=39.3 loop_duty_pct=99.7
+
+== m2k1024n256 program_sha256=a005721116c19002 ==
+exec ms over 20 calls: min 0.329 p10 0.357 p25 0.406 median 0.407 p75 0.457 p90 0.458 p99 0.475 max 0.475
+matvec M=2 K=1024 N=256: 512/512 lanes within 2 ulp or 4 cond-units (478 bit-exact), max 27.000 ulp, max 0.065 cond-units; padding lanes zero: PASS
+rc_cal(m2k1024n256)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.304 p10 0.357 p25 0.357 median 0.407 p75 0.457 p90 0.458 p99 0.512 max 0.666
+matvec M=2 K=1024 N=256: 512/512 lanes within 2 ulp or 4 cond-units (478 bit-exact), max 27.000 ulp, max 0.065 cond-units; padding lanes zero: PASS
+rc_long(m2k1024n256)=0 repeat=98280 wall_s=39.8 loop_duty_pct=99.7
+
+== m2k1024n512 program_sha256=a04451df8b82bb0e ==
+exec ms over 20 calls: min 0.357 p10 0.357 p25 0.363 median 0.407 p75 0.457 p90 0.508 p99 0.509 max 0.509
+matvec M=2 K=1024 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (948 bit-exact), max 23.000 ulp, max 0.111 cond-units; padding lanes zero: PASS
+rc_cal(m2k1024n512)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.306 p10 0.357 p25 0.358 median 0.407 p75 0.412 p90 0.458 p99 0.508 max 3.951
+matvec M=2 K=1024 N=512: 1024/1024 lanes within 2 ulp or 4 cond-units (948 bit-exact), max 23.000 ulp, max 0.111 cond-units; padding lanes zero: PASS
+rc_long(m2k1024n512)=0 repeat=98280 wall_s=39.8 loop_duty_pct=99.7
+
+== m2k1024n1024 program_sha256=7d93bcf058f5d4d2 ==
+exec ms over 20 calls: min 0.357 p10 0.357 p25 0.407 median 0.436 p75 0.508 p90 0.559 p99 0.560 max 0.560
+matvec M=2 K=1024 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1932 bit-exact), max 29.000 ulp, max 0.109 cond-units; padding lanes zero: PASS
+rc_cal(m2k1024n1024)=0 median_ms=0.436
+exec ms over 91743 calls: min 0.336 p10 0.357 p25 0.407 median 0.457 p75 0.467 p90 0.509 p99 0.563 max 0.663
+matvec M=2 K=1024 N=1024: 2048/2048 lanes within 2 ulp or 4 cond-units (1932 bit-exact), max 29.000 ulp, max 0.109 cond-units; padding lanes zero: PASS
+rc_long(m2k1024n1024)=0 repeat=91743 wall_s=40.5 loop_duty_pct=99.7
+
+== m8k256n256 program_sha256=e43f1fe0d9cd96bc ==
+exec ms over 20 calls: min 0.357 p10 0.407 p25 0.407 median 0.407 p75 0.458 p90 0.508 p99 0.509 max 0.509
+matvec M=8 K=256 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1932 bit-exact), max 51.000 ulp, max 0.234 cond-units; padding lanes zero: PASS
+rc_cal(m8k256n256)=0 median_ms=0.407
+exec ms over 98280 calls: min 0.306 p10 0.357 p25 0.407 median 0.408 p75 0.415 p90 0.458 p99 0.510 max 2.582
+matvec M=8 K=256 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1932 bit-exact), max 51.000 ulp, max 0.234 cond-units; padding lanes zero: PASS
+rc_long(m8k256n256)=0 repeat=98280 wall_s=40.7 loop_duty_pct=99.7
+
+== m8k256n512 program_sha256=0c3c1ca98e1e731f ==
+exec ms over 20 calls: min 0.357 p10 0.407 p25 0.408 median 0.408 p75 0.458 p90 0.508 p99 0.510 max 0.510
+matvec M=8 K=256 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3837 bit-exact), max 112.000 ulp, max 0.213 cond-units; padding lanes zero: PASS
+rc_cal(m8k256n512)=0 median_ms=0.408
+exec ms over 98039 calls: min 0.306 p10 0.407 p25 0.407 median 0.408 p75 0.412 p90 0.461 p99 0.512 max 0.572
+matvec M=8 K=256 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3837 bit-exact), max 112.000 ulp, max 0.213 cond-units; padding lanes zero: PASS
+rc_long(m8k256n512)=0 repeat=98039 wall_s=40.9 loop_duty_pct=99.7
+
+== m8k256n1024 program_sha256=eee0dc70c3630646 ==
+exec ms over 20 calls: min 0.357 p10 0.407 p25 0.407 median 0.408 p75 0.458 p90 0.508 p99 0.610 max 0.610
+matvec M=8 K=256 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7687 bit-exact), max 120.000 ulp, max 0.214 cond-units; padding lanes zero: PASS
+rc_cal(m8k256n1024)=0 median_ms=0.408
+exec ms over 98039 calls: min 0.306 p10 0.401 p25 0.407 median 0.411 p75 0.458 p90 0.508 p99 0.513 max 0.608
+matvec M=8 K=256 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7687 bit-exact), max 120.000 ulp, max 0.214 cond-units; padding lanes zero: PASS
+rc_long(m8k256n1024)=0 repeat=98039 wall_s=42.3 loop_duty_pct=99.7
+
+== m8k512n256 program_sha256=f571fcd6ba78a2ac ==
+exec ms over 20 calls: min 0.357 p10 0.410 p25 0.411 median 0.461 p75 0.511 p90 0.514 p99 0.515 max 0.515
+matvec M=8 K=512 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1918 bit-exact), max 90.000 ulp, max 0.133 cond-units; padding lanes zero: PASS
+rc_cal(m8k512n256)=0 median_ms=0.461
+exec ms over 86767 calls: min 0.306 p10 0.407 p25 0.407 median 0.411 p75 0.458 p90 0.508 p99 0.513 max 0.608
+matvec M=8 K=512 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1918 bit-exact), max 90.000 ulp, max 0.133 cond-units; padding lanes zero: PASS
+rc_long(m8k512n256)=0 repeat=86767 wall_s=37.9 loop_duty_pct=99.7
+
+== m8k512n512 program_sha256=4bd049cf6272e520 ==
+exec ms over 20 calls: min 0.406 p10 0.407 p25 0.407 median 0.457 p75 0.458 p90 0.509 p99 0.559 max 0.559
+matvec M=8 K=512 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3865 bit-exact), max 1554.000 ulp, max 0.197 cond-units; padding lanes zero: PASS
+rc_cal(m8k512n512)=0 median_ms=0.457
+exec ms over 87527 calls: min 0.306 p10 0.407 p25 0.408 median 0.458 p75 0.463 p90 0.509 p99 0.559 max 3.222
+matvec M=8 K=512 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3865 bit-exact), max 1554.000 ulp, max 0.197 cond-units; padding lanes zero: PASS
+rc_long(m8k512n512)=0 repeat=87527 wall_s=39.1 loop_duty_pct=99.7
+
+== m8k512n1024 program_sha256=f6d8d047c1cd74ed ==
+exec ms over 20 calls: min 0.410 p10 0.411 p25 0.411 median 0.461 p75 0.461 p90 0.512 p99 0.565 max 0.565
+matvec M=8 K=512 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7670 bit-exact), max 153.000 ulp, max 0.134 cond-units; padding lanes zero: PASS
+rc_cal(m8k512n1024)=0 median_ms=0.461
+exec ms over 86767 calls: min 0.313 p10 0.407 p25 0.408 median 0.458 p75 0.462 p90 0.508 p99 0.559 max 0.659
+matvec M=8 K=512 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7670 bit-exact), max 153.000 ulp, max 0.134 cond-units; padding lanes zero: PASS
+rc_long(m8k512n1024)=0 repeat=86767 wall_s=38.6 loop_duty_pct=99.6
+
+== m8k1024n256 program_sha256=4fa0eaaad30f3fbd ==
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.407 median 0.457 p75 0.507 p90 0.510 p99 0.559 max 0.559
+matvec M=8 K=1024 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1919 bit-exact), max 11.000 ulp, max 0.064 cond-units; padding lanes zero: PASS
+rc_cal(m8k1024n256)=0 median_ms=0.457
+exec ms over 87527 calls: min 0.308 p10 0.407 p25 0.411 median 0.458 p75 0.465 p90 0.512 p99 0.559 max 3.349
+matvec M=8 K=1024 N=256: 2048/2048 lanes within 2 ulp or 4 cond-units (1919 bit-exact), max 11.000 ulp, max 0.064 cond-units; padding lanes zero: PASS
+rc_long(m8k1024n256)=0 repeat=87527 wall_s=39.5 loop_duty_pct=99.6
+
+== m8k1024n512 program_sha256=c996bf92a98e378e ==
+exec ms over 20 calls: min 0.410 p10 0.410 p25 0.411 median 0.461 p75 0.512 p90 0.514 p99 0.527 max 0.527
+matvec M=8 K=1024 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3849 bit-exact), max 77.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_cal(m8k1024n512)=0 median_ms=0.461
+exec ms over 86767 calls: min 0.342 p10 0.407 p25 0.407 median 0.457 p75 0.461 p90 0.508 p99 0.558 max 0.613
+matvec M=8 K=1024 N=512: 4096/4096 lanes within 2 ulp or 4 cond-units (3849 bit-exact), max 77.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_long(m8k1024n512)=0 repeat=86767 wall_s=38.4 loop_duty_pct=99.6
+
+== m8k1024n1024 program_sha256=ec70ad7d6b0818c2 ==
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.407 median 0.462 p75 0.508 p90 0.609 p99 0.611 max 0.611
+matvec M=8 K=1024 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7690 bit-exact), max 125.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_cal(m8k1024n1024)=0 median_ms=0.462
+exec ms over 86580 calls: min 0.367 p10 0.407 p25 0.408 median 0.458 p75 0.509 p90 0.559 p99 0.610 max 3.935
+matvec M=8 K=1024 N=1024: 8192/8192 lanes within 2 ulp or 4 cond-units (7690 bit-exact), max 125.000 ulp, max 0.117 cond-units; padding lanes zero: PASS
+rc_long(m8k1024n1024)=0 repeat=86580 wall_s=40.6 loop_duty_pct=99.6
+
+== m64k256n256 program_sha256=a12ba311d0a2ad82 ==
+exec ms over 20 calls: min 0.371 p10 0.407 p25 0.407 median 0.457 p75 0.491 p90 0.558 p99 0.559 max 0.559
+matvec M=64 K=256 N=256: 16384/16384 lanes within 2 ulp or 4 cond-units (15367 bit-exact), max 2097.000 ulp, max 0.232 cond-units; padding lanes zero: PASS
+rc_cal(m64k256n256)=0 median_ms=0.457
+exec ms over 87527 calls: min 0.308 p10 0.408 p25 0.408 median 0.458 p75 0.462 p90 0.512 p99 0.559 max 0.613
+matvec M=64 K=256 N=256: 16384/16384 lanes within 2 ulp or 4 cond-units (15367 bit-exact), max 2097.000 ulp, max 0.232 cond-units; padding lanes zero: PASS
+rc_long(m64k256n256)=0 repeat=87527 wall_s=39.4 loop_duty_pct=99.6
+
+== m64k256n512 program_sha256=30d9462dde23dad6 ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.377 p10 0.411 p25 0.411 median 0.461 p75 0.512 p90 0.515 p99 0.537 max 0.537
+rc_cal(m64k256n512)=255 median_ms=0.461
+SKIP long loop: calibration check failed
+
+== m64k256n1024 program_sha256=a1612ddee133b2e1 ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.367 p10 0.407 p25 0.407 median 0.410 p75 0.508 p90 0.558 p99 0.592 max 0.592
+rc_cal(m64k256n1024)=255 median_ms=0.410
+SKIP long loop: calibration check failed
+
+== m64k512n256 program_sha256=75fe942586763431 ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.411 p10 0.411 p25 0.411 median 0.461 p75 0.512 p90 0.562 p99 0.562 max 0.562
+rc_cal(m64k512n256)=255 median_ms=0.461
+SKIP long loop: calibration check failed
+
+== m64k512n512 program_sha256=c131f32fb5333daa ==
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.408 median 0.458 p75 0.508 p90 0.509 p99 0.558 max 0.558
+matvec M=64 K=512 N=512: 32768/32768 lanes within 2 ulp or 4 cond-units (30686 bit-exact), max 2210.000 ulp, max 0.135 cond-units; padding lanes zero: PASS
+rc_cal(m64k512n512)=0 median_ms=0.458
+exec ms over 87336 calls: min 0.358 p10 0.408 p25 0.408 median 0.458 p75 0.509 p90 0.559 p99 0.610 max 0.710
+matvec M=64 K=512 N=512: 32768/32768 lanes within 2 ulp or 4 cond-units (30686 bit-exact), max 2210.000 ulp, max 0.135 cond-units; padding lanes zero: PASS
+rc_long(m64k512n512)=0 repeat=87336 wall_s=41.4 loop_duty_pct=99.5
+
+== m64k512n1024 program_sha256=c0797a76868ab4dd ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.458 median 0.458 p75 0.508 p90 0.609 p99 0.659 max 0.659
+rc_cal(m64k512n1024)=255 median_ms=0.458
+SKIP long loop: calibration check failed
+
+== m64k1024n256 program_sha256=d27752ec26073556 ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.407 p10 0.407 p25 0.408 median 0.437 p75 0.609 p90 0.609 p99 0.659 max 0.659
+rc_cal(m64k1024n256)=255 median_ms=0.437
+SKIP long loop: calibration check failed
+
+== m64k1024n512 program_sha256=425c95d6105983a9 ==
+--check matvec: io channel sizes disagree
+exec ms over 20 calls: min 0.410 p10 0.411 p25 0.420 median 0.462 p75 0.515 p90 0.642 p99 0.713 max 0.713
+rc_cal(m64k1024n512)=255 median_ms=0.462
+SKIP long loop: calibration check failed
+
+== m64k1024n1024 program_sha256=e12cd03981c051f0 ==
+exec ms over 20 calls: min 0.458 p10 0.458 p25 0.508 median 0.545 p75 0.559 p90 0.660 p99 0.710 max 0.710
+matvec M=64 K=1024 N=1024: 65536/65536 lanes within 2 ulp or 4 cond-units (61604 bit-exact), max 1039.000 ulp, max 0.129 cond-units; padding lanes zero: PASS
+rc_cal(m64k1024n1024)=0 median_ms=0.545
+exec ms over 73394 calls: min 0.407 p10 0.458 p25 0.461 median 0.512 p75 0.559 p90 0.610 p99 0.664 max 1.141
+matvec M=64 K=1024 N=1024: 65536/65536 lanes within 2 ulp or 4 cond-units (61604 bit-exact), max 1039.000 ulp, max 0.129 cond-units; padding lanes zero: PASS
+rc_long(m64k1024n1024)=0 repeat=73394 wall_s=39.2 loop_duty_pct=98.5
+
+SUMMARY pass=21 fail=6 skipped_loops=6 total_wall_s=832.1 ticket_duty_pct=99.5

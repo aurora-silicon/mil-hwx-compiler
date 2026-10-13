@@ -1,0 +1,52 @@
+H14 non-square matvec cell start=2026-10-13T11:28:46Z kernel=7.1.12-2-20261012.16-sep-ARCH target_s=110
+chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a
+
+== k256n512 program_sha256=0e56fb173a09a671 ==
+exec ms over 20 calls: min 0.255 p10 0.256 p25 0.306 median 0.357 p75 0.357 p90 0.420 p99 0.457 max 0.457
+matvec M=1 K=256 N=512: 512/512 lanes within 2 ulp or 4 cond-units (490 bit-exact), max 6.000 ulp, max 0.120 cond-units; padding lanes zero: PASS
+rc_cal(k256n512)=0 median_ms=0.357
+exec ms over 308123 calls: min 0.217 p10 0.256 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.507 max 1.633
+matvec M=1 K=256 N=512: 512/512 lanes within 2 ulp or 4 cond-units (490 bit-exact), max 6.000 ulp, max 0.120 cond-units; padding lanes zero: PASS
+rc_long(k256n512)=0 repeat=308123 wall_s=102.1 loop_duty_pct=99.6
+
+== k256n1024 program_sha256=68a6040848161980 ==
+exec ms over 20 calls: min 0.255 p10 0.256 p25 0.309 median 0.357 p75 0.457 p90 0.458 p99 0.458 max 0.458
+matvec M=1 K=256 N=1024: 1024/1024 lanes within 2 ulp or 4 cond-units (945 bit-exact), max 8.000 ulp, max 0.239 cond-units; padding lanes zero: PASS
+rc_cal(k256n1024)=0 median_ms=0.357
+exec ms over 308123 calls: min 0.232 p10 0.257 p25 0.307 median 0.357 p75 0.406 p90 0.408 p99 0.462 max 3.027
+matvec M=1 K=256 N=1024: 1024/1024 lanes within 2 ulp or 4 cond-units (945 bit-exact), max 8.000 ulp, max 0.239 cond-units; padding lanes zero: PASS
+rc_long(k256n1024)=0 repeat=308123 wall_s=109.5 loop_duty_pct=99.7
+
+== k512n256 program_sha256=71eda38e2f1216f8 ==
+exec ms over 20 calls: min 0.256 p10 0.256 p25 0.357 median 0.358 p75 0.408 p90 0.459 p99 0.511 max 0.511
+matvec M=1 K=512 N=256: 256/256 lanes within 2 ulp or 4 cond-units (245 bit-exact), max 27.000 ulp, max 0.108 cond-units; padding lanes zero: PASS
+rc_cal(k512n256)=0 median_ms=0.358
+exec ms over 307262 calls: min 0.237 p10 0.306 p25 0.357 median 0.357 p75 0.407 p90 0.410 p99 0.459 max 1.782
+matvec M=1 K=512 N=256: 256/256 lanes within 2 ulp or 4 cond-units (245 bit-exact), max 27.000 ulp, max 0.108 cond-units; padding lanes zero: PASS
+rc_long(k512n256)=0 repeat=307262 wall_s=113.8 loop_duty_pct=99.7
+
+== k512n1024 program_sha256=be265566c84cb535 ==
+exec ms over 20 calls: min 0.256 p10 0.307 p25 0.357 median 0.357 p75 0.407 p90 0.458 p99 0.459 max 0.459
+matvec M=1 K=512 N=1024: 1024/1024 lanes within 2 ulp or 4 cond-units (962 bit-exact), max 21.000 ulp, max 0.118 cond-units; padding lanes zero: PASS
+rc_cal(k512n1024)=0 median_ms=0.357
+exec ms over 308123 calls: min 0.253 p10 0.307 p25 0.356 median 0.357 p75 0.407 p90 0.407 p99 0.458 max 2.866
+matvec M=1 K=512 N=1024: 1024/1024 lanes within 2 ulp or 4 cond-units (962 bit-exact), max 21.000 ulp, max 0.118 cond-units; padding lanes zero: PASS
+rc_long(k512n1024)=0 repeat=308123 wall_s=111.7 loop_duty_pct=99.7
+
+== k1024n256 program_sha256=e5ad21d3e9ca584f ==
+exec ms over 20 calls: min 0.264 p10 0.310 p25 0.360 median 0.360 p75 0.410 p90 0.411 p99 0.464 max 0.464
+matvec M=1 K=1024 N=256: 256/256 lanes within 2 ulp or 4 cond-units (242 bit-exact), max 7.000 ulp, max 0.063 cond-units; padding lanes zero: PASS
+rc_cal(k1024n256)=0 median_ms=0.360
+exec ms over 305555 calls: min 0.237 p10 0.261 p25 0.309 median 0.357 p75 0.407 p90 0.411 p99 0.508 max 0.618
+matvec M=1 K=1024 N=256: 256/256 lanes within 2 ulp or 4 cond-units (242 bit-exact), max 7.000 ulp, max 0.063 cond-units; padding lanes zero: PASS
+rc_long(k1024n256)=0 repeat=305555 wall_s=109.6 loop_duty_pct=99.7
+
+== k1024n512 program_sha256=4aba2a66e985b9a7 ==
+exec ms over 20 calls: min 0.303 p10 0.310 p25 0.360 median 0.410 p75 0.411 p90 0.415 p99 0.463 max 0.463
+matvec M=1 K=1024 N=512: 512/512 lanes within 2 ulp or 4 cond-units (486 bit-exact), max 5.000 ulp, max 0.063 cond-units; padding lanes zero: PASS
+rc_cal(k1024n512)=0 median_ms=0.410
+exec ms over 268292 calls: min 0.255 p10 0.356 p25 0.357 median 0.357 p75 0.382 p90 0.408 p99 0.414 max 3.538
+matvec M=1 K=1024 N=512: 512/512 lanes within 2 ulp or 4 cond-units (486 bit-exact), max 5.000 ulp, max 0.063 cond-units; padding lanes zero: PASS
+rc_long(k1024n512)=0 repeat=268292 wall_s=98.3 loop_duty_pct=99.7
+
+SUMMARY pass=6 fail=0 total_wall_s=645.1 ticket_duty_pct=99.7
