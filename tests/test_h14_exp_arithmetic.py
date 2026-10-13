@@ -7,12 +7,13 @@ The compiler emits Apple's `exp` program unchanged: a 33-entry fp16 table of 2^(
     n = floor(t), s = 32 * (t - n), i = floor(s)
     y = raz16(T[i] + raz16((s - i) * (T[i+1] - T[i]))) * 2^n
 with raz16 = round to nearest fp16, ties away from zero (the interpolator rule in docs/ane/numerics.md). It reproduces every saved device lane
-bit for bit (calibration and loop outputs, 64 and 512 channels). Each mutant of the model (nearest-even rounding, exact log2(e), an
-unrounded exponent, no interpolation) misses lanes, so the match is not loose.
+bit for bit: 541 distinct (x, y) pairs, each seen in the calibration and the loop run of both widths (1,152 lane readings). The data pin the
+final rounding (ties away), that the exponent is rounded, the interpolation, the scale word and every table entry. They do not pin the rounding
+rule of the exponent or of the interpolation step; nearest-even gives the same lanes there. The mutants below show each pin.
 The model then says where the 0.43 percent error comes from: with the scale as emitted, 60 of the 36,866 fp16 inputs in [-8, 8] miss a
 relative error of 2^-8, the smallest at |x| = 5.598. With an exact scale and the same fp16 exponent, none do (largest 0.331 percent). This
 is a statement about the model that reproduces the saved device output, not a device result for any changed program.
-Usage: tests/test_h14_exp_arithmetic.py (no compiler needed)
+Usage: tests/test_h14_exp_arithmetic.py (no compiler needed; needs NumPy, so it is not part of `make test`: run `make test-h14-exp-model`)
 """
 import json
 import sys
@@ -53,17 +54,19 @@ def emitted_program():
     return table, scale
 
 
-def exp_model(x, table, scale, rnd=raz16, round_exponent=True, interpolate=True):
+def exp_model(x, table, scale, rnd=None, rnd_t=raz16, rnd_step=raz16, rnd_out=raz16, round_exponent=True, interpolate=True):
+    if rnd is not None:  # one rule for all three stages
+        rnd_t = rnd_step = rnd_out = rnd
     t = x * scale
     if round_exponent:
-        t = rnd(t)
+        t = rnd_t(t)
     n = np.floor(t)
     s = 32.0 * (t - n)
     i = np.minimum(np.floor(s).astype(int), 31)
     if not interpolate:
-        return rnd(table[i]) * 2.0**n
-    step = rnd((s - i) * (table[i + 1] - table[i]))
-    return rnd(table[i] + step) * 2.0**n
+        return rnd_out(table[i]) * 2.0**n
+    step = rnd_step((s - i) * (table[i + 1] - table[i]))
+    return rnd_out(table[i] + step) * 2.0**n
 
 
 def lanes(path, count):
@@ -78,8 +81,19 @@ def device_cases():
             yield f"{case}.{run}", x, lanes(RECEIPT / "device-output" / f"{case}.{run}.y.f16", count)
 
 
-def matches(model, table, scale, **kw):
-    return sum(int(np.count_nonzero(model(x, table, scale, **kw).astype(np.float16) == y.astype(np.float16))) for _, x, y in device_cases())
+def matches(table, scale, **kw):
+    return sum(int(np.count_nonzero(exp_model(x, table, scale, **kw).astype(np.float16) == y.astype(np.float16))) for _, x, y in device_cases())
+
+
+
+def test_raz16():
+    """Every midpoint between positive fp16 values goes to the larger magnitude; nearest-even differs at half of them."""
+    bits = np.arange(0, 0x7BFF, dtype=np.uint16)
+    lo, hi = bits.view(np.float16).astype(np.float64), (bits + 1).view(np.float16).astype(np.float64)
+    mid = (lo + hi) / 2
+    assert np.array_equal(raz16(mid), hi) and np.array_equal(raz16(-mid), -hi), "raz16 must return the larger-magnitude neighbour"
+    assert np.array_equal(raz16(lo), lo) and np.array_equal(raz16(-lo), -lo), "raz16 must keep exact fp16 values"
+    assert int(np.count_nonzero(nearest_even16(mid) != hi)) == 15872, "nearest-even differs at half of the midpoints"
 
 
 def sweep(table, scale):
@@ -93,13 +107,16 @@ def main():
     table, scale = emitted_program()
     assert scale == float(np.float16(LOG2E)) == 1.4423828125, scale
     assert table[0] == 1.0 and table[32] == 2.0 and np.array_equal(table, raz16(2.0 ** (np.arange(33) / 32))), "table is 2^(i/32) in fp16"
+    test_raz16()
 
     total = sum(len(x) for _, x, _ in device_cases())
     assert total == 2 * (64 + 512)
+    distinct = {(float(a), float(b)) for _, x, y in device_cases() for a, b in zip(x, y, strict=True)}
+    assert len(distinct) == 541, len(distinct)
     for name, x, y in device_cases():
         got = exp_model(x, table, scale).astype(np.float16)
         assert np.array_equal(got, y.astype(np.float16)), f"{name}: model misses {int(np.count_nonzero(got != y.astype(np.float16)))} lanes"
-    print(f"model reproduces {total} of {total} saved device lanes bit for bit")
+    print(f"model reproduces {len(distinct)} distinct (x, y) pairs of the device, {total} lane readings, bit for bit")
 
     mutants = {
         "nearest-even rounding": {"rnd": nearest_even16},
@@ -108,10 +125,10 @@ def main():
         "no interpolation": {"interpolate": False},
     }
     for name, kw in mutants.items():
-        s = kw.pop("scale", scale)
-        hit = matches(exp_model, table, s, **kw)
-        assert hit < total, f"mutant '{name}' still matches every lane"
-        print(f"mutant {name}: {hit} of {total} lanes match")
+        kw = dict(kw)
+        hit = matches(table, kw.pop("scale", scale), **kw)
+        assert hit < total, f"mutant '{name}' still matches every lane reading"
+        print(f"mutant {name}: {hit} of {total} lane readings match")
 
     n, rel, xs = sweep(table, scale)
     outside = rel > BOUND
@@ -119,7 +136,14 @@ def main():
     assert round(float(rel.max()), 5) == 0.00489
     _, rel2, _ = sweep(table, LOG2E)
     assert float(rel2.max()) < BOUND and round(float(rel2.max()), 5) == 0.00331
-    print(f"as emitted: {int(outside.sum())} of {n} fp16 inputs in [-8, 8] outside 2^-8, largest {rel.max():.5f}")
+
+    # Direct device check: the saved lanes outside 2^-8 are exactly the model's outside-2^-8 inputs that the device saw.
+    device_x = {float(a) for _, x, _ in device_cases() for a in x}
+    device_bad = {float(a) for _, x, y in device_cases() for a, b in zip(x, y, strict=True) if abs(b / np.exp(a) - 1) > BOUND}
+    model_bad = {float(a) for a in xs[outside]} & device_x
+    assert device_bad == model_bad and len(device_bad) == 11, (len(device_bad), len(model_bad))
+    print(f"as emitted: {int(outside.sum())} of {n} fp16 inputs in [-8, 8] outside 2^-8, largest {rel.max():.5f}; "
+          f"{len(device_bad)} of them were on the device and were exactly its out-of-bound lanes")
     print(f"exact scale (model only): none outside, largest {rel2.max():.5f}")
 
 
