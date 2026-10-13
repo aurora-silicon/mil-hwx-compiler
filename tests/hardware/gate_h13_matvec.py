@@ -16,12 +16,30 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "receipts/2026-10-11-h13-elementwise-m1"))
-from gate_h13 import to_half_away
-
 K = N = 512
 BYTES = 32768
 STRIDE = 32  # fp16 words, one value per 64-byte channel
+
+# ANEC package header, as read by libane's struct anec (little endian). Offsets and sizes in bytes.
+HEADER_IO_COUNTS_OFFSET = 32  # two uint32: input count, output count
+HEADER_TILES_OFFSET = 40  # one uint32 tile count per channel
+TILE_COUNT_BYTES = 4
+HEADER_NCHW_OFFSET = 168  # six uint64 (n, c, h, w, plane bytes, row bytes) per channel
+NCHW_BYTES = 48
+CHANNELS = 32  # channels in the header tables
+HEADER_BYTES = HEADER_NCHW_OFFSET + CHANNELS * NCHW_BYTES  # 1704: the header ends after the nchw table
+TILE_BYTES = 16384  # one tile of a channel surface
+
+
+def to_half_away(d):
+    """Round an exactly representable double to fp16, nearest, ties away from zero (the rule of gate_h13.py and ane-run)."""
+    h = np.float16(d)
+    if float(h) == d:
+        return h
+    lo, hi = (h, np.nextafter(h, np.float16(np.inf))) if float(h) < d else (np.nextafter(h, np.float16(-np.inf)), h)
+    if (float(lo) + float(hi)) / 2 == d:
+        return hi if d > 0 else lo
+    return h
 
 
 def pack(values):
@@ -60,9 +78,9 @@ def validate(manifest, blob):
         raise ValueError("requires H13 matmul")
     if len(manifest.get("programs", [])) != 1 or manifest.get("dispatchPlan") != [0]:
         raise ValueError("only complete single-program packages supported")
-    if len(blob) != manifest.get("bytes") or len(blob) < 1704:
+    if len(blob) != manifest.get("bytes") or len(blob) < HEADER_BYTES:
         raise ValueError("program size disagrees with manifest or header is truncated")
-    if struct.unpack_from("<II", blob, 32) != (1, 1):
+    if struct.unpack_from("<II", blob, HEADER_IO_COUNTS_OFFSET) != (1, 1):
         raise ValueError("requires exactly one runtime input and output")
     for kind, channel in (("inputs", 5), ("outputs", 4)):
         specs = manifest[kind]
@@ -74,9 +92,9 @@ def validate(manifest, blob):
                 spec["index"] != channel or spec["allocationBytes"] != BYTES or
                 spec["nchw"] != layout):
             raise ValueError(f"unsupported {kind} layout (K=256 and packages excluded)")
-        tiles = struct.unpack_from("<I", blob, 40 + 4 * channel)[0]
-        nchw = list(struct.unpack_from("<6Q", blob, 168 + 48 * channel))
-        if tiles * 16384 != BYTES or nchw != layout:
+        tiles = struct.unpack_from("<I", blob, HEADER_TILES_OFFSET + TILE_COUNT_BYTES * channel)[0]
+        nchw = list(struct.unpack_from("<6Q", blob, HEADER_NCHW_OFFSET + NCHW_BYTES * channel))
+        if tiles * TILE_BYTES != BYTES or nchw != layout:
             raise ValueError(f"header/manifest {kind} layout disagreement")
 
 
@@ -128,6 +146,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)  # never accept stale output from an earlier run
     infile, outfile = out / "x.channel.f16", out / "y.channel.f16"
     infile.write_bytes(pack(x))
+    # The scheduler's ane-run lock: the same file ane-run and the guard take. Deliberately not configurable.
     cmd = ["flock", "-w", "60", "/var/tmp/ane-run.lock", "timeout", "60", str(runner),
            "--anec", str(program), "--in", f"0={infile}", "--out", f"0={outfile}", "--repeat", "1"]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=125, check=False)
