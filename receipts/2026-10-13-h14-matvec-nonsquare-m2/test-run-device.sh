@@ -32,7 +32,7 @@ grep -q "SUMMARY pass=6 fail=0" "$out/results.txt" && ok "summary pass=6 fail=0"
 [ "$(grep -c 'repeat=55000 ' "$T/log")" -eq 6 ] && ok "long loop sized to 55000 calls (110 s at 2.0 ms) for each shape" || bad "repeat sizing: $(grep -c 'repeat=55000 ' "$T/log")"
 [ "$(grep -c 'repeat=20 ' "$T/log")" -eq 6 ] && ok "six 20-call calibrations" || bad "calibration count"
 grep -q "ticket_duty_pct=" "$out/results.txt" && ok "duty line present" || bad "duty line"
-grep -q "receipts.log" /dev/null; [ -s "$T/root/receipts.log" ] && ok "receipt log written" || bad "receipts.log"
+[ -s "$T/root/receipts.log" ] && ok "receipt log written" || bad "receipts.log"
 
 : > "$T/log"; run k512n256 110; rc=$?
 [ "$rc" -ne 0 ] && ok "a failed calibration makes the cell fail (rc $rc)" || bad "failed calibration still rc 0"
