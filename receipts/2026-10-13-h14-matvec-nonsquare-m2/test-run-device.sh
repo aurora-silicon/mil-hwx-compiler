@@ -34,13 +34,16 @@ grep -q "SUMMARY pass=6 fail=0" "$out/results.txt" && ok "summary pass=6 fail=0"
 grep -q "ticket_duty_pct=" "$out/results.txt" && ok "duty line present" || bad "duty line"
 grep -q "receipts.log" /dev/null; [ -s "$T/root/receipts.log" ] && ok "receipt log written" || bad "receipts.log"
 
-: > "$T/log"; sleep 1; run k512n256 110; rc=$?
+: > "$T/log"; run k512n256 110; rc=$?
 [ "$rc" -ne 0 ] && ok "a failed calibration makes the cell fail (rc $rc)" || bad "failed calibration still rc 0"
-out2=$(ls -d "$T"/root/runs/run-*/ | tail -1)
+out2=$(ls -t -d "$T"/root/runs/run-*/ | head -1)
+[ "$out2" != "$out" ] && ok "a run started in the same second gets its own output directory" || bad "second run reused $out"
+grep -q "SUMMARY pass=6 fail=0" "$out/results.txt" && ok "the first run's results were not overwritten" || bad "first run results overwritten"
 grep -q "SUMMARY pass=5 fail=1" "$out2/results.txt" && ok "summary pass=5 fail=1" || bad "summary after failure"
 [ "$(grep -c 'k512n256.*repeat=[0-9][0-9][0-9][0-9][0-9]' "$T/log")" -eq 0 ] && ok "no long loop for the shape whose calibration failed" || bad "long loop ran after failed calibration"
 
-: > "$T/log"; sleep 1; TARGET_S=0 run none 0 >/dev/null; 
+: > "$T/log"; TARGET_S=0 run none 0 >/dev/null; 
 grep -q 'repeat=200 ' "$T/log" && ok "repeat floor of 200 holds" || bad "floor"
+[ "$(ls -d "$T"/root/runs/run-*/ | wc -l)" -eq 3 ] && ok "three back-to-back runs left three directories" || bad "run directory count"
 rm -rf "$T" 2>/dev/null
 echo "failures: $fails"; exit $((fails > 0))

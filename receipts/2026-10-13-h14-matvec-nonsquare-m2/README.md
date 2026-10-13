@@ -13,6 +13,8 @@ was predicted. `results.txt` is the unmodified output of `run-device.sh`.
 - Per shape: 20 calls with `--time` and `--check matvec`. Then a long back-to-back loop with the same check on the final output.
 - Loop length: set from the calibration median, aiming at 110 seconds.
 - Duty: the change in the driver's `busy_ns` divided by wall time.
+- Script version: the run used `run-device.sh` as committed in 8ef22e8 (sha256 prefix `89bcc64333fefd14`). The copy here differs only in
+  the output directory name, which now ends in the process id so two starts in the same second cannot share a directory.
 
 ## Result
 | K x N | program bytes | lanes in band | bit-exact | max ulp | max cond. units | calls in loop | loop seconds | loop duty | median call ms |

@@ -9,8 +9,8 @@ STATS=${STATS:-/sys/class/accel/accel0/device/ane_stats}
 TARGET_S=${TARGET_S:-110}
 MAX_REPEAT=3000000
 MIN_REPEAT=200
-OUT="$ROOT/runs/run-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$OUT" || exit 2
+OUT="$ROOT/runs/run-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "$ROOT/runs" && mkdir "$OUT" || exit 2
 exec >"$OUT/results.txt" 2>&1
 busy() { awk '$1=="busy_ns"{print $2}' "$STATS"; }
 printf 'H14 non-square matvec cell start=%s kernel=%s target_s=%s\n' "$(date -u +%FT%TZ)" "$(uname -r)" "$TARGET_S"
