@@ -1,0 +1,57 @@
+== lanes outside the bound
+unary_exp_c512: 9 lane(s) outside the bound (rel 0.00390625)
+   x=7.53125    reference=1865.44      device=1858         error=7.4358 relative=0.00399
+   x=7.53125    reference=1865.44      device=1858         error=7.4358 relative=0.00399
+   x=6.98438    reference=1079.63      device=1075         error=4.6314 relative=0.00429
+   x=6.64844    reference=771.578      device=768.5        error=3.0778 relative=0.00399
+   x=5.93359    reference=377.509      device=376          error=1.5088 relative=0.00400
+   x=-6.41016   reference=0.00164477   device=0.00165176   error=6.9964e-06 relative=0.00425
+   x=-6.48047   reference=0.00153309   device=0.00153923   error=6.1385e-06 relative=0.00400
+   x=-6.48047   reference=0.00153309   device=0.00153923   error=6.1385e-06 relative=0.00400
+   x=-7.53125   reference=0.000536068  device=0.000538349  error=2.2814e-06 relative=0.00426
+unary_exp_c64: 2 lane(s) outside the bound (rel 0.00390625)
+   x=-6.07422   reference=0.00230144   device=0.00231171   error=1.0263e-05 relative=0.00446
+   x=-7.62891   reference=0.000486192  device=0.000488281  error=2.0889e-06 relative=0.00430
+
+== error by input range (c512 programs), relative error for exp, sqrt, rsqrt and absolute error for the rest
+unary_exp_c512         relative: [-8.00,-4.00] max 0.00426; [-4.00,0.00] max 0.00233; [0.00,4.00] max 0.00233; [4.00,8.00] max 0.00429
+unary_gelu_c512        absolute: [-8.00,-4.00] max 0.00012; [-4.00,0.00] max 0.00435; [0.00,4.00] max 0.00451; [4.00,8.00] max 0.00012
+unary_rsqrt_c512       relative: [0.06,16.05] max 0.00127; [16.05,32.03] max 0.00068; [32.03,48.02] max 0.00148; [48.02,64.00] max 0.00114
+unary_sigmoid_c512     absolute: [-8.00,-4.00] max 0.00042; [-4.00,0.00] max 0.00297; [0.00,4.00] max 0.00311; [4.00,8.00] max 0.00066
+unary_silu_c512        absolute: [-8.00,-4.00] max 0.00076; [-4.00,0.00] max 0.01484; [0.00,4.00] max 0.01484; [4.00,8.00] max 0.00286
+unary_sqrt_c512        relative: [0.00,16.00] max 0.00092; [16.00,32.00] max 0.00071; [32.00,48.00] max 0.00078; [48.00,64.00] max 0.00038
+unary_tanh_c512        absolute: [-8.00,-4.00] max 0.00067; [-4.00,0.00] max 0.00138; [0.00,4.00] max 0.00143; [4.00,8.00] max 0.00064
+
+== gelu against the erf form and the tanh form (the device is judged against the erf form by the gate)
+unary_gelu_c512: erf form  mean abs 0.00031  rms 0.00068  max 0.00451
+                 tanh form mean abs 0.00035  rms 0.00070  max 0.00451
+                 lanes closer to the erf form: 165, closer to the tanh form: 346, equal: 1
+unary_gelu_c64: erf form  mean abs 0.00037  rms 0.00080  max 0.00294
+                tanh form mean abs 0.00037  rms 0.00079  max 0.00294
+                lanes closer to the erf form: 10, closer to the tanh form: 53, equal: 1
+
+== call times and duty (from results.txt; this is not part of the numerical verdict)
+unary_abs_c64             59055 calls  median 0.464 ms  loop 29.2 s  duty 99.8 %
+unary_abs_c128            65502 calls  median 0.462 ms  loop 32.3 s  duty 99.8 %
+unary_abs_c256            59055 calls  median 0.512 ms  loop 29.8 s  duty 99.7 %
+unary_abs_c512            59055 calls  median 0.508 ms  loop 30.5 s  duty 99.8 %
+unary_abs_c1024           55762 calls  median 0.508 ms  loop 28.8 s  duty 99.8 %
+unary_abs_c2048           59055 calls  median 0.508 ms  loop 30.3 s  duty 99.8 %
+unary_abs_c4096           58593 calls  median 0.508 ms  loop 30.3 s  duty 99.8 %
+unary_exp_c64             63559 calls  median 0.508 ms  loop 33.2 s  duty 99.8 %
+unary_exp_c512            59055 calls  median 0.508 ms  loop 31.0 s  duty 99.8 %
+unary_gelu_c64            59055 calls  median 0.509 ms  loop 31.5 s  duty 99.8 %
+unary_gelu_c512           59055 calls  median 0.512 ms  loop 31.8 s  duty 99.7 %
+unary_leaky_relu_c64      59055 calls  median 0.508 ms  loop 31.8 s  duty 99.8 %
+unary_leaky_relu_c512     56390 calls  median 0.508 ms  loop 30.3 s  duty 99.8 %
+unary_rsqrt_c64           59055 calls  median 0.508 ms  loop 32.2 s  duty 99.8 %
+unary_rsqrt_c512          58939 calls  median 0.509 ms  loop 32.4 s  duty 99.8 %
+unary_sigmoid_c64         59055 calls  median 0.508 ms  loop 32.4 s  duty 99.8 %
+unary_sigmoid_c512        59055 calls  median 0.508 ms  loop 32.7 s  duty 99.8 %
+unary_silu_c64            49261 calls  median 0.517 ms  loop 27.6 s  duty 99.7 %
+unary_silu_c512           53667 calls  median 0.514 ms  loop 30.2 s  duty 99.8 %
+unary_sqrt_c64            53667 calls  median 0.559 ms  loop 30.7 s  duty 99.8 %
+unary_sqrt_c512           53763 calls  median 0.559 ms  loop 31.2 s  duty 99.8 %
+unary_tanh_c64            53667 calls  median 0.558 ms  loop 31.4 s  duty 99.8 %
+unary_tanh_c512           59055 calls  median 0.512 ms  loop 34.6 s  duty 99.8 %
+medians span 0.462 to 0.559 ms over 23 loops; loop duty 99.7 to 99.8 %

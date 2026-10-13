@@ -48,7 +48,7 @@ Six 64-row programs ran their 20 calibration calls, but `ane-run` refused to com
 
 The `compared by` column says which check produced each row. `ane-run` printed the first 21.
 The six marked `offline` were compared by `compare-offline.py`. It read the output file that `ane-run` wrote after its 20 calls.
-It applies the rules of `ane-run --check matvec`.
+It applies the rules of `ane-run --check matvec` for every lane with a scale. Lanes whose products are all zero are treated differently (below).
 The reference is a float64 sum of the fp16 products, rounded to fp16.
 A lane is in band within 2 ulp or 4 condition units. Padding must be zero.
 On the 21 shapes that `ane-run` checked, the script reproduced `ane-run`'s printed counts exactly.
@@ -97,7 +97,8 @@ The M = 1 non-square shapes passed only because they fit one tile.
   Only a mismatch with `ane-run`'s printed counts gave a nonzero status. Its printed per-shape lines were right, and they are unchanged in the fixed script.
 - The six offline results have not been checked by a second, independent comparator. They rest on this one.
 - A second fault was found afterwards. When the sum of the absolute products was zero, the comparator counted the condition-unit error as 0.
-  Any output then passed the "or" test, including all ones and all NaN for a zero input. It now accepts only an exact zero there.
+  Any output then passed the "or" test, including all ones and all NaN for a zero input. It now accepts only an output within 2 denormal ulps of zero there (the 2 ulp test of fp16 around 0), and never a NaN or infinity.
+  The `ane-run` that ran here predates omarchy-ane PR 161 (merged as 8690e037), which accepts only an exact zero on such a lane.
   A NaN or infinite lane is never in band. None of the 27 real shapes has such a lane, so no reported row changed.
-- `ane-run --check matvec` computes the condition-unit error the same way (it uses 0 when the sum is 0). It shares this flaw.
-  That does not affect the 21 shapes it checked here, since none has a zero-sum lane.
+- The `ane-run --check matvec` used here computed the condition-unit error the same way (it used 0 when the sum is 0), so it shared this flaw.
+  That did not affect the 21 shapes it checked, since none has a zero-sum lane. Omarchy-ane PR 161 (merged as 8690e037) fixed it.

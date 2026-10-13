@@ -1,0 +1,24 @@
+unary_abs_c1024: 1024 lanes, 1024 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 0ad83adc8468: PASS
+unary_abs_c128: 128 lanes, 128 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 148069ddf22c: PASS
+unary_abs_c2048: 2048 lanes, 2048 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 4e63046f71e7: PASS
+unary_abs_c256: 256 lanes, 256 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 ad370dde6886: PASS
+unary_abs_c4096: 4096 lanes, 4096 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 73850521ca78: PASS
+unary_abs_c512: 512 lanes, 512 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 a3937e6a91f6: PASS
+unary_abs_c64: 64 lanes, 64 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound bits 0, input sha256 fd27ba327eb5: PASS
+unary_exp_c512: 512 lanes, 141 bit-exact, max abs error 7.43584 at x=7.53125, max relative error 0.00429, bound rel 0.00390625, input sha256 f03fecef7615: FAIL: 9 lane(s) outside the bound
+unary_exp_c64: 64 lanes, 25 bit-exact, max abs error 6.43012 at x=7.87109, max relative error 0.00337, bound rel 0.00390625, input sha256 6b29533c770b: FAIL: 2 lane(s) outside the bound
+unary_gelu_c512: 512 lanes, 204 bit-exact, max abs error 0.00451 at x=0.266846, max relative error 0.06912, bound abs 0.015625, max abs error against the tanh form 0.00451, input sha256 38aaecd01eb8: PASS
+unary_gelu_c64: 64 lanes, 28 bit-exact, max abs error 0.00294 at x=0.0878296, max relative error 0.06254, bound abs 0.015625, max abs error against the tanh form 0.00294, input sha256 f54e2f2678d6: PASS
+unary_leaky_relu_c512: 512 lanes, 512 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound ulp 1, alpha 0.125, input sha256 7dc2a0924010: PASS
+unary_leaky_relu_c64: 64 lanes, 64 bit-exact, max abs error 0.00000 at x=0, max relative error 0.00000, bound ulp 1, alpha 0.125, input sha256 9cd44c288719: PASS
+unary_rsqrt_c512: 512 lanes, 262 bit-exact, max abs error 0.00086 at x=2.14844, max relative error 0.00148, bound rel 0.00195312, epsilon 1e-06, input sha256 35ca01f8c2e1: PASS
+unary_rsqrt_c64: 64 lanes, 37 bit-exact, max abs error 0.00060 at x=2.4375, max relative error 0.00114, bound rel 0.00195312, epsilon 1e-06, input sha256 878f3a23f69b: PASS
+unary_sigmoid_c512: 512 lanes, 119 bit-exact, max abs error 0.00311 at x=1.20117, max relative error 0.02940, bound abs 0.00390625, input sha256 0d1350dca1f8: PASS
+unary_sigmoid_c64: 64 lanes, 18 bit-exact, max abs error 0.00305 at x=-1.2334, max relative error 0.02633, bound abs 0.00390625, input sha256 d15584e4bc73: PASS
+unary_silu_c512: 512 lanes, 179 bit-exact, max abs error 0.01484 at x=0.5, max relative error 0.10632, bound abs 0.015625, input sha256 bcd6829e9d23: PASS
+unary_silu_c64: 64 lanes, 22 bit-exact, max abs error 0.01484 at x=0.5, max relative error 0.07863, bound abs 0.015625, input sha256 b90b9e52a5d5: PASS
+unary_sqrt_c512: 512 lanes, 389 bit-exact, max abs error 0.00453 at x=33.6562, max relative error 0.00092, bound rel 0.00195312, input sha256 047c461b2131: PASS
+unary_sqrt_c64: 64 lanes, 53 bit-exact, max abs error 0.00369 at x=41.1875, max relative error 0.00067, bound rel 0.00195312, input sha256 cc8f4f1b60c6: PASS
+unary_tanh_c512: 512 lanes, 350 bit-exact, max abs error 0.00143 at x=0.797363, max relative error 0.00514, bound abs 0.00390625, input sha256 8204ac31037e: PASS
+unary_tanh_c64: 64 lanes, 42 bit-exact, max abs error 0.00135 at x=1.19434, max relative error 0.00401, bound abs 0.00390625, input sha256 17cf5428dd16: PASS
+23 expected cases, 23 judged, 2 failed
