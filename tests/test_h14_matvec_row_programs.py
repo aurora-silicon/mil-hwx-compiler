@@ -22,6 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/mil-hwxc").resolve()
 HEAD = 4672
 
+# ANEC package header, as read by libane's struct anec (little endian). Offsets and sizes in bytes.
+HEADER_IO_COUNTS_OFFSET = 32  # two uint32: input count, output count
+HEADER_TILES_OFFSET = 40  # one uint32 tile count per channel
+TILE_COUNT_BYTES = 4
+HEADER_NCHW_OFFSET = 168  # six uint64 (n, c, h, w, plane bytes, row bytes) per channel
+NCHW_BYTES = 48
+CHANNELS = 32  # channels in the header tables
+INPUT_CHANNEL, OUTPUT_CHANNEL = 5, 4  # the matvec input and output surfaces
+TILE_BYTES = 16384  # one tile of a channel surface
+
 EXPECTED = {  # (M, K, N): (program bytes, sha256 of the first 4,672 bytes)
     (2, 256, 256): (135744, "cece7d5e7235fb7c746814be2f97245d3a42aa44a2b5d5da1f4349e884671cd9"),
     (2, 256, 512): (266816, "f6a791df4e3a0ff1432ea855c61cb18ff462cd35c9d6f84456993a342db51dea"),
@@ -87,18 +97,18 @@ def compile_matvec(m, k, n, seed):
 
 def layout_problems(blob, m, k, n):
     problems = []
-    src, dst = struct.unpack_from("<II", blob, 32)
-    tiles = struct.unpack_from("<32I", blob, 40)
-    n4 = struct.unpack_from("<6Q", blob, 168 + 48 * 4)
-    n5 = struct.unpack_from("<6Q", blob, 168 + 48 * 5)
+    src, dst = struct.unpack_from("<II", blob, HEADER_IO_COUNTS_OFFSET)
+    tiles = struct.unpack_from(f"<{CHANNELS}I", blob, HEADER_TILES_OFFSET)
+    n4 = struct.unpack_from("<6Q", blob, HEADER_NCHW_OFFSET + NCHW_BYTES * OUTPUT_CHANNEL)
+    n5 = struct.unpack_from("<6Q", blob, HEADER_NCHW_OFFSET + NCHW_BYTES * INPUT_CHANNEL)
     if (src, dst) != (1, 1):
         problems.append(f"io counts {src},{dst}")
     if n4[:4] != (1, 1, m, n) or n5[:4] != (1, 1, m, k):
         problems.append(f"declared shapes {n4[:4]} {n5[:4]}")
     if n4[5] != n * 2 or n5[5] != k * 2:
         problems.append(f"row bytes {n4[5]} {n5[5]}")
-    for channel, nbytes in ((4, m * n * 2), (5, m * k * 2)):
-        want = -(-nbytes // 16384)
+    for channel, nbytes in ((OUTPUT_CHANNEL, m * n * 2), (INPUT_CHANNEL, m * k * 2)):
+        want = -(-nbytes // TILE_BYTES)
         if tiles[channel] != want:
             problems.append(f"channel {channel} has {tiles[channel]} tiles, not {want}")
     return problems
