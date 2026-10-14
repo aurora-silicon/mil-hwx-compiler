@@ -33,5 +33,5 @@ No speed is claimed. The call took 0.356 to 0.361 ms, at the top of the 0.306 to
 The result covers these inputs and these shapes. Other data or other sizes are not covered.
 
 ## Files
-`results.txt` is the run file. `verdict.txt` is the gate output. `device-output/` holds the kept outputs and the calibration and loop logs of both runs. `inputs/` holds x. `build-and-test-071bc9a.txt` is the literal build and test output at the source tree the
+`results.txt` is the run file. `verdict.txt` is the gate output. `device-output/` holds the kept outputs and the calibration and loop logs of both runs. `inputs/` holds x. `prog/` holds the two 4736-byte programs that ran, so their size and sha256 can be checked against `SHA256SUMS-inputs` of the cell. `build-and-test-071bc9a.txt` is the literal build and test output at the source tree the
 compiler was built from (home paths replaced). It names two commits that the squash merge replaced. Its tree hash 7b9c0db7 equals the tree of the compile commit ab82de0. The only later change in this archive is under `receipts/` and in `CHANGELOG.md`. `SHA256SUMS` lists every file.
