@@ -1,0 +1,9 @@
+c64 s2: 0 lanes differ from ties-to-even: 0 exact midpoints at the half-away result, 0 with a subnormal result (device larger in magnitude on 0), 0 other
+c64 s3: 1 lanes differ from ties-to-even: 0 exact midpoints at the half-away result, 1 with a subnormal result (device larger in magnitude on 1), 0 other
+c64 s4: 2 lanes differ from ties-to-even: 2 exact midpoints at the half-away result, 0 with a subnormal result (device larger in magnitude on 0), 0 other
+c512 s2: 3 lanes differ from ties-to-even: 1 exact midpoints at the half-away result, 2 with a subnormal result (device larger in magnitude on 2), 0 other
+c512 s3: 13 lanes differ from ties-to-even: 1 exact midpoints at the half-away result, 12 with a subnormal result (device larger in magnitude on 12), 0 other
+c512 s4: 2 lanes differ from ties-to-even: 2 exact midpoints at the half-away result, 0 with a subnormal result (device larger in magnitude on 0), 0 other
+mul stages, lanes with a subnormal exact result: 255
+  single rounding to the subnormal grid, ties to even: 239 match; ties away: 240 match
+  11-significant-bit rounding then the subnormal grid with ties away: 255 match

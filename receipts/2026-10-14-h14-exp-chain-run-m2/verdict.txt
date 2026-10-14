@@ -1,0 +1,37 @@
+c64 s2_c: 64 of 64 lanes equal the correctly rounded result
+c64 s3_d: 63 of 64 lanes equal the correctly rounded result
+c64 s3_d: of the 1 differing lane(s), 0 are exact midpoints where the device gave the half-away result (a rounding-rule difference, still a criterion 3 failure)
+c64   s3_d lane 11: inputs 0.018890380859375 * -0.0008597373962402344; ties-to-even -1.621246337890625e-05; device -1.627206802368164e-05; exact midpoint no
+c64 s4_y: 62 of 64 lanes equal the correctly rounded result
+c64 s4_y: of the 2 differing lane(s), 2 are exact midpoints where the device gave the half-away result (a rounding-rule difference, still a criterion 3 failure)
+c64   s4_y lane 44: inputs 0.00048828125 + -8.344650268554688e-07; ties-to-even 0.00048732757568359375; device 0.0004875659942626953; exact midpoint yes
+c64   s4_y lane 47: inputs 2896.0 + 5.0; ties-to-even 2900.0; device 2902.0; exact midpoint yes
+c64 final: max relative error 0.00283 at x=-7.62891, bound rel 0.00390625, 0 lane(s) outside
+c64 FAIL: s3_d: 1 lane(s) differ from the correctly rounded result of the saved inputs
+c64 FAIL: s4_y: 2 lane(s) differ from the correctly rounded result of the saved inputs
+c512 s2_c: 509 of 512 lanes equal the correctly rounded result
+c512 s2_c: of the 3 differing lane(s), 1 are exact midpoints where the device gave the half-away result (a rounding-rule difference, still a criterion 3 failure)
+c512   s2_c lane 141: inputs -0.09375 * 0.00021648406982421875; ties-to-even -2.0265579223632812e-05; device -2.0325183868408203e-05; exact midpoint yes
+c512   s2_c lane 354: inputs 0.2113037109375 * 0.00021648406982421875; ties-to-even 4.571676254272461e-05; device 4.57763671875e-05; exact midpoint no
+c512   s2_c lane 362: inputs -0.22119140625 * 0.00021648406982421875; ties-to-even -4.786252975463867e-05; device -4.792213439941406e-05; exact midpoint no
+c512 s3_d: 499 of 512 lanes equal the correctly rounded result
+c512 s3_d: of the 13 differing lane(s), 1 are exact midpoints where the device gave the half-away result (a rounding-rule difference, still a criterion 3 failure)
+c512   s3_d lane 16: inputs 0.052398681640625 * -0.0006384849548339844; ties-to-even -3.343820571899414e-05; device -3.349781036376953e-05; exact midpoint no
+c512   s3_d lane 37: inputs 0.06982421875 * -0.0005764961242675781; ties-to-even -4.023313522338867e-05; device -4.029273986816406e-05; exact midpoint no
+c512   s3_d lane 108: inputs 0.08074951171875 * -0.0005450248718261719; ties-to-even -4.398822784423828e-05; device -4.404783248901367e-05; exact midpoint no
+c512   s3_d lane 145: inputs 752.0 * 0.001434326171875; ties-to-even 1.078125; device 1.0791015625; exact midpoint yes
+c512   s3_d lane 167: inputs 0.026275634765625 * -0.0007882118225097656; ties-to-even -2.0682811737060547e-05; device -2.0742416381835938e-05; exact midpoint no
+c512   s3_d lane 201: inputs 0.023834228515625 * -0.0008087158203125; ties-to-even -1.9252300262451172e-05; device -1.9311904907226562e-05; exact midpoint no
+c512   s3_d lane 268: inputs 0.0160064697265625 * -0.0008955001831054688; ties-to-even -1.430511474609375e-05; device -1.436471939086914e-05; exact midpoint no
+c512   s3_d lane 307: inputs 0.07879638671875 * -0.0005502700805664062; ties-to-even -4.3332576751708984e-05; device -4.3392181396484375e-05; exact midpoint no
+c512   s3_d lane 342: inputs 0.08441162109375 * -0.0005354881286621094; ties-to-even -4.5180320739746094e-05; device -4.5239925384521484e-05; exact midpoint no
+c512   s3_d lane 422: inputs 0.0802001953125 * -0.0005464553833007812; ties-to-even -4.380941390991211e-05; device -4.38690185546875e-05; exact midpoint no
+c512 s4_y: 510 of 512 lanes equal the correctly rounded result
+c512 s4_y: of the 2 differing lane(s), 2 are exact midpoints where the device gave the half-away result (a rounding-rule difference, still a criterion 3 failure)
+c512   s4_y lane 280: inputs 0.0119171142578125 + -1.1444091796875e-05; ties-to-even 0.01190185546875; device 0.01190948486328125; exact midpoint yes
+c512   s4_y lane 323: inputs 0.0007739067077636719 + -1.1920928955078125e-06; ties-to-even 0.0007724761962890625; device 0.0007729530334472656; exact midpoint yes
+c512 final: max relative error 0.00309 at x=-6.41016, bound rel 0.00390625, 0 lane(s) outside
+c512 FAIL: s2_c: 3 lane(s) differ from the correctly rounded result of the saved inputs
+c512 FAIL: s3_d: 13 lane(s) differ from the correctly rounded result of the saved inputs
+c512 FAIL: s4_y: 2 lane(s) differ from the correctly rounded result of the saved inputs
+numerical criteria: FAIL; run identity, duty and time criteria: PASS
