@@ -23,16 +23,21 @@ A host check of the program headers found no size or packing mismatch between an
 `run-expchain.sh`, on an M2 Max (T6021) under Linux, through `ane-run` without `--check`. Per stage: 20 calls with `--time`, then a back-to-back loop of about
 30 seconds. Both outputs are kept. A stage whose calibration or long loop fails stops that size, and nothing is rerun.
 The whole run has a 15 minute deadline in the script itself: no stage starts after it, and every call's timeout is capped to the time left, so the worst case is 15 minutes and not the sum of the per-call timeouts.
+The loop length is 30 seconds (`target_s=30`), recorded in the run file and checked by the gate.
+Every `ane-run` call runs under `timeout -k 2`, so a runner that ignores TERM is killed 2 seconds after its limit.
+A TERM, INT or HUP sent to the script ends the running call and is recorded.
 The run needs the ANE to itself. The script counts other `ane-run` processes before and after and writes both counts to the run file; the gate requires 0 and 0.
 
-## Criteria (all fixed now; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 45 checks and 36 broken copies)
+## Criteria (all fixed now; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 47 checks and 38 broken copies)
 Numerical, for 64 and 512 channels:
 1. x and K are the registered inputs: the sha256 of x is pinned in the gate, and K is fp16 0x0b18 in every lane with zero padding.
 2. Every output has zero padding and no NaN or infinity, and its calibration and loop files are bit-identical.
 3. s2, s3 and s4 equal the correctly rounded fp16 result of their own saved inputs on every lane (zero is compared exactly).
 4. The final output s4 is within a relative error of 2^-8 of exp(x) on every lane, plus the absolute floor 2^-24 that the gate of the failed run used. The bound did not change.
    The gate asserts both values and pins the sha256 of the `compare-unary.py` it imports them from.
-   The reference for criteria 3 and 4 is round to nearest, ties to even. If the device rounds ties away in mul or add, criterion 3 fails on those lanes
+   The reference for criteria 3 and 4 is round to nearest, ties to even. The 2026-10-10 elementwise cell says its `--check` reference rounds half away from zero.
+   Chained both ways, the s2, s3 and s4 outputs differ in 0, 0 and 2 lanes at 64 channels and 1, 2 and 2 at 512, and the final output stays inside the bound both ways.
+   The gate prints, for any differing lane, whether it is an exact midpoint where the device gave the half-away result. If the device rounds ties away in mul or add, criterion 3 fails on those lanes
    and is reported as a criterion 3 failure. The bound is not relaxed for it.
 Run identity, duty and time, reported apart and also required: `results.txt` names the T6021 chip, the program hash of each stage as in `SHA256SUMS-inputs`, the sha256 of every output file
 (checked against the files), exactly one SUMMARY line, and 0 other `ane-run` processes before and after. Also: every stage's calibration median is at most 0.60 ms; every loop and the ticket have duty at least 90 percent;

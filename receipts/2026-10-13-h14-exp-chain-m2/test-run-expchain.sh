@@ -21,6 +21,8 @@ while [ $# -gt 0 ]; do case "$1" in --repeat) rep=$2; shift;; --anec) prog=$2; s
 echo "repeat=$rep prog=$(basename "$prog") ins=${ins[*]}" >> "$FAKE_LOG"
 case "$(basename "$prog")" in "${FAIL_LONG_PROG:-none}") [ "$rep" != 20 ] && [ "${#ins[@]}" = "${FAIL_LONG_NINS:-9}" ] && { echo boom; exit 1; };; esac
 case "$(basename "$prog")" in "$FAIL_PROG") [ "$rep" = 20 ] && [ "${#ins[@]}" = "${FAIL_NINS:-9}" ] && { echo boom; exit 1; };; esac
+[ -n "${FAKE_IGNORE_TERM:-}" ] && trap "" TERM
+[ -n "${FAKE_PID_FILE:-}" ] && echo $$ > "$FAKE_PID_FILE"
 [ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
 echo "$(basename "$outfile")" > "$outfile"
 echo "exec ms over $rep calls: min 1.0 p10 1.0 p25 1.0 median 2.000 p75 2.0 p90 2.0 p99 2.0 max 3.0"
@@ -91,14 +93,35 @@ out5=$(latest)
 out6=$(latest)
 grep -q "STOP whole-run deadline" "$out6/results.txt" && ok "the deadline stop is recorded" || bad "no deadline stop line"
 
+# a runner that ignores TERM is still cut: timeout -k kills it 2 s after the limit
+: > "$T/log"; start=$(date +%s); RUN_LIMIT=40 FAKE_IGNORE_TERM=1 FAKE_SLEEP=30 DEADLINE_S=4 run none 9 30 >/dev/null 2>&1; rc=$?; took=$(( $(date +%s) - start ))
+[ "$rc" -ne 0 ] && [ "$took" -lt 15 ] && ok "a runner that ignores TERM is killed (took ${took}s, not 30 s)" || bad "TERM-ignoring runner: rc=$rc took=${took}s"
+# a TERM sent to the script reaches the running call
+term_check() {
+  local script=${SCRIPT:-$HERE/run-expchain.sh} sup rpid
+  : > "$T/log"; rm -f "$T/runner.pid"
+  FAKE_LOG="$T/log" FAIL_PROG=none FAIL_NINS=9 ROOT="$T/root" RUNNER="$T/runner" PGREP="$T/pgrep" STATS="$T/stats" TARGET_S=30 \
+    FAKE_PID_FILE="$T/runner.pid" FAKE_IGNORE_TERM=1 FAKE_SLEEP=60 bash "$script" >/dev/null 2>&1 &
+  sup=$!
+  for _ in $(seq 1 40); do [ -s "$T/runner.pid" ] && break; sleep 0.25; done
+  rpid=$(cat "$T/runner.pid" 2>/dev/null || echo 0)
+  kill -TERM "$sup" 2>/dev/null
+  sleep 4
+  if [ "$rpid" -gt 0 ] && kill -0 "$rpid" 2>/dev/null; then bad "the call was still running after TERM to the script (pid $rpid)"; kill -KILL "$rpid" 2>/dev/null; else ok "a TERM sent to the script ends the running call"; fi
+  kill -KILL "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+}
+term_check
+grep -q "ABORTED by a signal" "$(latest)/results.txt" && ok "the abort is recorded in results.txt" || bad "no ABORTED line"
+
 # part 2: mutants of the script
 mut() {  # label, sed expression
   local label=$1 expr=$2
   SCRIPT="$T/mutant.sh"; sed "$expr" "$HERE/run-expchain.sh" > "$SCRIPT"
   if cmp -s "$SCRIPT" "$HERE/run-expchain.sh"; then echo "FAIL mutant '$label': the text to break was not found"; fails=$((fails + 1)); return; fi
   : > "$T/log"; local before=$fails; run none 9 30 >/dev/null 2>&1; local o; o=$(latest); wiring "$o" >/dev/null 2>&1; ident "$o" >/dev/null 2>&1
-  : > "$T/log"; local t1; t1=$(date +%s); RUN_LIMIT=20 FAKE_SLEEP=30 DEADLINE_S=3 run none 9 30 >/dev/null 2>&1
+  : > "$T/log"; local t1; t1=$(date +%s); RUN_LIMIT=20 FAKE_IGNORE_TERM=1 FAKE_SLEEP=30 DEADLINE_S=3 run none 9 30 >/dev/null 2>&1
   [ $(( $(date +%s) - t1 )) -lt 15 ] || bad "mutant hangs past the deadline" >/dev/null
+  term_check >/dev/null 2>&1
   if [ "$fails" -gt "$before" ]; then
     echo "PASS mutant '$label' caught"; fails=$before
   else
@@ -113,7 +136,9 @@ mut "s3 reads x instead of s1 output" 's|"\$P/mul_c\$c.anec" "\$OUT/exp_c\$c.s1_
 mut "s4 adds s2 instead of s3" 's|"\$OUT/exp_c\$c.s3_d.cal.y.f16" \|\| continue|"$OUT/exp_c$c.s2_c.cal.y.f16" \|\| continue|'
 mut "output hashes not written" 's|OUTPUT_SHA256|NOHASH|'
 mut "other ane-run count not recorded" 's|other_ane_run_after=%s|ignored_after=%s|'
-mut "stage timeouts not capped by the deadline" 's|timeout \$((rem < 90 ? rem : 90))|timeout 90|'
+mut "stage timeouts not capped by the deadline" 's|run_timed \$((rem < 90 ? rem : 90))|run_timed 90|'
+mut "no kill-after on the timeout" 's|timeout -k 2 "\$limit"|timeout "$limit"|'
+mut "no signal trap" 's|^trap on_signal TERM INT HUP$|:|'
 mut "s2 uses the add program" 's|"\$P/mul_c\$c.anec" "\$I/x_c\$c.f16" "\$I/k_c\$c.f16"|"$P/add_c$c.anec" "$I/x_c$c.f16" "$I/k_c$c.f16"|'
 if [ -z "${HARMLESS_MUTANT:-}" ]; then
   # run this test again with one surviving mutant added: it must exit nonzero

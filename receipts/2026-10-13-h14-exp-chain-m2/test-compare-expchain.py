@@ -7,6 +7,7 @@ every copy. A gate whose tests cannot fail is not a gate. Each limit is brackete
 The made-up run uses the saved device output of the failed exp program as stage s1 (real device lanes) and computes stages s2 to s4 in
 numpy. That is a simulated device: a pass on it shows the gate accepts a well-formed run, not that a device run would pass."""
 import hashlib
+import importlib.util
 import re
 import shutil
 import subprocess
@@ -159,6 +160,21 @@ def checks(script):
          lambda i, r: both(r, 512, "s4_y", lambda d: d.__setitem__(STRIDE * 40, np.nextafter(d[STRIDE * 40], np.float16(np.inf)))), needle="s4_y")
     case("x = 0 at lane 0: a nonzero c there fails the exact rule", False,
          lambda i, r: both(r, 512, "s2_c", lambda d: d.__setitem__(0, np.float16(2.0 ** -24))), needle="s2_c")
+    def half_away_at_a_tie(indir, rundir):
+        """Set one s2 lane at an exact midpoint to the half-away result. Criterion 3 must fail and the note must say why."""
+        x = np.fromfile(indir / "x_c512.f16", dtype=np.float16).astype(np.float64)[::STRIDE][:512]
+        k = np.fromfile(indir / "k_c512.f16", dtype=np.float16).astype(np.float64)[::STRIDE][:512]
+        want = x * k
+        spec = importlib.util.spec_from_file_location("ce", SCRIPT)
+        ce = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ce)
+        tie = np.flatnonzero(ce.half_away(want) != want.astype(np.float16).astype(np.float64))
+        assert len(tie), "the fixture has no s2 lane at a midpoint"
+        j = int(tie[0])
+        both(rundir, 512, "s2_c", lambda dd: dd.__setitem__(STRIDE * j, np.float16(ce.half_away(want)[j])))
+
+    case("a half-away result at an exact midpoint fails criterion 3 and is named", False, half_away_at_a_tie, needle="exact midpoints")
+    case("a target_s other than 30 fails", False, lambda i, r: tweak(r, "target_s=30", "target_s=10"), needle="target_s")
     # the final bound, bracketed: 0.391 percent
     case("a final error of about 0.30 percent passes", True, final_error(0.30))
     case("a final error of about 0.35 percent passes", True, final_error(0.35))
@@ -267,6 +283,8 @@ def mutants():
         ("stage set not checked", "    if sorted((int(c), st) for c, st, _ in seen) != sorted((c, st) for c in SIZES for st in STAGES):", "    if False:"),
         ("output hashes not compared", "elif path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != hashes[name]:", "elif False:"),
         ("missing output hash line tolerated", "                if name not in hashes:", "                if False:"),
+        ("half-away note not printed", "            notes.append(f\"{stage}: of the {bad} differing lane(s)", "            (lambda *_: None)(f\"{stage}: of the {bad} differing lane(s)"),
+        ("target_s not checked", "    if not target or int(target.group(1)) != TARGET_S:", "    if False:"),
         ("timing result ignored in the exit status", "return 1 if (numeric or timing) else 0", "return 1 if numeric else 0"),
         ("numerical result ignored in the exit status", "return 1 if (numeric or timing) else 0", "return 1 if timing else 0"),
     ]

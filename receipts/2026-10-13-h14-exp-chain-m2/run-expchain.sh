@@ -30,6 +30,23 @@ b0=$(busy); t0=$(date +%s.%N)
 pass=0; fail=0; skipped=0
 
 # stage NAME PROGRAM INPUT_FILE... : calibration, then loop. Output files: $OUT/NAME.cal.y.f16 and NAME.long.y.f16.
+# Run one ane-run call under timeout -k: TERM at the limit, KILL 2 s later if it ignores TERM (so a call can run at most 2 s past its limit).
+# The call runs in the background and the script waits for it, so a TERM, INT or HUP sent to this script reaches the call too.
+CHILD=""
+on_signal() {
+  if [ -n "${CHILD:-}" ]; then kill -TERM "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; fi
+  printf 'ABORTED by a signal; the run is incomplete\n'
+  exit 143
+}
+trap on_signal TERM INT HUP
+run_timed() {  # LIMIT OUTFILE COMMAND...
+  local limit=$1 outf=$2; shift 2
+  timeout -k 2 "$limit" "$@" >"$outf" 2>&1 &
+  CHILD=$!
+  wait "$CHILD"; local rc=$?
+  CHILD=""
+  return "$rc"
+}
 left() { awk -v a="$t0" -v b="$(date +%s.%N)" -v d="$DEADLINE_S" 'BEGIN{r=int(d-(b-a)); print (r>0?r:0)}'; }
 stage() {
   local name=$1 prog=$2; shift 2
@@ -41,7 +58,7 @@ stage() {
   if [ "$rem" -le 0 ]; then
     fail=$((fail + 1)); skipped=$((skipped + 1)); printf 'STOP whole-run deadline of %s s reached before this stage\n' "$DEADLINE_S"; return 1
   fi
-  timeout $((rem < 90 ? rem : 90)) "$RUNNER" "${args[@]}" --out "0=$OUT/$name.cal.y.f16" --repeat 20 >"$OUT/$name.cal.txt" 2>&1
+  run_timed $((rem < 90 ? rem : 90)) "$OUT/$name.cal.txt" "$RUNNER" "${args[@]}" --out "0=$OUT/$name.cal.y.f16" --repeat 20
   local rc_cal=$?
   local med; med=$(sed -n 's/.*median \([0-9.]*\).*/\1/p' "$OUT/$name.cal.txt" | head -1)
   tail -n 2 "$OUT/$name.cal.txt"
@@ -57,7 +74,7 @@ stage() {
   fi
   local limit=$((TARGET_S * 3 + 90))
   s0=$(date +%s.%N); bs0=$(busy)
-  timeout $((rem < limit ? rem : limit)) "$RUNNER" "${args[@]}" --out "0=$OUT/$name.long.y.f16" --repeat "$rep" >"$OUT/$name.long.txt" 2>&1
+  run_timed $((rem < limit ? rem : limit)) "$OUT/$name.long.txt" "$RUNNER" "${args[@]}" --out "0=$OUT/$name.long.y.f16" --repeat "$rep"
   local rc_long=$?
   s1=$(date +%s.%N); bs1=$(busy)
   tail -n 2 "$OUT/$name.long.txt"

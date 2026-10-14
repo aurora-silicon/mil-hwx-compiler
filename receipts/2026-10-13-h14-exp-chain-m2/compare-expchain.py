@@ -14,7 +14,7 @@ Numerical criteria, for each size (a missing file, size or size mismatch fails):
   3. The final output s4 meets the exp bound (relative 2^-8 plus the absolute floor of one fp16 subnormal, 2^-24) against exp(x) in float64, on
      every lane. The gate asserts that compare-unary.py is the pinned file (sha256) and that its exp bound and floor are those values. The
      reference is the correctly rounded fp16 result with ties to even, which is also what the stage checks of criterion 2 use.
-Run identity, duty and time criteria, reported apart from the numerical ones and also needed for acceptance: results.txt names the T6021 chip, no other
+Run identity, duty and time criteria, reported apart from the numerical ones and also needed for acceptance: results.txt names target_s=30 and the T6021 chip, no other
 ane-run process before or after, the program hash of each stage as in SHA256SUMS-inputs, and the sha256 of every output file (they must match the files); results.txt says SUMMARY with fail=0 and no skipped
 loop, each stage's calibration median is at most 0.60 ms, each loop's duty is at least 90 percent, the ticket duty is at least 90 percent
 and the total wall time is at most 900 s. Exit status 0 only when the numerical and the timing criteria both hold."""
@@ -31,6 +31,7 @@ LANE_STRIDE = 32
 SIZES = (64, 512)
 STAGES = ("s1_e", "s2_c", "s3_d", "s4_y")
 MAX_MEDIAN_MS, MIN_DUTY_PCT, MAX_WALL_S = 0.60, 90.0, 900.0
+TARGET_S = 30  # the registered loop length; the run script prints the value it used
 PIN_UNARY_SHA256 = "1c827f76cb07217cc2ec24350b8aac00917f1443ecf82c4108ba818b82a1adfd"  # receipts/2026-10-13-h14-unary-m2/compare-unary.py
 PIN_X_SHA256 = {64: "6b29533c770b00d1a04a6bb5aeb6cd80f4fe9053b3ffd4f6aff37cd9f80cd230", 512: "f03fecef7615ca1417dbbeb8595c3602f9194553360ed8d308857fec5b8c7d19"}
 CHIP = "t6021"
@@ -61,6 +62,14 @@ def padding_nonzero(surface, count):
 
 def rounded(values):
     return values.astype(np.float16)
+
+
+def half_away(values):
+    """Nearest fp16, ties away from zero. For an exact fp16 product or sum it differs from `rounded` only at exact midpoints."""
+    h = values.astype(np.float16)
+    lo = np.where(h.astype(np.float64) <= values, h, np.nextafter(h, np.float16(-np.inf))).astype(np.float64)
+    hi = np.where(h.astype(np.float64) >= values, h, np.nextafter(h, np.float16(np.inf))).astype(np.float64)
+    return np.where(values - lo < hi - values, lo, np.where(hi - values < values - lo, hi, np.where(np.abs(lo) > np.abs(hi), lo, hi)))
 
 
 def check_size(c, indir, rundir, cu):
@@ -107,6 +116,10 @@ def check_size(c, indir, rundir, cu):
         notes.append(f"{stage}: {c - bad} of {c} lanes equal the correctly rounded result")
         if bad:
             problems.append(f"{stage}: {bad} lane(s) differ from the correctly rounded result of the saved inputs")
+            differ = got != rounded(want).astype(np.float64)
+            midpoint = (half_away(want) != rounded(want).astype(np.float64)) & (got == half_away(want))
+            notes.append(f"{stage}: of the {bad} differing lane(s), {int(np.count_nonzero(differ & midpoint))} are exact midpoints where the device gave "
+                         "the half-away result (a rounding-rule difference, still a criterion 3 failure)")
     ref = cu.reference("exp", x, {})
     kind, bound = cu.BOUNDS["exp"]
     err = np.abs(y - ref)
@@ -145,6 +158,9 @@ def check_timing(results_path, rundir, sums_path):
     if len(loops) != stages:
         problems.append(f"{len(loops)} loop duty values, expected {stages}")
     problems += [f"loop duty {v}% is below {MIN_DUTY_PCT:g}%" for v in loops if float(v) < MIN_DUTY_PCT]
+    target = re.search(r"target_s=(\d+)", text)
+    if not target or int(target.group(1)) != TARGET_S:
+        problems.append(f"target_s is {target.group(1) if target else 'missing'}, registered {TARGET_S}")
     # which run this is
     chip = re.search(r"^chip=(\S*)", text, re.M)
     if not chip or CHIP not in chip.group(1).lower():
