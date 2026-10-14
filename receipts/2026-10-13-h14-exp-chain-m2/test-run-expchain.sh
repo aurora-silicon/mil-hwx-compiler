@@ -21,12 +21,13 @@ while [ $# -gt 0 ]; do case "$1" in --repeat) rep=$2; shift;; --anec) prog=$2; s
 echo "repeat=$rep prog=$(basename "$prog") ins=${ins[*]}" >> "$FAKE_LOG"
 case "$(basename "$prog")" in "${FAIL_LONG_PROG:-none}") [ "$rep" != 20 ] && [ "${#ins[@]}" = "${FAIL_LONG_NINS:-9}" ] && { echo boom; exit 1; };; esac
 case "$(basename "$prog")" in "$FAIL_PROG") [ "$rep" = 20 ] && [ "${#ins[@]}" = "${FAIL_NINS:-9}" ] && { echo boom; exit 1; };; esac
+[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
 echo "$(basename "$outfile")" > "$outfile"
 echo "exec ms over $rep calls: min 1.0 p10 1.0 p25 1.0 median 2.000 p75 2.0 p90 2.0 p99 2.0 max 3.0"
 exit 0
 EOF
 chmod +x "$T/runner"
-run() { local script=${SCRIPT:-$HERE/run-expchain.sh}; FAKE_LOG="$T/log" FAIL_PROG="${1:-none}" FAIL_NINS="${2:-9}" ROOT="$T/root" RUNNER="$T/runner" PGREP="$T/pgrep" STATS="$T/stats" TARGET_S="${3:-30}" bash "$script"; }
+run() { local script=${SCRIPT:-$HERE/run-expchain.sh}; FAKE_LOG="$T/log" FAIL_PROG="${1:-none}" FAIL_NINS="${2:-9}" ROOT="$T/root" RUNNER="$T/runner" PGREP="$T/pgrep" STATS="$T/stats" TARGET_S="${3:-30}" timeout "${RUN_LIMIT:-600}" bash "$script"; }
 latest() { find "$T/root/runs" -maxdepth 1 -name 'run-*' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-; }
 
 wiring() {  # checks of which file feeds which stage, from the fake runner's log
@@ -81,12 +82,23 @@ grep -q "prog=mul_c512.anec ins=$out3" "$T/log" && bad "s3 ran after the s2 long
 grep -q "prog=add_c64.anec" "$T/log" && ok "the other size still ran to its last stage" || bad "the other size did not finish"
 grep -q "SUMMARY pass=5 fail=1" "$out3/results.txt" && ok "summary pass=5 fail=1" || bad "summary after a failed long loop: $(grep SUMMARY "$out3/results.txt")"
 
+# the whole-run deadline: a deadline of 0 starts nothing; a runner that hangs is cut at the deadline, not at the per-call timeout (90 s)
+: > "$T/log"; DEADLINE_S=0 run none 9 30; rc=$?
+out5=$(latest)
+[ "$rc" -ne 0 ] && ! grep -q 'repeat=' "$T/log" && grep -q "STOP whole-run deadline" "$out5/results.txt" && ok "a deadline of 0 starts no stage and fails the cell" || bad "deadline 0: rc=$rc"
+: > "$T/log"; start=$(date +%s); RUN_LIMIT=20 FAKE_SLEEP=30 DEADLINE_S=3 run none 9 30; rc=$?; took=$(( $(date +%s) - start ))
+[ "$rc" -ne 0 ] && [ "$took" -lt 15 ] && ok "a hanging runner is cut at the deadline (took ${took}s, not 90 s)" || bad "hanging runner: rc=$rc took=${took}s"
+out6=$(latest)
+grep -q "STOP whole-run deadline" "$out6/results.txt" && ok "the deadline stop is recorded" || bad "no deadline stop line"
+
 # part 2: mutants of the script
 mut() {  # label, sed expression
   local label=$1 expr=$2
   SCRIPT="$T/mutant.sh"; sed "$expr" "$HERE/run-expchain.sh" > "$SCRIPT"
   if cmp -s "$SCRIPT" "$HERE/run-expchain.sh"; then echo "FAIL mutant '$label': the text to break was not found"; fails=$((fails + 1)); return; fi
   : > "$T/log"; local before=$fails; run none 9 30 >/dev/null 2>&1; local o; o=$(latest); wiring "$o" >/dev/null 2>&1; ident "$o" >/dev/null 2>&1
+  : > "$T/log"; local t1; t1=$(date +%s); RUN_LIMIT=20 FAKE_SLEEP=30 DEADLINE_S=3 run none 9 30 >/dev/null 2>&1
+  [ $(( $(date +%s) - t1 )) -lt 15 ] || bad "mutant hangs past the deadline" >/dev/null
   if [ "$fails" -gt "$before" ]; then
     echo "PASS mutant '$label' caught"; fails=$before
   else
@@ -101,6 +113,7 @@ mut "s3 reads x instead of s1 output" 's|"\$P/mul_c\$c.anec" "\$OUT/exp_c\$c.s1_
 mut "s4 adds s2 instead of s3" 's|"\$OUT/exp_c\$c.s3_d.cal.y.f16" \|\| continue|"$OUT/exp_c$c.s2_c.cal.y.f16" \|\| continue|'
 mut "output hashes not written" 's|OUTPUT_SHA256|NOHASH|'
 mut "other ane-run count not recorded" 's|other_ane_run_after=%s|ignored_after=%s|'
+mut "stage timeouts not capped by the deadline" 's|timeout \$((rem < 90 ? rem : 90))|timeout 90|'
 mut "s2 uses the add program" 's|"\$P/mul_c\$c.anec" "\$I/x_c\$c.f16" "\$I/k_c\$c.f16"|"$P/add_c$c.anec" "$I/x_c$c.f16" "$I/k_c$c.f16"|'
 if [ -z "${HARMLESS_MUTANT:-}" ]; then
   # run this test again with one surviving mutant added: it must exit nonzero

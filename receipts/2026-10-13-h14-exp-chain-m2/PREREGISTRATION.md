@@ -22,6 +22,7 @@ A host check of the program headers found no size or packing mismatch between an
 ## How it runs
 `run-expchain.sh`, on an M2 Max (T6021) under Linux, through `ane-run` without `--check`. Per stage: 20 calls with `--time`, then a back-to-back loop of about
 30 seconds. Both outputs are kept. A stage whose calibration or long loop fails stops that size, and nothing is rerun.
+The whole run has a 15 minute deadline in the script itself: no stage starts after it, and every call's timeout is capped to the time left, so the worst case is 15 minutes and not the sum of the per-call timeouts.
 The run needs the ANE to itself. The script counts other `ane-run` processes before and after and writes both counts to the run file; the gate requires 0 and 0.
 
 ## Criteria (all fixed now; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 45 checks and 36 broken copies)

@@ -53,7 +53,7 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   The preregistered prediction is a largest error of 0.280 percent at 64 channels and 0.309 percent at 512, from the saved device output of the exp stage and
   ordinary fp16 mul and add. It is a prediction. The gate `compare-expchain.py` was tested first: 45 checks, and 36 broken copies of it are each caught. It also
   checks the chip, the program hashes, the output hashes and that no other `ane-run` ran. The run script has a fake-runner test with 4 broken copies,
-  and a failed long loop stops the chain at that size. Nothing ran on a device.
+  a failed long loop stops the chain at that size, and a 15 minute deadline in the script caps every call's timeout. Nothing ran on a device.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
