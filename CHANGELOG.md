@@ -9,7 +9,7 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 - Device status: the exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-run-m2/`). The final output met the unchanged exp bound. The largest
   relative error was 0.283 percent at 64 channels and 0.309 percent at 512, with no lane outside 2^-8. The failed run had 0.446 and 0.429 percent, with 2 and 9 lanes outside by the gate rule.
   The cell failed criterion 3 and is not accepted. 21 lanes in the mul and add stages differ from the ties-to-even result of their inputs. 6 are exact midpoints where the
-  device gave the half-away result, and these are all the midpoint lanes in the run. 15 are mul results in the subnormal range that the device rounded one step larger in magnitude.
+  device gave the half-away result, and these are all the lanes where the two rules differ. 15 are mul results in the subnormal range that the device rounded one step larger in magnitude.
   One model fits all 255 mul lanes with a subnormal result: round to 11 significant bits, then to the subnormal grid with ties away. It was fitted after the run and is not a prediction.
   Loop duty was 99.5 to 99.6 percent and stage medians were 0.307 to 0.360 ms. The unary cell stays at 21 of 23. No bound or reference changed. The device-verified program count
   is unchanged. One run, no speed claim: the chain is four calls where the failed exp program was one.
