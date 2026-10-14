@@ -48,6 +48,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   and the largest error is 0.489 percent. With an exact scale and the same fp16 exponent none miss (largest 0.331 percent). A second stage that
   adds back y * x * 2.165e-4 has a model maximum of 0.338 percent. That is a prediction. It is not a device result. The compiler's output did not change, the
   `exp` cell stays failed, and no bound was relaxed. A fix needs one program with two inputs, or a chained program. `ane-run` has run neither.
+- Prepared, not run: `receipts/2026-10-13-h14-exp-chain-m2/` holds a corrected `exp` cell for an M2 Max. It chains four existing programs on the host (exp, mul by K,
+  mul, add) through `ane-run`, with the host copying bytes only. The bound is the original 2^-8, and the failed run stays in `receipts/2026-10-13-h14-unary-m2/`.
+  The preregistered prediction is a largest error of 0.280 percent at 64 channels and 0.309 percent at 512, from the saved device output of the exp stage and
+  ordinary fp16 mul and add. It is a prediction. The gate `compare-expchain.py` was tested first: 22 checks, and 18 broken copies of it are each caught.
+  The run script has a fake-runner test with 3 broken copies. Nothing ran on a device.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.
