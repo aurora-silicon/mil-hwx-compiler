@@ -27,6 +27,7 @@ ORACLE = ROOT / "research/oracles/h14/unary_exp_c512.json"
 LANE_STRIDE = 32  # one fp16 value per 64-byte channel
 SCALE_WORD = 0x00D10
 BOUND = 2.0**-8
+FLOOR = 2.0**-24  # the absolute floor of the unary gate's relative bound
 LOG2E = 1.4426950408889634
 
 
@@ -131,21 +132,27 @@ def main():
         print(f"mutant {name}: {hit} of {total} lane readings match")
 
     n, rel, xs = sweep(table, scale)
-    outside = rel > BOUND
+    outside = rel > BOUND  # plain relative error; the unary gate's rule (below) also has an absolute floor
     assert n == 36866 and int(outside.sum()) == 60 and float(np.abs(xs[outside]).min()) == 5.59765625, (n, int(outside.sum()))
     assert round(float(rel.max()), 5) == 0.00489
     _, rel2, _ = sweep(table, LOG2E)
     assert float(rel2.max()) < BOUND and round(float(rel2.max()), 5) == 0.00331
 
-    # Direct device check: the saved lanes outside 2^-8 are exactly the model's outside-2^-8 inputs that the device saw.
-    device_x = {float(a) for _, x, _ in device_cases() for a in x}
-    device_bad = {float(a) for _, x, y in device_cases() for a, b in zip(x, y, strict=True) if abs(b / np.exp(a) - 1) > BOUND}
-    model_bad = {float(a) for a in xs[outside]} & device_x
-    assert device_bad == model_bad and len(device_bad) == 11, (len(device_bad), len(model_bad))
-    print(f"as emitted: {int(outside.sum())} of {n} fp16 inputs in [-8, 8] outside 2^-8, largest {rel.max():.5f}; "
-          f"{len(device_bad)} of them were on the device and were exactly its out-of-bound lanes")
-    print(f"exact scale (model only): none outside, largest {rel2.max():.5f}")
+    # The gate rule of compare-unary.py: |y - exp(x)| <= 2^-8 * exp(x) + 2^-24 in float64. Lanes are counted per run, inputs once.
+    def gate_outside(x, y):
+        return np.abs(y - np.exp(x)) > BOUND * np.exp(x) + FLOOR
 
+    per_width = {c: int(np.count_nonzero(gate_outside(x, y))) for name, x, y in device_cases() if name.endswith(".cal") for c in [len(x)]}
+    assert per_width == {64: 2, 512: 9}, per_width
+    device_x = {float(a) for _, x, _ in device_cases() for a in x}
+    device_bad = {float(a) for _, x, y in device_cases() for a in x[gate_outside(x, y)]}
+    model_y = exp_model(xs, table, scale)
+    model_gate = {float(a) for a in xs[gate_outside(xs, model_y)]}
+    assert len(model_gate) == 52 and device_bad == model_gate & device_x and len(device_bad) == 9, (len(model_gate), len(device_bad))
+    print(f"as emitted, plain relative rule: {int(outside.sum())} of {n} fp16 inputs in [-8, 8] outside 2^-8, largest {rel.max():.5f}")
+    print(f"as emitted, gate rule (floor 2^-24): {len(model_gate)} inputs; the device saw 9 of them and they are exactly its gate-failing inputs "
+          "(2 lane readings at 64 channels, 9 at 512)")
+    print(f"exact scale (model only): none outside, largest {rel2.max():.5f}")
 
 if __name__ == "__main__":
     sys.exit(main())
