@@ -28,7 +28,7 @@ Every `ane-run` call runs under `timeout -k 2`, so a runner that ignores TERM is
 A TERM, INT or HUP sent to the script ends the running call and is recorded.
 The run needs the ANE to itself. The script counts other `ane-run` processes before and after and writes both counts to the run file; the gate requires 0 and 0.
 
-## Criteria (all fixed now; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 47 checks and 38 broken copies)
+## Criteria (all fixed now; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 50 checks and 40 broken copies)
 Numerical, for 64 and 512 channels:
 1. x and K are the registered inputs: the sha256 of x is pinned in the gate, and K is fp16 0x0b18 in every lane with zero padding.
 2. Every output has zero padding and no NaN or infinity, and its calibration and loop files are bit-identical.
@@ -37,7 +37,8 @@ Numerical, for 64 and 512 channels:
    The gate asserts both values and pins the sha256 of the `compare-unary.py` it imports them from.
    The reference for criteria 3 and 4 is round to nearest, ties to even. The 2026-10-10 elementwise cell says its `--check` reference rounds half away from zero.
    Chained both ways, the s2, s3 and s4 outputs differ in 0, 0 and 2 lanes at 64 channels and 1, 2 and 2 at 512, and the final output stays inside the bound both ways.
-   The gate prints, for any differing lane, whether it is an exact midpoint where the device gave the half-away result. If the device rounds ties away in mul or add, criterion 3 fails on those lanes
+   For a criterion 3 failure the gate lists up to 10 differing lanes per stage with the lane index, the two inputs, the ties-to-even result, the device result and an exact-midpoint flag.
+   It also counts the differing lanes that are exact midpoints where the device gave the half-away result. Both are diagnostics, and neither turns a failure into a pass. If the device rounds ties away in mul or add, criterion 3 fails on those lanes
    and is reported as a criterion 3 failure. The bound is not relaxed for it.
 Run identity, duty and time, reported apart and also required: `results.txt` names the T6021 chip, the program hash of each stage as in `SHA256SUMS-inputs`, the sha256 of every output file
 (checked against the files), exactly one SUMMARY line, and 0 other `ane-run` processes before and after. Also: every stage's calibration median is at most 0.60 ms; every loop and the ticket have duty at least 90 percent;

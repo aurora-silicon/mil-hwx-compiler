@@ -11,6 +11,8 @@ Numerical criteria, for each size (a missing file, size or size mismatch fails):
   1. Each output has zero padding and no NaN or infinity, and its calibration and loop files are bit-identical.
   2. Stages s2, s3 and s4 equal the correctly rounded fp16 result of their own saved inputs, lane by lane: s2 = x * K, s3 = e * c, s4 = e + d,
      where e, c and d are the saved outputs of s1, s2 and s3 (the host only copied them). Zero compares equal to negative zero.
+  2b. A stage that fails criterion 2 lists up to 10 differing lanes: index, the two inputs, the ties-to-even result, the device result and whether the lane is an
+     exact midpoint. The midpoint flag is a diagnostic. It never turns a failure into a pass.
   3. The final output s4 meets the exp bound (relative 2^-8 plus the absolute floor of one fp16 subnormal, 2^-24) against exp(x) in float64, on
      every lane. The gate asserts that compare-unary.py is the pinned file (sha256) and that its exp bound and floor are those values. The
      reference is the correctly rounded fp16 result with ties to even, which is also what the stage checks of criterion 2 use.
@@ -31,6 +33,7 @@ LANE_STRIDE = 32
 SIZES = (64, 512)
 STAGES = ("s1_e", "s2_c", "s3_d", "s4_y")
 MAX_MEDIAN_MS, MIN_DUTY_PCT, MAX_WALL_S = 0.60, 90.0, 900.0
+MAX_LANES_PRINTED = 10  # lanes listed per stage for a criterion 3 failure
 TARGET_S = 30  # the registered loop length; the run script prints the value it used
 PIN_UNARY_SHA256 = "1c827f76cb07217cc2ec24350b8aac00917f1443ecf82c4108ba818b82a1adfd"  # receipts/2026-10-13-h14-unary-m2/compare-unary.py
 PIN_X_SHA256 = {64: "6b29533c770b00d1a04a6bb5aeb6cd80f4fe9053b3ffd4f6aff37cd9f80cd230", 512: "f03fecef7615ca1417dbbeb8595c3602f9194553360ed8d308857fec5b8c7d19"}
@@ -111,6 +114,7 @@ def check_size(c, indir, rundir, cu):
         return problems, notes
     x, k = lanes(x_s, c).astype(np.float64), lanes(k_s, c).astype(np.float64)
     e, cc, d, y = (lanes(surfaces[s], c).astype(np.float64) for s in STAGES)
+    operands = {"s2_c": (x, k, "*"), "s3_d": (e, cc, "*"), "s4_y": (e, d, "+")}
     for stage, got, want in (("s2_c", cc, x * k), ("s3_d", d, e * cc), ("s4_y", y, e + d)):
         bad = int(np.count_nonzero(got != rounded(want).astype(np.float64)))
         notes.append(f"{stage}: {c - bad} of {c} lanes equal the correctly rounded result")
@@ -120,6 +124,10 @@ def check_size(c, indir, rundir, cu):
             midpoint = (half_away(want) != rounded(want).astype(np.float64)) & (got == half_away(want))
             notes.append(f"{stage}: of the {bad} differing lane(s), {int(np.count_nonzero(differ & midpoint))} are exact midpoints where the device gave "
                          "the half-away result (a rounding-rule difference, still a criterion 3 failure)")
+            a, b, op = operands[stage]
+            for j in np.flatnonzero(differ)[:MAX_LANES_PRINTED]:
+                notes.append(f"  {stage} lane {int(j)}: inputs {a[j]!r} {op} {b[j]!r}; ties-to-even {float(rounded(want)[j])!r}; device {got[j]!r}; "
+                             f"exact midpoint {'yes' if half_away(want)[j] != rounded(want).astype(np.float64)[j] else 'no'}")
     ref = cu.reference("exp", x, {})
     kind, bound = cu.BOUNDS["exp"]
     err = np.abs(y - ref)

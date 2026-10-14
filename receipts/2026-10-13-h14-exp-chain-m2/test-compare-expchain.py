@@ -140,7 +140,8 @@ def checks(script):
             if rehash_after:
                 rehash(rundir)
             r = gate(script, indir, rundir, unary() if callable(unary) else unary)
-        out.append((label, (r.returncode == 0) == expect_ok and (needle is None or needle in r.stdout)))
+        found = True if needle is None else (r.stdout.count(needle[0]) == needle[1] if isinstance(needle, tuple) else needle in r.stdout)
+        out.append((label, (r.returncode == 0) == expect_ok and found))
 
     # numerical
     case("a well-formed corrected run passes", True)
@@ -174,6 +175,18 @@ def checks(script):
         both(rundir, 512, "s2_c", lambda dd: dd.__setitem__(STRIDE * j, np.float16(ce.half_away(want)[j])))
 
     case("a half-away result at an exact midpoint fails criterion 3 and is named", False, half_away_at_a_tie, needle="exact midpoints")
+    case("the lane list names the lane, inputs, ties-to-even result, device result and the midpoint flag", False, half_away_at_a_tie,
+         needle="; exact midpoint yes")
+    def twelve_bad(i, r):
+        def bump(dd):
+            for lane in range(1, 13):
+                dd[STRIDE * lane] = np.nextafter(dd[STRIDE * lane], np.float16(np.inf))
+        both(r, 512, "s3_d", bump)
+
+    case("twelve differing lanes are listed ten at a time", False, twelve_bad, needle=("  s3_d lane ", 10))
+    case("a lane that is not a midpoint is listed as 'exact midpoint no'", False,
+         lambda i, r: both(r, 512, "s3_d", lambda dd: dd.__setitem__(STRIDE * 40, np.nextafter(dd[STRIDE * 40], np.float16(np.inf)))),
+         needle="; exact midpoint no")
     case("a target_s other than 30 fails", False, lambda i, r: tweak(r, "target_s=30", "target_s=10"), needle="target_s")
     # the final bound, bracketed: 0.391 percent
     case("a final error of about 0.30 percent passes", True, final_error(0.30))
@@ -284,6 +297,8 @@ def mutants():
         ("output hashes not compared", "elif path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != hashes[name]:", "elif False:"),
         ("missing output hash line tolerated", "                if name not in hashes:", "                if False:"),
         ("half-away note not printed", "            notes.append(f\"{stage}: of the {bad} differing lane(s)", "            (lambda *_: None)(f\"{stage}: of the {bad} differing lane(s)"),
+        ("differing lanes not listed", "            for j in np.flatnonzero(differ)[:MAX_LANES_PRINTED]:", "            for j in np.flatnonzero(differ)[:0]:"),
+        ("only one differing lane listed", "            for j in np.flatnonzero(differ)[:MAX_LANES_PRINTED]:", "            for j in np.flatnonzero(differ)[:1]:"),
         ("target_s not checked", "    if not target or int(target.group(1)) != TARGET_S:", "    if False:"),
         ("timing result ignored in the exit status", "return 1 if (numeric or timing) else 0", "return 1 if numeric else 0"),
         ("numerical result ignored in the exit status", "return 1 if (numeric or timing) else 0", "return 1 if timing else 0"),
