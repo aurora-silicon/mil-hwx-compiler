@@ -1,0 +1,75 @@
+H14 exp chain cell start=2026-10-14T02:34:34Z kernel=7.1.12-2-20261013.18-sep-ARCH target_s=30
+chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a
+other_ane_run_before=0
+
+######## 64 channels ########
+
+== exp_c64.s1_e program_sha256=e0465c7c74733e65 inputs=/var/tmp/w7h-h14-expchain/in/x_c64.f16 ==
+exec ms over 20 calls: min 0.205 p10 0.256 p25 0.256 median 0.307 p75 0.357 p90 0.408 p99 0.410 max 0.410
+rc_cal(exp_c64.s1_e)=0 median_ms=0.307
+exec ms over 97719 calls: min 0.196 p10 0.256 p25 0.306 median 0.307 p75 0.311 p90 0.360 p99 0.407 max 0.522
+rc_long(exp_c64.s1_e)=0 repeat=97719 wall_s=29.6 loop_duty_pct=99.5
+
+== exp_c64.s2_c program_sha256=a0aa2d796dea6b93 inputs=/var/tmp/w7h-h14-expchain/in/x_c64.f16 /var/tmp/w7h-h14-expchain/in/k_c64.f16 ==
+exec ms over 20 calls: min 0.207 p10 0.258 p25 0.258 median 0.310 p75 0.360 p90 0.410 p99 0.411 max 0.411
+rc_cal(exp_c64.s2_c)=0 median_ms=0.310
+exec ms over 96774 calls: min 0.205 p10 0.256 p25 0.306 median 0.307 p75 0.357 p90 0.358 p99 0.411 max 0.562
+rc_long(exp_c64.s2_c)=0 repeat=96774 wall_s=30.5 loop_duty_pct=99.6
+
+== exp_c64.s3_d program_sha256=a0aa2d796dea6b93 inputs=/var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c64.s1_e.cal.y.f16 /var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c64.s2_c.cal.y.f16 ==
+exec ms over 20 calls: min 0.258 p10 0.258 p25 0.308 median 0.310 p75 0.360 p90 0.411 p99 0.461 max 0.461
+rc_cal(exp_c64.s3_d)=0 median_ms=0.310
+exec ms over 96774 calls: min 0.205 p10 0.256 p25 0.306 median 0.310 p75 0.357 p90 0.361 p99 0.412 max 0.562
+rc_long(exp_c64.s3_d)=0 repeat=96774 wall_s=30.6 loop_duty_pct=99.5
+
+== exp_c64.s4_y program_sha256=13ff210784c948ff inputs=/var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c64.s1_e.cal.y.f16 /var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c64.s3_d.cal.y.f16 ==
+exec ms over 20 calls: min 0.207 p10 0.258 p25 0.258 median 0.308 p75 0.360 p90 0.362 p99 0.409 max 0.409
+rc_cal(exp_c64.s4_y)=0 median_ms=0.308
+exec ms over 97402 calls: min 0.205 p10 0.256 p25 0.262 median 0.307 p75 0.357 p90 0.407 p99 0.413 max 0.516
+rc_long(exp_c64.s4_y)=0 repeat=97402 wall_s=31.1 loop_duty_pct=99.6
+
+######## 512 channels ########
+
+== exp_c512.s1_e program_sha256=8599331bcf5da53b inputs=/var/tmp/w7h-h14-expchain/in/x_c512.f16 ==
+exec ms over 20 calls: min 0.258 p10 0.258 p25 0.260 median 0.317 p75 0.362 p90 0.411 p99 0.413 max 0.413
+rc_cal(exp_c512.s1_e)=0 median_ms=0.317
+exec ms over 94637 calls: min 0.205 p10 0.256 p25 0.258 median 0.310 p75 0.359 p90 0.407 p99 0.461 max 0.565
+rc_long(exp_c512.s1_e)=0 repeat=94637 wall_s=29.8 loop_duty_pct=99.5
+
+== exp_c512.s2_c program_sha256=b32fef9f18eaf2a9 inputs=/var/tmp/w7h-h14-expchain/in/x_c512.f16 /var/tmp/w7h-h14-expchain/in/k_c512.f16 ==
+exec ms over 20 calls: min 0.256 p10 0.256 p25 0.307 median 0.357 p75 0.407 p90 0.458 p99 0.459 max 0.459
+rc_cal(exp_c512.s2_c)=0 median_ms=0.357
+exec ms over 84033 calls: min 0.246 p10 0.256 p25 0.306 median 0.357 p75 0.357 p90 0.367 p99 0.508 max 1.286
+rc_long(exp_c512.s2_c)=0 repeat=84033 wall_s=27.8 loop_duty_pct=99.6
+
+== exp_c512.s3_d program_sha256=b32fef9f18eaf2a9 inputs=/var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c512.s1_e.cal.y.f16 /var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c512.s2_c.cal.y.f16 ==
+exec ms over 20 calls: min 0.258 p10 0.258 p25 0.310 median 0.360 p75 0.360 p90 0.449 p99 0.460 max 0.460
+rc_cal(exp_c512.s3_d)=0 median_ms=0.360
+exec ms over 83333 calls: min 0.244 p10 0.256 p25 0.306 median 0.357 p75 0.357 p90 0.368 p99 0.508 max 0.608
+rc_long(exp_c512.s3_d)=0 repeat=83333 wall_s=27.6 loop_duty_pct=99.6
+
+== exp_c512.s4_y program_sha256=b416b9d14059a091 inputs=/var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c512.s1_e.cal.y.f16 /var/tmp/w7h-h14-expchain/runs/run-20261014T023434Z-676515/exp_c512.s3_d.cal.y.f16 ==
+exec ms over 20 calls: min 0.249 p10 0.258 p25 0.258 median 0.359 p75 0.360 p90 0.361 p99 0.414 max 0.414
+rc_cal(exp_c512.s4_y)=0 median_ms=0.359
+exec ms over 83565 calls: min 0.243 p10 0.256 p25 0.306 median 0.357 p75 0.358 p90 0.407 p99 0.508 max 0.573
+rc_long(exp_c512.s4_y)=0 repeat=83565 wall_s=28.3 loop_duty_pct=99.6
+
+other_ane_run_after=0
+OUTPUT_SHA256 exp_c512.s1_e.cal.y.f16 f84717df1bef581cbbd808575bdcec700ff4935bfa1072eb8a4257430e8cda74
+OUTPUT_SHA256 exp_c512.s1_e.long.y.f16 f84717df1bef581cbbd808575bdcec700ff4935bfa1072eb8a4257430e8cda74
+OUTPUT_SHA256 exp_c512.s2_c.cal.y.f16 62c8fca540bea8df56e333caa3bf6c10dd26cb5b08f802c11ddb47ef20ff8745
+OUTPUT_SHA256 exp_c512.s2_c.long.y.f16 62c8fca540bea8df56e333caa3bf6c10dd26cb5b08f802c11ddb47ef20ff8745
+OUTPUT_SHA256 exp_c512.s3_d.cal.y.f16 4fa13aa4fd2b08e651e257ce225c1fd76978135a503ead56773fd94ab9303ac6
+OUTPUT_SHA256 exp_c512.s3_d.long.y.f16 4fa13aa4fd2b08e651e257ce225c1fd76978135a503ead56773fd94ab9303ac6
+OUTPUT_SHA256 exp_c512.s4_y.cal.y.f16 2c65ebce9f1bcd7a987105a25a25412e786c98c5b75566e090da2d409cb5379e
+OUTPUT_SHA256 exp_c512.s4_y.long.y.f16 2c65ebce9f1bcd7a987105a25a25412e786c98c5b75566e090da2d409cb5379e
+OUTPUT_SHA256 exp_c64.s1_e.cal.y.f16 447507d89852d7a0b0ad0ca44a0f06499085e8088d43b4084a699ee0a6fd539b
+OUTPUT_SHA256 exp_c64.s1_e.long.y.f16 447507d89852d7a0b0ad0ca44a0f06499085e8088d43b4084a699ee0a6fd539b
+OUTPUT_SHA256 exp_c64.s2_c.cal.y.f16 4edc9d726c9483ae334c4741b71af5f3a65030c898aa8df1865be9b2f1dada50
+OUTPUT_SHA256 exp_c64.s2_c.long.y.f16 4edc9d726c9483ae334c4741b71af5f3a65030c898aa8df1865be9b2f1dada50
+OUTPUT_SHA256 exp_c64.s3_d.cal.y.f16 e1c5d80daf85b3dcd5ac7efe6fa861c493882da8b915ad9436120926498a5cd9
+OUTPUT_SHA256 exp_c64.s3_d.long.y.f16 e1c5d80daf85b3dcd5ac7efe6fa861c493882da8b915ad9436120926498a5cd9
+OUTPUT_SHA256 exp_c64.s4_y.cal.y.f16 aa753baa16ca81b5bbb3c19458c34c78774a21bfb93f2e3dc3f8bf7539f61e16
+OUTPUT_SHA256 exp_c64.s4_y.long.y.f16 aa753baa16ca81b5bbb3c19458c34c78774a21bfb93f2e3dc3f8bf7539f61e16
+
+SUMMARY pass=8 fail=0 skipped_loops=0 total_wall_s=235.5 ticket_duty_pct=99.5
