@@ -8,7 +8,7 @@ Nothing in the preregistration changed. Ties-to-even is the criterion 3 referenc
 ## Result
 | Criterion | Result |
 |---|---|
-| 4: final output within the exp bound | Met. Largest relative error 0.283 percent at 64 channels and 0.309 percent at 512. No lane outside (bound 0.391). The failed run had 0.446 and 0.429 percent, with 2 and 11 lanes outside |
+| 4: final output within the exp bound | Met. Largest relative error 0.283 percent at 64 channels and 0.309 percent at 512. No lane outside (bound 0.391). The failed run had 0.446 and 0.429 percent, with 2 and 9 lanes outside by the gate rule (11 by a plain relative 2^-8 at 512 channels) |
 | 3: s2, s3 and s4 each equal the ties-to-even result of their saved inputs | Failed. 21 lanes differ: 3 at 64 channels (s3 1, s4 2) and 18 at 512 (s2 3, s3 13, s4 2) |
 | 1 and 2: registered inputs, padding, finite values, identical calibration and loop outputs | Met |
 | Run identity, duty and time | Met. T6021 chip, 0 other `ane-run`, registered program and output hashes, loop duty 99.5 to 99.6 percent, stage medians 0.307 to 0.360 ms, 235.5 s in total |

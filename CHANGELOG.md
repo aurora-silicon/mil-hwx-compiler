@@ -6,8 +6,8 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 
 ### 2026-10-14
-- Device status: the exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-m2-run/`). The final output met the unchanged exp bound: the
-  largest relative error was 0.283 percent at 64 channels and 0.309 percent at 512, with no lane outside the 2^-8 bound, against 0.446 and 0.429 percent with 2 and 11 lanes
+- Device status: the exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-run-m2/`). The final output met the unchanged exp bound: the
+  largest relative error was 0.283 percent at 64 channels and 0.309 percent at 512, with no lane outside the 2^-8 bound, against 0.446 and 0.429 percent with 2 and 9 lanes by the gate rule
   outside before. The cell failed criterion 3 and is not accepted. 21 lanes in the mul and add stages differ from the ties-to-even result of their inputs: 6 are exact
   midpoints where the device gave the half-away result, and 15 are mul results in the subnormal range that the device rounded one step larger in magnitude. All 255 mul
   lanes with a subnormal result fit one model, fitted after the run: round to 11 significant bits, then to the subnormal grid with ties away. It is not a prediction.
