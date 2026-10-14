@@ -6,6 +6,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 
 ### 2026-10-14
+- Device status: the scaled exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-d4-run-m2/`). It met every preregistered criterion. Each of the four
+  stages after exp equalled the ties-to-even result on all 64 and all 512 lanes, against 21 differing lanes in the first chain. The final output stayed inside the unchanged exp bound,
+  with a largest relative error of 0.283 percent at 64 channels and 0.348 percent at 512 and no lane outside. The failed exp program had 0.446 and 0.429 percent. The exp stage
+  output equals the failed run's byte for byte. Loop duty was 99.5 to 99.6 percent and each call took 0.306 to 0.360 ms. The chain is five calls where the failed program was one,
+  so there is no speed claim. One run on one boot. The unary cell result of 21 of 23 and the first chain's failure are kept as recorded, and the device-verified program count is not changed here.
 - Prepared, not run: `receipts/2026-10-14-h14-exp-chain-d4-m2/` holds a scaled form of the exp chain for an M2 Max. The first chain failed criterion 3 on 21 stage lanes. This
   design uses the same three programs in five calls: c = x * 16K, g = c + 16, p = e * g, y = p * 0.0625. Scaling by a power of two is exact, so no stage value falls where the
   first run's device rounding differed from ties to even. That is a design chosen from one run, not an established fact for other data. The frozen criteria are unchanged:
