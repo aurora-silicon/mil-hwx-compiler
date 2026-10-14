@@ -283,6 +283,7 @@ test-h14-parity: $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_row_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_unary_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_exp_scaled_chain_case.py
 
 .PHONY: test-h14-exp-model
 test-h14-exp-model:

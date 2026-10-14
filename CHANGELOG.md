@@ -6,6 +6,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 
 ### 2026-10-14
+- Prepared, not minted: `research/mint_oracles.py` has two new cases, `chain_exp_d4_c64` and `chain_exp_d4_c512`. Each is one MIL program holding the five operations of the scaled
+  exp chain: c = x * 16 K, g = c + 16, p = exp(x) * g, y = p * 0.0625, with scalar constants. A Mac with the Apple compiler mints them (`--local --targets h14 --case 'chain_exp_d4_*'`).
+  The compiler does not emit this program yet. It needs the minted records and a template, and the minted program may fold the scalar constants into register words, so its arithmetic
+  has to be shown by a device run. `tests/test_exp_scaled_chain_case.py` pins the constants and the operation order and catches a wrong constant and a swapped operation.
+  The target is one ANEC program that meets the original exp bound at the original input, with a call time of at most 0.60 ms. No device run, no speed claim.
 - Device status: the scaled exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-d4-run-m2/`). It met every preregistered criterion. Each of the four
   stages after exp equalled the ties-to-even result on all 64 and all 512 lanes, against 21 differing lanes in the first chain. The final output stayed inside the unchanged exp bound,
   with a largest relative error of 0.283 percent at 64 channels and 0.348 percent at 512 and no lane outside. The failed exp program had 0.446 and 0.429 percent. The exp stage
