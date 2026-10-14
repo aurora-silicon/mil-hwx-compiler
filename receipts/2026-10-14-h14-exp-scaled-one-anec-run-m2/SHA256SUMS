@@ -1,0 +1,16 @@
+51b878cea64107292a01c11ba899fdbff4c2dcf15c63020edebc601291918998  ./README.md
+b5858e9153206ce3d2a2fd07b1b43b89309346ba07df35a254e0995d6bb4b588  ./analysis.txt
+964f2ce487fb9ea4acf779cd77b476f79f8ae0129056ab9dd4d53af57366962b  ./build-and-test-071bc9a.txt
+0626dd22d51c59e71c4787622ed3775e3af1e8e65562b094cade9a39be4e2764  ./compare-with-chain.py
+c4b1fda8af456352fffc7fa7b71db4f01bf2de16be4e449ede14ba2ab2c55223  ./device-output/exp_c512.s1_y.cal.txt
+b915f729d279bd13b201c42cbb2db747c22bcaedde137f291c7454ea825b9140  ./device-output/exp_c512.s1_y.cal.y.f16
+c986d26bd30f4d62a085a21f7a881b9a55b519f3a13f8794a3b19bbfac1184bd  ./device-output/exp_c512.s1_y.long.txt
+b915f729d279bd13b201c42cbb2db747c22bcaedde137f291c7454ea825b9140  ./device-output/exp_c512.s1_y.long.y.f16
+593b3adf829bf6d40f67704832a5e7bb3a1f7cb3198facaea72bb3633b5b3af1  ./device-output/exp_c64.s1_y.cal.txt
+d8693cc87c43cbccfd1d7a8e2631b17109bc40556d32050537853278484fcf3c  ./device-output/exp_c64.s1_y.cal.y.f16
+b864a6fb3e0449dc42fa62ae69a0c9df7937e255073363cf899a0005e16af917  ./device-output/exp_c64.s1_y.long.txt
+d8693cc87c43cbccfd1d7a8e2631b17109bc40556d32050537853278484fcf3c  ./device-output/exp_c64.s1_y.long.y.f16
+f03fecef7615ca1417dbbeb8595c3602f9194553360ed8d308857fec5b8c7d19  ./inputs/x_c512.f16
+6b29533c770b00d1a04a6bb5aeb6cd80f4fe9053b3ffd4f6aff37cd9f80cd230  ./inputs/x_c64.f16
+461b3b219fc3b0cabc661b61d1b6d2f8b444681366c042dabf894e35f16e4594  ./results.txt
+13677c879f34ebae9db71818c50488e8bbf6909cfb229956aa787b3137abc19c  ./verdict.txt

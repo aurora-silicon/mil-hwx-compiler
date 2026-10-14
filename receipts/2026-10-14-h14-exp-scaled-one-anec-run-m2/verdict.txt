@@ -1,0 +1,3 @@
+c64 final: max relative error 0.00283 at x=-7.62891, bound rel 0.00390625, 0 lane(s) outside
+c512 final: max relative error 0.00348 at x=7.25, bound rel 0.00390625, 0 lane(s) outside
+numerical criteria: PASS; run identity, duty and time criteria: PASS
