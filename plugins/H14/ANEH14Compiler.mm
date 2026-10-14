@@ -368,6 +368,50 @@ static NSData *encodeHWX(const ane::h14::Program &program,
         kernelRelocationOffsets:@[] programInfo:info error:error];
 }
 
+/// One fp16 scalar operand of a mul or add: a constant of type fp16 scalar whose literal has exactly `bits`.
+static BOOL scalarOperation(ANEGraphOperation *operation, NSString *name,
+                            ANEGraphValue *x, uint16_t bits) {
+    ANEGraphValue *y = operation.operands[@"y"].value;
+    uint16_t literal = 0;
+    return [operation.operationName isEqualToString:name] &&
+           operation.arguments.count == 2 && operation.operands[@"x"].value == x &&
+           y && constantValue(y) && y.type.kind == ANEValueTypeKindScalar &&
+           y.type.elementType == ANEElementTypeFP16 && !y.producer.arguments.count &&
+           fp16Scalar(y.producer.attributes[@"val"], &literal) && literal == bits;
+}
+
+/// Matches the straight-line scaled exp chain, which Apple compiles to one three-task program:
+/// e = exp(x), c = mul(x, 16 K), g = add(c, 16), p = mul(e, g), y = mul(p, 0.0625), with 16 K = fp16 0x1b18, over one fp16 [1, C, 1, 1] input.
+/// Every other order, constant or surface is outside the decoded envelope.
+static BOOL expScaledChainPlan(ANEGraphFunction *function,
+                               NSArray<ANEGraphOperation *> *operations,
+                               std::uint32_t *channels) {
+    if (operations.count != 5 || function.inputs.count != 1) return NO;
+    ANEGraphValue *x = function.inputs[0];
+    ane::h14::ElementwiseShape shape{};
+    if (!elementwiseShape(x, &shape) || shape.height != 1 || shape.width != 1)
+        return NO;
+    for (ANEGraphOperation *operation in operations)
+        if (!tensor(operation.results[0], x.type.shape)) return NO;
+    ANEGraphOperation *exponential = operations[0], *scaled = operations[1],
+                      *shifted = operations[2], *product = operations[3],
+                      *result = operations[4];
+    ANEGraphValue *e = exponential.results[0], *c = scaled.results[0],
+                  *g = shifted.results[0], *p = product.results[0];
+    if (![exponential.operationName isEqualToString:@"exp"] ||
+        exponential.arguments.count != 1 || exponential.operands[@"x"].value != x ||
+        !scalarOperation(scaled, @"mul", x, 0x1b18) ||
+        !scalarOperation(shifted, @"add", c, 0x4c00) ||
+        ![product.operationName isEqualToString:@"mul"] ||
+        product.arguments.count != 2 || product.operands[@"x"].value != e ||
+        product.operands[@"y"].value != g ||
+        !scalarOperation(result, @"mul", p, 0x2c00) ||
+        !ane::h14::supportsExpScaledChainParity(shape.channels))
+        return NO;
+    *channels = shape.channels;
+    return YES;
+}
+
 struct H14ParityPlan {
     BOOL unary;
     BOOL scalarConstant;
@@ -842,6 +886,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
                 target.name],
                 sourceOperations[index], code(target, @"unsupported-chain"));
     }
+    std::uint32_t expChainChannels = 0;
+    const BOOL expChain = h14 && expScaledChainPlan(function, sourceOperations,
+                                                    &expChainChannels);
+    if (expChain) chainSchedule = NO;
     if (chainSchedule) {
         if (!chain || function.inputs.count > 2)
             return reject(diagnostics,
@@ -895,7 +943,46 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     std::vector<ane::h14::Program> chainPrograms;
     NSMutableArray<NSDictionary *> *chainOpRecords = [NSMutableArray array];
 
-    for (ANEGraphOperation *operation in sourceOperations) {
+    if (expChain) {
+        ane::h14::Program program;
+        NSData *payload = nil;
+        try {
+            program = ane::h14::encodeExpScaledChainParity(expChainChannels);
+            if (hwx) {
+                payload = encodeHWX(program, target.architecture,
+                    @[function.inputs[0].name, lastOperation.results[0].name],
+                    error);
+                if (!payload) return NO;
+            } else {
+                std::vector<std::uint8_t> anec = ane::h14::encodeANEC(program);
+                payload = [NSData dataWithBytes:anec.data() length:anec.size()];
+            }
+        } catch (const std::exception &exception) {
+            return reject(diagnostics,
+                [NSString stringWithUTF8String:exception.what()], lastOperation,
+                unsupported);
+        }
+        tensors[lastOperation.results[0].name] = @{
+            @"shape": lastOperation.results[0].type.shape,
+            @"logicalBytes": @(logicalBytes(lastOperation.results[0])),
+            @"role": @"output"};
+        [programRecords addObject:@{
+            @"file": [@"program-0." stringByAppendingString:format],
+            @"bytes": @(payload.length), @"taskDescriptors": @(program.taskCount),
+            @"encoder": @"apple-parity-expchain", @"operation": @"exp_scaled_chain",
+            @"inputs": @[binding(function.inputs[0], program.inputs[0])],
+            @"constantInputs": @{},
+            @"outputs": @[binding(lastOperation.results[0], program.output)],
+            @"constantOffset": @(program.constantOffsetBytes),
+            @"constantBytes": @(program.constants.size()),
+            @"firstTaskBytes": @(program.firstTaskBytes),
+        }];
+        [payloads addObject:payload];
+        [dispatchPlan addObject:@0];
+    }
+
+
+    for (ANEGraphOperation *operation in expChain ? @[] : sourceOperations) {
         NSString *name = operation.operationName;
         if (chainSchedule && operation == lastOperation) {
             ANEGraphValue *value = operation.operands[@"x"].value;
