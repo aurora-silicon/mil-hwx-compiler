@@ -6,8 +6,8 @@
 #   s4 y = e + d       elementwise add program, inputs e and d
 # The host only copies bytes: the output file of one stage is the input file of the next, unchanged. Each stage is one ane-run call.
 # Per stage: a 20-call calibration with --time, then a back-to-back loop sized to about TARGET_S seconds from the calibration median.
-# The next stage reads the calibration output of the earlier ones. A stage whose calibration fails stops the chain for that size.
-# compare-expchain.py judges the saved output off the device. Duty = busy_ns delta over wall time from the driver's ane_stats.
+# The next stage reads the calibration output of the earlier ones. A stage whose calibration or long loop fails stops the chain for that size.
+# compare-expchain.py judges the saved output off the device, and checks the chip, the program hashes, the output hashes and that no other ane-run ran. Duty = busy_ns delta over wall time from the driver's ane_stats.
 set -uo pipefail
 ROOT=${ROOT:-/var/tmp/w7h-h14-expchain}
 RUNNER=${RUNNER:-/var/tmp/m2slot/tree/tools/ane-run}
@@ -22,6 +22,9 @@ exec >"$OUT/results.txt" 2>&1
 busy() { awk '$1=="busy_ns"{print $2}' "$STATS"; }
 printf 'H14 exp chain cell start=%s kernel=%s target_s=%s\n' "$(date -u +%FT%TZ)" "$(uname -r)" "$TARGET_S"
 printf 'chip=%s runner_sha256=%s\n' "$(tr -d '\0' </proc/device-tree/compatible 2>/dev/null | cut -c1-40)" "$(sha256sum "$RUNNER" | cut -c1-16)"
+# Other ane-run processes (the idle filler, another ticket) would add busy time to the duty figure: count them before and after.
+others() { local n; n=$(${PGREP:-pgrep} -xc ane-run 2>/dev/null); echo "${n:-unknown}"; }
+printf 'other_ane_run_before=%s\n' "$(others)"
 b0=$(busy); t0=$(date +%s.%N)
 pass=0; fail=0; skipped=0
 
@@ -50,7 +53,10 @@ stage() {
   printf 'rc_long(%s)=%s repeat=%s wall_s=%s loop_duty_pct=%s\n' "$name" "$rc_long" "$rep" \
     "$(awk -v a="$s0" -v b="$s1" 'BEGIN{printf "%.1f", b-a}')" \
     "$(awk -v a="$s0" -v b="$s1" -v x="$bs0" -v y="$bs1" 'BEGIN{printf "%.1f", (y-x)/((b-a)*1e9)*100}')"
-  if [ "$rc_long" -eq 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); fi
+  if [ "$rc_long" -ne 0 ]; then
+    fail=$((fail + 1)); printf 'STOP later stages at this size: the long loop failed\n'; return 1
+  fi
+  pass=$((pass + 1))
   return 0
 }
 
@@ -63,6 +69,9 @@ for c in $SIZES; do
   stage "exp_c$c.s4_y"  "$P/add_c$c.anec" "$OUT/exp_c$c.s1_e.cal.y.f16" "$OUT/exp_c$c.s3_d.cal.y.f16" || continue
 done
 b1=$(busy); t1=$(date +%s.%N)
+printf '\nother_ane_run_after=%s\n' "$(others)"
+# Tie results.txt to the output files it describes: compare-expchain.py checks these hashes against the files it judges.
+for f in "$OUT"/*.y.f16; do printf 'OUTPUT_SHA256 %s %s\n' "$(basename "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"; done
 printf '\nSUMMARY pass=%s fail=%s skipped_loops=%s total_wall_s=%s ticket_duty_pct=%s\n' "$pass" "$fail" "$skipped" \
   "$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')" \
   "$(awk -v a="$t0" -v b="$t1" -v x="$b0" -v y="$b1" 'BEGIN{printf "%.1f", (y-x)/((b-a)*1e9)*100}')"
