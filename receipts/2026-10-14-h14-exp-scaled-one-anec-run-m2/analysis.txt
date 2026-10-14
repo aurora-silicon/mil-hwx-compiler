@@ -1,0 +1,2 @@
+c64: file bytes equal to the five-call chain's final output: True; lanes differing from it: 0 of 64; lanes differing from the failed exp program's output: 49 of 64
+c512: file bytes equal to the five-call chain's final output: True; lanes differing from it: 0 of 512; lanes differing from the failed exp program's output: 407 of 512
