@@ -43,11 +43,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 - Analysis: why the H14 `exp` program missed its bound on the M2 Max. The compiler replays Apple's program: a 33-entry fp16 table of 2^(i/32) and
   the fp16 value 0x3dc5 (1.4423828, log2(e) rounded) in the NE output-scale word 0x00d10. `tests/test_h14_exp_arithmetic.py` models it. The model rounds x * scale to fp16, interpolates the table
   linearly, and rounds the result to fp16 (ties away from zero). It reproduces
-  all 1,152 saved device lanes (64 and 512 channels, calibration and loop outputs) bit for bit. Four mutants miss 108 to 998 lanes. The
-  scale is 2.16e-4 low, so the error grows with |x|. In the model 60 of the 36,866 fp16 inputs in [-8, 8] miss 2^-8, the smallest at |x| = 5.598,
-  and the largest error is 0.489 percent. With an exact scale and the same fp16 exponent none miss (largest 0.331 percent). A second stage that
+  all 541 distinct (x, y) pairs the device produced (1,152 lane readings, 64 and 512 channels, calibration and loop outputs) bit for bit. Mutants of the final rounding, the scale, the exponent rounding or the interpolation miss lanes. The data do not pin the rounding rule of the exponent or of the interpolation step. The
+  scale is 2.16e-4 low, so the error grows with |x|. In the model 60 of the 36,866 fp16 inputs in [-8, 8] miss a plain relative 2^-8, the smallest at |x| = 5.598,
+  and the largest error is 0.489 percent. The gate of the failed run adds an absolute floor of 2^-24. Under that rule 52 inputs miss in the model. The device saw 9 of them, and they are exactly the 9 inputs behind its 11 failing lane readings (2 at 64 channels, 9 at 512). With an exact scale and the same fp16 exponent none miss (largest 0.331 percent). A second stage that
   adds back y * x * 2.165e-4 has a model maximum of 0.338 percent. That is a prediction. It is not a device result. The compiler's output did not change, the
   `exp` cell stays failed, and no bound was relaxed. A fix needs one program with two inputs, or a chained program. `ane-run` has run neither.
+- Test: `tests/test_h14_exp_arithmetic.py` needs NumPy, which no other test here uses. It runs as `make test-h14-exp-model` and is not part of `make test`, so a host without NumPy still passes the suite.
 
 ### 2026-10-12
 - Test: `tests/test_h13_matvec_programs.py` compiles H13 fp16 matvecs at K=N=256, 512, and 1024 and pins program count, sizes, and the 640-byte header/task prefix. The geometries emit 1, 1, and 5 programs. Two weight sets keep each prefix stable while changing matmul constants. Wired into `make test-h13-parity`.

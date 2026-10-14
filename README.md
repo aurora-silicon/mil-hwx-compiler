@@ -171,6 +171,7 @@ You can use it to make reference outputs without a device.
 | `make test-h13` | H13 encoding, serialization, and the CLI, host-only |
 | `make test-h13-parity` | H13 output byte-equal to decoded Apple oracles. 891 cases at v0.1.0 |
 | `make test-h14-parity` | H14 output byte-equal to decoded Apple oracles. 718 cases at v0.1.0 |
+| `make test-h14-exp-model` | A model of the H14 `exp` program against saved M2 Max output. Needs NumPy, so it is not part of `make test` |
 | `make test-h17-parity`, `make test-h18-parity` | H17/H18 elementwise, unary and scalar-constant HWX byte-equal to decoded Apple oracles, plus named refusals. 165 cases each. Not device-run |
 | `scripts/verify-linux-compiler.sh all` | Build, software tests, emission, and hygiene on Linux |
 | `make test` | The full macOS suite |
