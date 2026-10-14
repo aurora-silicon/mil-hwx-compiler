@@ -11,11 +11,19 @@ record names. `tests/test_h14_parity.py` proves the emitted task words, constant
 `tests/test_h14_exp_chain_cli.py` proves that only the decoded form takes this path. The program file is one ANEC (`prog/expone_c<C>.anec`, 4736 bytes). `build-expchain.py` writes it and the input,
 and `SHA256SUMS-inputs` lists their sha256. The input x is the saved input of the failed run, byte for byte. Every surface is fp16 (1, C, 1, 1) with one value per 64-byte channel.
 
-## What is not known
-Apple folded the scalar constants into task words. In the record, the first task is the exp program with its scale word 0x3dc5. The second task carries fp16 16 K, 16.0 and 1.0 in PE register words,
-and the third carries 0.0625. What each task computes, and in what precision, is not decoded. The arithmetic may not be that of five separate programs: a task may round once, or in a wider format, and the
-product may round differently. The minted record shows the task words and nothing of the numerics. This cell does not predict that the bound is met. Only a run shows it.
+## What is decoded, and what is not
+Apple folded the scalar constants into task words. In the record, the first task is the failed exp program: its NE and tile blocks, scale word 0x3dc5 and 128-byte table equal the unary exp program's.
+Only its routing differs, since its output goes to L2. The second task carries two PE words, 0x904 = {1.0, 16.0} and 0x908 = {16 K, 0}. The third carries the op word of the tensor-by-tensor mul and a post multiplier
+0.0625. Reading a PE word as {multiplier, addend} is an inference from two scalar-constant records (add 0.5 and mul 0.5). It is not hardware documentation.
+Not decoded: the order of the two slots in the second task, the internal precision of a slot or of the mul, and the routing between tasks. The arithmetic may not be that of five separate programs.
 No stage output exists, so no stage criterion applies. The five-call chain's stage arithmetic is not assumed to carry over.
+
+## Bounds from models, not predictions
+This cell does not predict that the bound is met. Models of the fused tasks bound the outcome on the registered inputs, using the saved device output of the exp program. They are not evidence about the hardware.
+- If the fused slots round to nearest, in one rounding or two, the result equals the five-call chain's: a largest error of 0.2825 percent at 64 channels and 0.3476 percent at 512, against 0.3906.
+- If they round toward zero, 32 lanes at 64 channels and 250 at 512 change, and the largest error stays inside the bound (0.2838 and 0.3450 percent).
+- A systematic one-ulp bias of the sum 16 + 16 K x would fail at 512 channels: 3 lanes outside for one ulp up (0.4187 percent) and 2 for one ulp down (0.3997 percent). The 512-channel slack is 0.043 percent.
+A pass would show that the fused task rounds like one of the first two models on these lanes, and nothing more.
 
 ## How it runs
 `run-expchain.sh` on an M2 Max (T6021) under Linux, through `ane-run` without `--check`, one call per size reading x and writing y. Per size: 20 calls with `--time`, then a back-to-back loop of about 30 seconds.

@@ -10,7 +10,8 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   emits the three-task program Apple's compiler produced for it, in ANEC and HWX form, under the per-op and the chain schedule. `research/oracles/h14/chain_exp_d4_c64.json` and `_c512.json` are the
   decoded records, minted compile-only on a macOS Mac with a compiler build that differs from the one the older H14 records name (the older build is gone; the identity of the one used is in each record).
   `tests/test_h14_parity.py` proves the task words, constant section, descriptors and tensors equal the records (720 cases now, 2 of them this program). `tests/test_h14_exp_chain_cli.py` proves that only the
-  decoded form takes the path: 8 changed forms (constant, order, size, operation) leave it, and mutants of the matcher are caught except two that the compiler's other checks make equivalent.
+  decoded form takes the path: 8 changed forms (constant, order, size, operation) leave it, and mutants of the matcher are caught except two. The product's second operand check changes nothing, because the dataflow rules already force it. The channel-support check changes
+  only the refusal text for an unmatched size, and under the chain schedule the code path that refuses.
   The mint cases are in `research/mint_oracles.py`, and `tests/test_exp_scaled_chain_case.py` pins their constants.
   Not a device result: Apple folded the scalar constants into task words, so the arithmetic of the one program is not the arithmetic of the five-call chain, and only a run shows whether it meets the exp bound.
   The cell for that run is prepared in `receipts/2026-10-14-h14-exp-scaled-one-anec-m2/` (preregistration, gate, run script). No device run and no speed claim.
