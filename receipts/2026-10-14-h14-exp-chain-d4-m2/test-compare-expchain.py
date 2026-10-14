@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "compare-expchain.py"
 UNARY = HERE.parent / "2026-10-13-h14-unary-m2"
 SUMS = HERE / "SHA256SUMS-inputs"
-CONSTANTS = {"k8": 0x1718, "eight": 0x4800, "eighth": 0x3000}
+CONSTANTS = {"k16": 0x1b18, "sixteen": 0x4c00, "sixteenth": 0x2c00}
 STRIDE = 32
 STAGES = ("s1_e", "s2_c", "s3_g", "s4_p", "s5_y")
 PROG = {"s1_e": "exp", "s2_c": "mul", "s3_g": "add", "s4_p": "mul", "s5_y": "mul"}
@@ -32,7 +32,7 @@ def sums():
 
 
 def results_text(rundir):
-    """A clean results.txt for the files in rundir: identity lines, eight stages, output hashes, SUMMARY."""
+    """A clean results.txt for the files in rundir: identity lines, ten stages, output hashes, SUMMARY."""
     s = sums()
     lines = ["H14 exp chain cell start=2026-10-14T00:00:00Z kernel=test target_s=30",
              "chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a", "other_ane_run_before=0"]
@@ -57,7 +57,7 @@ def fixture(root, corrected=True):
         (indir / f"x_c{c}.f16").write_bytes(x_bytes)
         for name, bits in CONSTANTS.items():
             k = np.zeros(len(x_bytes) // 2, dtype=np.float16)
-            k[::STRIDE][:c] = np.array([bits], dtype=np.uint16).view(np.float16)[0] if (corrected or name != "k8") else 0
+            k[::STRIDE][:c] = np.array([bits], dtype=np.uint16).view(np.float16)[0] if (corrected or name != "k16") else 0
             (indir / f"{name}_c{c}.f16").write_bytes(k.tobytes())
         e = np.fromfile(UNARY / "device-output" / f"unary_exp_c{c}.cal.y.f16", dtype=np.float16)
         write_chain(indir, rundir, c, e)
@@ -68,11 +68,11 @@ def fixture(root, corrected=True):
 def write_chain(indir, rundir, c, e):
     """Write s1 = e and the s2 to s5 outputs computed from it with correctly rounded fp16 arithmetic."""
     f = lambda name: np.fromfile(indir / f"{name}_c{c}.f16", dtype=np.float16).astype(np.float64)  # noqa: E731
-    x, k8, eight, eighth = f("x"), f("k8"), f("eight"), f("eighth")
-    cc = (x * k8).astype(np.float16)
-    g = (cc.astype(np.float64) + eight).astype(np.float16)
+    x, k16, sixteen, sixteenth = f("x"), f("k16"), f("sixteen"), f("sixteenth")
+    cc = (x * k16).astype(np.float16)
+    g = (cc.astype(np.float64) + sixteen).astype(np.float16)
     pp = (e.astype(np.float64) * g.astype(np.float64)).astype(np.float16)
-    y = (pp.astype(np.float64) * eighth).astype(np.float16)
+    y = (pp.astype(np.float64) * sixteenth).astype(np.float16)
     for stage, data in (("s1_e", e), ("s2_c", cc), ("s3_g", g), ("s4_p", pp), ("s5_y", y)):
         for run in ("cal", "long"):
             (rundir / f"exp_c{c}.{stage}.{run}.y.f16").write_bytes(data.tobytes())
@@ -147,8 +147,8 @@ def checks(script):
 
     # numerical
     case("a well-formed corrected run passes", True)
-    case("the same run without the correction (k8 = 0) fails", False, corrected=False)
-    case("k8 = 0 is refused as an input, not only by the bound", False, corrected=False, needle="k8 is not fp16")
+    case("the same run without the correction (k16 = 0) fails", False, corrected=False)
+    case("k16 = 0 is refused as an input, not only by the bound", False, corrected=False, needle="k16 is not fp16")
     case("a different x file fails", False, lambda i, r: edit(i / "x_c512.f16", lambda d: d.__setitem__(STRIDE * 5, np.float16(1.5))), needle="saved input")
     case("an x file that differs only in padding fails", False, lambda i, r: edit(i / "x_c64.f16", lambda d: d.__setitem__(7, np.float16(1.0))), needle="saved input")
     case("a missing output file fails", False, lambda i, r: (r / "exp_c512.s3_g.long.y.f16").unlink(), needle="missing")
@@ -163,6 +163,8 @@ def checks(script):
          lambda i, r: both(r, 512, "s5_y", lambda d: d.__setitem__(STRIDE * 40, np.nextafter(d[STRIDE * 40], np.float16(np.inf)))), needle="s5_y")
     case("a stage s3 lane off by one ulp fails the stage check", False,
          lambda i, r: both(r, 512, "s3_g", lambda d: d.__setitem__(STRIDE * 40, np.nextafter(d[STRIDE * 40], np.float16(np.inf)))), needle="s3_g")
+    case("a negative zero where ties to even gives a positive zero fails (x = 0 at lane 0)", False,
+         lambda i, r: both(r, 64, "s2_c", lambda dd: dd.__setitem__(0, np.float16(-0.0))), needle="s2_c: 1 lane")
     case("x = 0 at lane 0: a nonzero c there fails the exact rule", False,
          lambda i, r: both(r, 512, "s2_c", lambda d: d.__setitem__(0, np.float16(2.0 ** -24))), needle="s2_c")
     def half_away_at_a_tie(indir, rundir):
@@ -172,7 +174,7 @@ def checks(script):
         spec.loader.exec_module(ce)
         g = np.fromfile(rundir / "exp_c64.s3_g.cal.y.f16", dtype=np.float16)[::STRIDE][:64].astype(np.float64)
         for j in range(64):
-            for bits in range(0x3C00, 0x4800):
+            for bits in range(0x3C00, 0x4c00):
                 a = float(np.array([bits], dtype=np.uint16).view(np.float16)[0])
                 prod = np.array([a * g[j]])
                 if ce.half_away(prod)[0] != prod.astype(np.float16).astype(np.float64)[0]:
@@ -181,7 +183,7 @@ def checks(script):
                     write_chain(indir, rundir, 64, e)
                     away = np.float16(ce.half_away(prod)[0])
                     both(rundir, 64, "s4_p", lambda dd: dd.__setitem__(STRIDE * j, away))
-                    both(rundir, 64, "s5_y", lambda dd: dd.__setitem__(STRIDE * j, np.float16(float(away) * 0.125)))
+                    both(rundir, 64, "s5_y", lambda dd: dd.__setitem__(STRIDE * j, np.float16(float(away) * 0.0625)))
                     return
         raise AssertionError("no exact midpoint found")
 
@@ -279,8 +281,8 @@ def mutants():
                                                                    ('if cu.BOUNDS.get("exp") != ("rel", 2.0 ** -8) or cu.FLOOR != 2.0 ** -24:', "if False:")]),
         ("stage check skipped", "        if bad:\n            problems.append(f\"{stage}: {bad} lane(s) differ", "        if False:\n            problems.append(f\"{stage}: {bad} lane(s) differ"),
         ("stage check against the wrong inputs (s4 from x)", '("s4_p", pp, e * g)', '("s4_p", pp, x * g)'),
-        ("stage s3 against c + eighth", '("s3_g", g, cc + eight)', '("s3_g", g, cc + eighth)'),
-        ("stage s5 against p * eight", '("s5_y", y, pp * eighth)', '("s5_y", y, pp * eight)'),
+        ("stage s3 against c + sixteenth", '("s3_g", g, cc + sixteen)', '("s3_g", g, cc + sixteenth)'),
+        ("stage s5 against p * sixteen", '("s5_y", y, pp * sixteenth)', '("s5_y", y, pp * sixteen)'),
         ("cal/long identity not checked", "        if a.tobytes() != b.tobytes():", "        if False:"),
         ("padding not checked", "        if pad:\n            problems.append(f\"{stage}: {pad}", "        if False:\n            problems.append(f\"{stage}: {pad}"),
         ("non-finite not checked", "        if not np.isfinite(lanes(a, c).astype(np.float64)).all():", "        if False:"),
@@ -289,8 +291,10 @@ def mutants():
         ("constants not checked", "        if not np.array_equal(lanes(const[k], c).view(np.uint16), np.full(c, bits, dtype=np.uint16)) or padding_nonzero(const[k], c):", "        if False:"),
         ("missing files tolerated", "        if gone:\n            problems.append", "        if False:\n            problems.append"),
         ("wrong output size tolerated", "        if len(a) != tile_halves:", "        if False:"),
-        ("zero lane compared with a tolerance", "bad = int(np.count_nonzero(got != rounded(want).astype(np.float64)))",
-         "bad = int(np.count_nonzero(np.abs(got - rounded(want).astype(np.float64)) > 1e-3))"),
+        ("zero lane compared with a tolerance", "differ = lanes(surfaces[stage], c).view(np.uint16) != rounded(want).view(np.uint16)",
+         "differ = np.abs(got - rounded(want).astype(np.float64)) > 1e-3"),
+        ("the sign of a zero ignored", "differ = lanes(surfaces[stage], c).view(np.uint16) != rounded(want).view(np.uint16)",
+         "differ = got != rounded(want).astype(np.float64)"),
         ("median limit raised to 0.69", limits, limits.replace("0.60", "0.69")),
         ("duty limit lowered to 85", limits, limits.replace("90.0, 900", "85.0, 900")),
         ("wall limit raised to 1000", limits, limits.replace("900.0", "1000.0")),

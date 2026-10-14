@@ -7,10 +7,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ### 2026-10-14
 - Prepared, not run: `receipts/2026-10-14-h14-exp-chain-d4-m2/` holds a scaled form of the exp chain for an M2 Max. The first chain failed criterion 3 on 21 stage lanes. This
-  design uses the same three programs in five calls: c = x * 8K, g = c + 8, p = e * g, y = p * 0.125. Scaling by a power of two is exact, so no stage value falls where the
+  design uses the same three programs in five calls: c = x * 16K, g = c + 16, p = e * g, y = p * 0.0625. Scaling by a power of two is exact, so no stage value falls where the
   first run's device rounding differed from ties to even. That is a design chosen from one run, not an established fact for other data. The frozen criteria are unchanged:
   ties-to-even stage results with no tolerance, the original 2^-8 bound with its 2^-24 floor, and the original input. The prediction from the saved device output is a largest error
-  of 0.283 percent at 64 channels and 0.348 percent at 512, against a bound of 0.391. The gate has 51 checks and 41 broken copies, and the run script has 10. Nothing ran on a device.
+  of 0.283 percent at 64 channels and 0.348 percent at 512, against a bound of 0.391. The gate has 52 checks and 42 broken copies, and the run script has 10. Nothing ran on a device.
   Five calls are not a speedup.
 
 ### 2026-10-13

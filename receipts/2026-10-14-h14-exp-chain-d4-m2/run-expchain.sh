@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # H14 exp with the scale correction in scaled form (design D4): five calls chained on the host (64 and 512 channels), on the M2 Max.
 #   s1 e  = exp(x)       unary exp program, input x
-#   s2 c  = x * k8       elementwise mul program, inputs x and k8 (k8 = 8 K in every lane, exact)
-#   s3 g  = c + eight    elementwise add program, inputs c and eight (8.0 in every lane); g is 8 (1 + K x) carried at the same relative rounding
+#   s2 c  = x * k16       elementwise mul program, inputs x and k16 (k16 = 16 K in every lane, exact)
+#   s3 g  = c + sixteen    elementwise add program, inputs c and sixteen (16.0 in every lane); g is 16 (1 + K x) carried at the same relative rounding
 #   s4 p  = e * g        elementwise mul program, inputs e and g
-#   s5 y  = p * eighth   elementwise mul program, inputs p and eighth (0.125 in every lane); an exact scaling
+#   s5 y  = p * sixteenth   elementwise mul program, inputs p and sixteenth (0.0625 in every lane); an exact scaling
 # The host only copies bytes: the output file of one stage is the input file of the next, unchanged. Each stage is one ane-run call.
 # Per stage: a 20-call calibration with --time, then a back-to-back loop sized to about TARGET_S seconds from the calibration median.
 # The whole run stops at DEADLINE_S (900 s): every timeout is capped to the time left. The next stage reads the calibration output of the earlier ones. A stage whose calibration or long loop fails stops the chain for that size.
@@ -33,6 +33,7 @@ pass=0; fail=0; skipped=0
 # stage NAME PROGRAM INPUT_FILE... : calibration, then loop. Output files: $OUT/NAME.cal.y.f16 and NAME.long.y.f16.
 # Run one ane-run call under timeout -k: TERM at the limit, KILL 2 s later if it ignores TERM (so a call can run at most 2 s past its limit).
 # The call runs in the background and the script waits for it, so a TERM, INT or HUP sent to this script reaches the call too.
+# GNU timeout (9.1 here, 9.11 on the M2) sends its signal to its whole process group and then arms the -k KILL, also when it is the wrapper that is signalled.
 CHILD=""
 on_signal() {
   if [ -n "${CHILD:-}" ]; then kill -TERM "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; fi
@@ -93,10 +94,10 @@ for c in $SIZES; do
   P="$ROOT/prog"; I="$ROOT/in"
   printf '\n######## %s channels ########\n' "$c"
   stage "exp_c$c.s1_e"  "$P/exp_c$c.anec" "$I/x_c$c.f16" || continue
-  stage "exp_c$c.s2_c"  "$P/mul_c$c.anec" "$I/x_c$c.f16" "$I/k8_c$c.f16" || continue
-  stage "exp_c$c.s3_g"  "$P/add_c$c.anec" "$OUT/exp_c$c.s2_c.cal.y.f16" "$I/eight_c$c.f16" || continue
+  stage "exp_c$c.s2_c"  "$P/mul_c$c.anec" "$I/x_c$c.f16" "$I/k16_c$c.f16" || continue
+  stage "exp_c$c.s3_g"  "$P/add_c$c.anec" "$OUT/exp_c$c.s2_c.cal.y.f16" "$I/sixteen_c$c.f16" || continue
   stage "exp_c$c.s4_p"  "$P/mul_c$c.anec" "$OUT/exp_c$c.s1_e.cal.y.f16" "$OUT/exp_c$c.s3_g.cal.y.f16" || continue
-  stage "exp_c$c.s5_y"  "$P/mul_c$c.anec" "$OUT/exp_c$c.s4_p.cal.y.f16" "$I/eighth_c$c.f16" || continue
+  stage "exp_c$c.s5_y"  "$P/mul_c$c.anec" "$OUT/exp_c$c.s4_p.cal.y.f16" "$I/sixteenth_c$c.f16" || continue
 done
 b1=$(busy); t1=$(date +%s.%N)
 printf '\nother_ane_run_after=%s\n' "$(others)"

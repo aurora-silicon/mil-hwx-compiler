@@ -2,16 +2,16 @@
 """Judge the saved output of the scaled exp chain cell (design D4) off the device.
 
 Usage: compare-expchain.py INDIR RUNDIR [--unary-dir DIR] [--sums FILE]
-INDIR holds x_c<C>.f16, k8_c<C>.f16, eight_c<C>.f16 and eighth_c<C>.f16 (build-expchain.py writes them). RUNDIR holds results.txt and, for C in 64 and 512
+INDIR holds x_c<C>.f16, k16_c<C>.f16, sixteen_c<C>.f16 and sixteenth_c<C>.f16 (build-expchain.py writes them). RUNDIR holds results.txt and, for C in 64 and 512
 and each stage s1_e, s2_c, s3_g, s4_p, s5_y, the files exp_c<C>.<stage>.cal.y.f16 and exp_c<C>.<stage>.long.y.f16 that run-expchain.sh kept. DIR is the unary
 receipt directory whose compare-unary.py holds the exp reference and the preregistered bound; it is imported, not copied.
 FILE (default SHA256SUMS-inputs beside this script) lists the sha256 of the six programs. The gate checks them against results.txt.
 Numerical criteria, for each size (a missing file, size or size mismatch fails):
-  0. The inputs are the registered ones: x is the saved input of the failed run, byte for byte; k8 is fp16 0x1718 (8 K), eight is 0x4800 (8.0) and eighth is
-     0x3000 (0.125), each in every lane with zero padding.
+  0. The inputs are the registered ones: x is the saved input of the failed run, byte for byte; k16 is fp16 0x1b18 (16 K), sixteen is 0x4c00 (16.0) and sixteenth is
+     0x2c00 (0.0625), each in every lane with zero padding.
   1. Each output has zero padding and no NaN or infinity, and its calibration and loop files are bit-identical.
-  2. Stages s2 to s5 equal the correctly rounded fp16 result of their own saved inputs, lane by lane: s2 = x * k8, s3 = c + eight, s4 = e * g,
-     s5 = p * eighth, where e, c, g and p are the saved outputs of s1 to s4 (the host only copied them). Zero compares equal to negative zero.
+  2. Stages s2 to s5 equal the correctly rounded fp16 result of their own saved inputs, lane by lane: s2 = x * k16, s3 = c + sixteen, s4 = e * g,
+     s5 = p * sixteenth, where e, c, g and p are the saved outputs of s1 to s4 (the host only copied them). A zero is compared by its fp16 bits: a negative zero where ties to even gives a positive zero fails.
   2b. A stage that fails criterion 2 lists up to 10 differing lanes: index, the two inputs, the ties-to-even result, the device result and whether the lane is an
      exact midpoint. The midpoint flag is a diagnostic. It never turns a failure into a pass.
   3. The final output s5 meets the exp bound (relative 2^-8 plus the absolute floor of one fp16 subnormal, 2^-24) against exp(x) in float64, on
@@ -40,7 +40,7 @@ PIN_UNARY_SHA256 = "1c827f76cb07217cc2ec24350b8aac00917f1443ecf82c4108ba818b82a1
 PIN_X_SHA256 = {64: "6b29533c770b00d1a04a6bb5aeb6cd80f4fe9053b3ffd4f6aff37cd9f80cd230", 512: "f03fecef7615ca1417dbbeb8595c3602f9194553360ed8d308857fec5b8c7d19"}
 CHIP = "t6021"
 PROGRAM_OF_STAGE = {"s1_e": "exp", "s2_c": "mul", "s3_g": "add", "s4_p": "mul", "s5_y": "mul"}
-CONSTANTS = {"k8": 0x1718, "eight": 0x4800, "eighth": 0x3000}  # fp16 8 K (K = 0x0b18, the relative error of the scale word 0x3dc5), 8.0 and 0.125
+CONSTANTS = {"k16": 0x1b18, "sixteen": 0x4c00, "sixteenth": 0x2c00}  # fp16 16 K (K = 0x0b18, the relative error of the scale word 0x3dc5), 16.0 and 0.0625
 
 
 def load_unary(unary_dir):
@@ -117,15 +117,15 @@ def check_size(c, indir, rundir, cu):
     if len(surfaces) < len(STAGES):
         return problems, notes
     x = lanes(x_s, c).astype(np.float64)
-    k8, eight, eighth = (lanes(const[k], c).astype(np.float64) for k in ("k8", "eight", "eighth"))
+    k16, sixteen, sixteenth = (lanes(const[k], c).astype(np.float64) for k in ("k16", "sixteen", "sixteenth"))
     e, cc, g, pp, y = (lanes(surfaces[s], c).astype(np.float64) for s in STAGES)
-    operands = {"s2_c": (x, k8, "*"), "s3_g": (cc, eight, "+"), "s4_p": (e, g, "*"), "s5_y": (pp, eighth, "*")}
-    for stage, got, want in (("s2_c", cc, x * k8), ("s3_g", g, cc + eight), ("s4_p", pp, e * g), ("s5_y", y, pp * eighth)):
-        bad = int(np.count_nonzero(got != rounded(want).astype(np.float64)))
+    operands = {"s2_c": (x, k16, "*"), "s3_g": (cc, sixteen, "+"), "s4_p": (e, g, "*"), "s5_y": (pp, sixteenth, "*")}
+    for stage, got, want in (("s2_c", cc, x * k16), ("s3_g", g, cc + sixteen), ("s4_p", pp, e * g), ("s5_y", y, pp * sixteenth)):
+        differ = lanes(surfaces[stage], c).view(np.uint16) != rounded(want).view(np.uint16)  # fp16 bits, so the sign of a zero counts
+        bad = int(np.count_nonzero(differ))
         notes.append(f"{stage}: {c - bad} of {c} lanes equal the correctly rounded result")
         if bad:
             problems.append(f"{stage}: {bad} lane(s) differ from the correctly rounded result of the saved inputs")
-            differ = got != rounded(want).astype(np.float64)
             midpoint = (half_away(want) != rounded(want).astype(np.float64)) & (got == half_away(want))
             notes.append(f"{stage}: of the {bad} differing lane(s), {int(np.count_nonzero(differ & midpoint))} are exact midpoints where the device gave "
                          "the half-away result (a rounding-rule difference, still a criterion 3 failure)")

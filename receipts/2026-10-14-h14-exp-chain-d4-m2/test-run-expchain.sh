@@ -10,7 +10,7 @@ bad() { echo "FAIL $1"; fails=$((fails + 1)); }
 mkdir -p "$T/root/prog" "$T/root/in"
 for c in 64 512; do
   for p in exp mul add; do echo "prog-$p-$c" > "$T/root/prog/${p}_c$c.anec"; done
-  for n in x k8 eight eighth; do echo "$n" > "$T/root/in/${n}_c$c.f16"; done
+  for n in x k16 sixteen sixteenth; do echo "$n" > "$T/root/in/${n}_c$c.f16"; done
 done
 echo "busy_ns 1000" > "$T/stats"
 printf '#!/usr/bin/env bash\necho "${FAKE_PGREP_COUNT:-0}"\n' > "$T/pgrep"; chmod +x "$T/pgrep"
@@ -36,11 +36,11 @@ wiring() {  # checks of which file feeds which stage, from the fake runner's log
   local out=$1 c I="$T/root/in"
   for c in 64 512; do
     grep -q "repeat=20 prog=exp_c$c.anec ins=$I/x_c$c.f16\$" "$T/log" || { bad "s1 c$c does not read x only"; continue; }
-    grep -q "repeat=20 prog=mul_c$c.anec ins=$I/x_c$c.f16 $I/k8_c$c.f16\$" "$T/log" || { bad "s2 c$c does not read x and k8"; continue; }
-    grep -q "repeat=20 prog=add_c$c.anec ins=$out/exp_c$c.s2_c.cal.y.f16 $I/eight_c$c.f16\$" "$T/log" || { bad "s3 c$c does not add eight to the s2 output"; continue; }
+    grep -q "repeat=20 prog=mul_c$c.anec ins=$I/x_c$c.f16 $I/k16_c$c.f16\$" "$T/log" || { bad "s2 c$c does not read x and k16"; continue; }
+    grep -q "repeat=20 prog=add_c$c.anec ins=$out/exp_c$c.s2_c.cal.y.f16 $I/sixteen_c$c.f16\$" "$T/log" || { bad "s3 c$c does not add sixteen to the s2 output"; continue; }
     grep -q "repeat=20 prog=mul_c$c.anec ins=$out/exp_c$c.s1_e.cal.y.f16 $out/exp_c$c.s3_g.cal.y.f16\$" "$T/log" || { bad "s4 c$c does not multiply the s1 and s3 outputs"; continue; }
-    grep -q "repeat=20 prog=mul_c$c.anec ins=$out/exp_c$c.s4_p.cal.y.f16 $I/eighth_c$c.f16\$" "$T/log" || { bad "s5 c$c does not scale the s4 output by eighth"; continue; }
-    ok "c$c wiring: x -> s1; x,k8 -> s2; s2,eight -> s3; s1,s3 -> s4; s4,eighth -> s5"
+    grep -q "repeat=20 prog=mul_c$c.anec ins=$out/exp_c$c.s4_p.cal.y.f16 $I/sixteenth_c$c.f16\$" "$T/log" || { bad "s5 c$c does not scale the s4 output by sixteenth"; continue; }
+    ok "c$c wiring: x -> s1; x,k16 -> s2; s2,sixteen -> s3; s1,s3 -> s4; s4,sixteenth -> s5"
   done
 }
 
@@ -102,13 +102,18 @@ term_check() {
   local script=${SCRIPT:-$HERE/run-expchain.sh} sup rpid
   : > "$T/log"; rm -f "$T/runner.pid"
   FAKE_LOG="$T/log" FAIL_PROG=none FAIL_NINS=9 ROOT="$T/root" RUNNER="$T/runner" PGREP="$T/pgrep" STATS="$T/stats" TARGET_S=30 \
-    FAKE_PID_FILE="$T/runner.pid" FAKE_IGNORE_TERM=1 FAKE_SLEEP=60 bash "$script" >/dev/null 2>&1 &
+    FAKE_PID_FILE="$T/runner.pid" FAKE_IGNORE_TERM=1 FAKE_SLEEP=61.37 bash "$script" >/dev/null 2>&1 &
   sup=$!
   for _ in $(seq 1 40); do [ -s "$T/runner.pid" ] && break; sleep 0.25; done
   rpid=$(cat "$T/runner.pid" 2>/dev/null || echo 0)
   kill -TERM "$sup" 2>/dev/null
-  sleep 4
-  if [ "$rpid" -gt 0 ] && kill -0 "$rpid" 2>/dev/null; then bad "the call was still running after TERM to the script (pid $rpid)"; kill -KILL "$rpid" 2>/dev/null; else ok "a TERM sent to the script ends the running call"; fi
+  local t0 waited=0
+  t0=$(date +%s)
+  while kill -0 "$sup" 2>/dev/null && [ $(( $(date +%s) - t0 )) -lt 8 ]; do sleep 0.25; done
+  waited=$(( $(date +%s) - t0 ))
+  if kill -0 "$sup" 2>/dev/null; then bad "the script was still running ${waited}s after TERM"; else ok "a TERM sent to the script ends the script within 8 s (took ${waited}s)"; fi
+  if [ "$rpid" -gt 0 ] && kill -0 "$rpid" 2>/dev/null; then bad "the call was still running after TERM to the script (pid $rpid)"; kill -KILL "$rpid" 2>/dev/null; else ok "a TERM sent to the script ends the running call, which ignores TERM"; fi
+  if pgrep -f "sleep 61.37" >/dev/null 2>&1; then bad "a child of the call is still running after TERM to the script"; pkill -KILL -f "sleep 61.37" 2>/dev/null; else ok "no child of the call survives the abort"; fi
   kill -KILL "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
 }
 term_check
@@ -134,15 +139,15 @@ if [ -n "${HARMLESS_MUTANT:-}" ]; then  # self-test of this test: a mutant that 
   mut "harmless comment edit (self-test)" 's|^# The host only copies bytes|# The host copies only bytes|'
 fi
 mut "s4 reads x instead of the s1 output" 's|"\$OUT/exp_c\$c.s1_e.cal.y.f16" "\$OUT/exp_c\$c.s3_g.cal.y.f16"|"$I/x_c$c.f16" "$OUT/exp_c$c.s3_g.cal.y.f16"|'
-mut "s5 scales with k8 instead of eighth" 's|"\$I/eighth_c\$c.f16"|"$I/k8_c$c.f16"|'
-mut "s3 adds eighth instead of eight" 's|"\$I/eight_c\$c.f16"|"$I/eighth_c$c.f16"|'
+mut "s5 scales with k16 instead of sixteenth" 's|"\$I/sixteenth_c\$c.f16"|"$I/k16_c$c.f16"|'
+mut "s3 adds sixteenth instead of sixteen" 's|"\$I/sixteen_c\$c.f16"|"$I/sixteenth_c$c.f16"|'
 mut "s3 uses the mul program" 's|"\$P/add_c\$c.anec"|"$P/mul_c$c.anec"|'
 mut "output hashes not written" 's|OUTPUT_SHA256|NOHASH|'
 mut "other ane-run count not recorded" 's|other_ane_run_after=%s|ignored_after=%s|'
 mut "stage timeouts not capped by the deadline" 's|run_timed \$((rem < 90 ? rem : 90))|run_timed 90|'
 mut "no kill-after on the timeout" 's|timeout -k 2 "\$limit"|timeout "$limit"|'
 mut "no signal trap" 's|^trap on_signal TERM INT HUP$|:|'
-mut "s2 uses the add program" 's|"\$P/mul_c\$c.anec" "\$I/x_c\$c.f16" "\$I/k8_c\$c.f16"|"$P/add_c$c.anec" "$I/x_c$c.f16" "$I/k8_c$c.f16"|'
+mut "s2 uses the add program" 's|"\$P/mul_c\$c.anec" "\$I/x_c\$c.f16" "\$I/k16_c\$c.f16"|"$P/add_c$c.anec" "$I/x_c$c.f16" "$I/k16_c$c.f16"|'
 if [ -z "${HARMLESS_MUTANT:-}" ]; then
   # run this test again with one surviving mutant added: it must exit nonzero
   HARMLESS_MUTANT=1 bash "$0" >"$T/selftest.out" 2>&1; rc=$?

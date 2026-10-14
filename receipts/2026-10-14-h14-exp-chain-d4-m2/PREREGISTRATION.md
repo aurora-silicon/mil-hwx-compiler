@@ -5,16 +5,19 @@ differed from the ties-to-even result. That failure stands, and so does the orig
 
 ## Why a new design
 The first chain differed from ties-to-even on two kinds of lane. 6 lanes were exact midpoints where the device gave the half-away result. 15 were mul results in the fp16 subnormal range,
-which the device rounded one step larger in magnitude. This design changes the arithmetic so that, on the registered inputs, no stage value falls in either case. It does not change a criterion.
-It is a design change fitted to what one run showed. Whether it holds on other data or other shapes is not established.
+which the device rounded one step larger in magnitude. This design changes the arithmetic so that, on the registered inputs, no stage has a lane where ties-to-even and half-away differ, and none has a subnormal result.
+It does not change a criterion. It is a design change fitted to what one run showed. Whether it holds on other data or other shapes is not established.
+On the registered inputs, checked offline: s2 has 2 exact-midpoint lanes at 512 channels (x = 4.25 and x = -6.5). Ties-to-even and half-away give the same value there, so they do not test the rule.
+s3, s4 and s5 have no midpoint lane at either size, and no stage has a subnormal result. The smallest nonzero |x| is 0.0265, so |x * k16| is at least 9.2e-5, above 2^-14.
+With 8 K in place of 16 K, two s2 lanes would be subnormal (x = 0.0311 at 64 channels and x = 0.0265 at 512). That is why the factor is 16.
 
 ## What runs
 The same three programs as the first chain (exp, mul, add; same bytes), chained on the host. The host copies bytes and does no arithmetic. Five calls per size, at 64 and 512 channels.
 1. s1: `e = exp(x)`, the program of the failed run.
-2. s2: `c = x * k8`, mul. k8 = 8 K = fp16 0x1718 in every lane. K = 0x0b18 is the relative error of the scale word 0x3dc5. Multiplying K by 8 is exact.
-3. s3: `g = c + eight`, add. eight = 8.0 (0x4800) in every lane. g is 8 (1 + K x), rounded at the same relative step as 1 + K x would be, since 8 is a power of two.
-4. s4: `p = e * g`, mul. p is 8 e (1 + K x), at most 23856 for x in [-8, 8], below the fp16 limit.
-5. s5: `y = p * eighth`, mul. eighth = 0.125 (0x3000) in every lane. This scaling is exact because y is at least 3.3e-4, which is a normal fp16 value.
+2. s2: `c = x * k16`, mul. k16 = 16 K = fp16 0x1b18 in every lane. K = 0x0b18 is the relative error of the scale word 0x3dc5. Multiplying K by 16 is exact.
+3. s3: `g = c + sixteen`, add. sixteen = 16.0 (0x4c00) in every lane. g is 16 (1 + K x), rounded at the same relative step as 1 + K x would be, since 16 is a power of two.
+4. s4: `p = e * g`, mul. p is 16 e (1 + K x). It is at most 47712 on the registered lanes and about 47776 over all fp16 inputs in [-8, 8] with an exact exp, below the fp16 limit of 65504.
+5. s5: `y = p * sixteenth`, mul. sixteenth = 0.0625 (0x2c00) in every lane. This scaling is exact because y is at least 3.3e-4, which is a normal fp16 value.
 The input x is the saved input of the failed run, byte for byte. `build-expchain.py` writes the programs and inputs and lists their sha256 in `SHA256SUMS-inputs`.
 Every surface is fp16 (1, C, 1, 1) with one value per 64-byte channel, as in the first chain.
 
@@ -24,11 +27,11 @@ A stage whose calibration or long loop fails stops that size, and nothing is rer
 A TERM, INT or HUP sent to the script ends the running call and is recorded. The run needs the ANE to itself: the script counts other `ane-run` processes before and after, and the gate requires 0 and 0.
 Ten stage runs take about 5.5 minutes.
 
-## Criteria (all frozen; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 51 checks and 41 broken copies)
+## Criteria (all frozen; `compare-expchain.py` judges, `test-compare-expchain.py` tests it against 52 checks and 42 broken copies)
 Numerical, for 64 and 512 channels. They are the criteria of the first chain, with the stage list extended:
-1. x, k8, eight and eighth are the registered inputs. The sha256 of x is pinned. Each constant is its fp16 value in every lane with zero padding.
+1. x, k16, sixteen and sixteenth are the registered inputs. The sha256 of x is pinned. Each constant is its fp16 value in every lane with zero padding.
 2. Every output has zero padding and no NaN or infinity, and its calibration and loop files are bit-identical.
-3. s2, s3, s4 and s5 each equal the correctly rounded fp16 result of their own saved inputs on every lane. The rounding is ties to even, and zero is compared exactly.
+3. s2, s3, s4 and s5 each equal the correctly rounded fp16 result of their own saved inputs on every lane. The rounding is ties to even, and the comparison is on fp16 bits, so the sign of a zero counts.
    There is no tolerance, no lane-specific exception and no acceptance of the half-away result. A device that gives it at a midpoint fails this criterion.
 4. The final output s5 is within a relative error of 2^-8 of exp(x) on every lane, plus the absolute floor 2^-24 that the gate of the failed run used. The bound did not change.
    The gate asserts both values and pins the sha256 of the `compare-unary.py` it imports them from.

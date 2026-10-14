@@ -6,7 +6,7 @@ Writes OUTDIR/prog/{exp,mul,add}_c<C>.anec for C in 64 and 512, each compiled by
 (research/oracles/h14/unary_exp_c<C>, binary_mul_1x<C>x1x1, binary_add_1x<C>x1x1). All three are programs that already exist in the
 compiler's tests; none is new, and they are the same bytes as the programs of the first exp chain cell. It also writes OUTDIR/in/x_c<C>.f16
 (the saved input of the failed run, copied byte for byte) and three constant files, the same fp16 value in every lane with zero padding:
-k8 = 8 K = fp16 0x1718 (K = 0x0b18 is the relative error of the scale word 0x3dc5, and 8 K is exact), eight = 8.0 = 0x4800 and eighth = 0.125 = 0x3000.
+k16 = 16 K = fp16 0x1b18 (K = 0x0b18 is the relative error of the scale word 0x3dc5, and 16 K is exact), sixteen = 16.0 = 0x4c00 and sixteenth = 0.0625 = 0x2c00.
 A rerun gives the same bytes. SHA256SUMS lists every file."""
 import hashlib
 import json
@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SAVED = ROOT / "receipts/2026-10-13-h14-unary-m2/inputs"
 LANE_STRIDE = 32  # one fp16 per 64-byte channel
 LOG2E = 1.4426950408889634
-CONSTANT_BITS = {"k8": 0x1718, "eight": 0x4800, "eighth": 0x3000}
-assert float(np.array([0x1718], dtype=np.uint16).view(np.float16)[0]) == 8 * float(np.float16(LOG2E / float(np.float16(LOG2E)) - 1.0))
+CONSTANT_BITS = {"k16": 0x1b18, "sixteen": 0x4c00, "sixteenth": 0x2c00}
+assert float(np.array([0x1b18], dtype=np.uint16).view(np.float16)[0]) == 16 * float(np.float16(LOG2E / float(np.float16(LOG2E)) - 1.0))
 SOURCES = {"exp": "unary_exp_c{c}", "mul": "binary_mul_1x{c}x1x1", "add": "binary_add_1x{c}x1x1"}
 
 
