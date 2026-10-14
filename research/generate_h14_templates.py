@@ -3,7 +3,7 @@
 
 Writes `plugins/<T>/<T>ElementwiseTemplates.inc` from
 `research/oracles/<t>/*.json` for every target in `ELEMENTWISE_TARGETS`, and
-`plugins/H14/H14MatvecTemplates.inc`. Only decoded task words,
+`plugins/H14/H14MatvecTemplates.inc` and `plugins/H14/H14ExpChainTemplates.inc`. Only decoded task words,
 program-descriptor metadata, and constant-section contents are emitted; no HWX
 container bytes are read or stored.
 
@@ -28,6 +28,7 @@ from h13_td import decode_task  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MATVEC_OUTPUT = ROOT / "plugins/H14/H14MatvecTemplates.inc"
+EXP_CHAIN_OUTPUT = ROOT / "plugins/H14/H14ExpChainTemplates.inc"
 # Generations with an elementwise parity target, and the program-descriptor
 # offset of the per-program word no formula resolves: 0x880 in H14's
 # 0x890-byte descriptor, 0x890 in the 0x8a0-byte H17 and H18 descriptor.
@@ -347,6 +348,56 @@ def generate_matvec() -> str:
     return "\n".join(lines)
 
 
+def selected_exp_chain_oracles() -> list[dict[str, Any]]:
+    """The decoded H14 programs of the scaled exp chain (exp, mul, add, mul, mul as one MIL program), ordered by channels."""
+    selected = []
+    for path in sorted((ROOT / "research/oracles/h14").glob("chain_exp_d4_c*.json")):
+        oracle = json.loads(path.read_text())
+        if oracle.get("error") is None:
+            selected.append(oracle)
+    selected.sort(key=lambda item: item["parameters"]["shape"][1])
+    return selected
+
+
+def generate_exp_chain() -> str:
+    """One fixed three-task program per decoded size. The constant section is the H13 exponential table, proven by its recorded
+    SHA-256; the scalar constants of the MIL live in the task words, so the section holds nothing else."""
+    from mint_norm_probes import constant_kind, kernel_tables  # noqa: PLC0415
+    tables = kernel_tables()
+    lines = ["// Generated from decoded H14 oracles of the scaled exp chain by",
+             "// research/generate_h14_templates.py. No HWX container bytes.",
+             ""]
+    entries = []
+    for index, oracle in enumerate(selected_exp_chain_oracles()):
+        channels = oracle["parameters"]["shape"][1]
+        descriptor = oracle["program_descriptor"]
+        stream = task_stream(oracle)
+        constant_offset = (int(descriptor["constant_address"], 16) -
+                           int(descriptor["text_address"], 16))
+        aligned = (len(stream) * 4 + CONSTANT_ALIGNMENT - 1) & ~(CONSTANT_ALIGNMENT - 1)
+        if constant_offset != aligned:
+            raise ValueError(f"{oracle['case']}: constants sit at {constant_offset}, not the {aligned} the aligned text stream implies")
+        if constant_kind(oracle, tables) != "Exponential":
+            raise ValueError(f"{oracle['case']}: the constant section is not the exponential table")
+        if descriptor["task_count"] != 3 or oracle["constant_section"]["size"] != 128:
+            raise ValueError(f"{oracle['case']}: expected three tasks and a 128-byte constant section")
+        trailer = descriptor["trailing_words"]
+        lines.append(f"// {oracle['case']}")
+        lines.append(f"static constexpr std::uint32_t kH14ExpChainText{index}[] = {{")
+        lines.append(word_rows(stream))
+        lines.append("};")
+        lines.append("")
+        entries.append(
+            f"    {{{channels}, kH14ExpChainText{index}, std::size(kH14ExpChainText{index}), {descriptor['task_count']}, "
+            f"{oracle['constant_section']['size']}, 0x{int(trailer[20], 16):08x}, 0x{int(trailer[28], 16):08x}, "
+            f"0x{int(trailer[18], 16):08x}}},")
+    lines.append("static constexpr OracleExpChainTemplate kExpChainTasks[] = {")
+    lines.extend(entries)
+    lines.append("};")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true",
@@ -356,6 +407,7 @@ def main() -> None:
                        "ElementwiseTemplates.inc", generate(target))
                for target in ELEMENTWISE_TARGETS]
     outputs.append((MATVEC_OUTPUT, generate_matvec()))
+    outputs.append((EXP_CHAIN_OUTPUT, generate_exp_chain()))
     for path, generated in outputs:
         if arguments.check:
             if (path.read_text() if path.exists() else "") != generated:

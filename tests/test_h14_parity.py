@@ -31,10 +31,13 @@ MATVEC_ENCODER = "apple-parity-matvec"
 NORM_ENCODER = "apple-parity-norm"
 ELEMENTWISE_ENCODER = "h14-oracle-parity"
 CONV_ENCODER = "apple-parity-conv"
+EXP_CHAIN_ENCODER = "apple-parity-expchain"
 CONV_FAMILIES = {"env_conv", "conv_probe"}
 
 
 def encoder(oracle):
+    if oracle["case"].startswith("chain_exp_d4_"):
+        return EXP_CHAIN_ENCODER
     if oracle["family"] in CONV_FAMILIES:
         return CONV_ENCODER
     if oracle["family"] in {"binary_runtime", "binary_constant", "unary",
@@ -444,6 +447,16 @@ def check_chain_package(root):
             assert actual == 0.0
 
 
+def exp_chain_oracles():
+    """The scaled exp chain as one MIL program, which Apple compiles to three tasks."""
+    found = []
+    for path in sorted((ROOT / "research/oracles/h14").glob("chain_exp_d4_c*.json")):
+        oracle = json.loads(path.read_text())
+        if oracle.get("error") is None:
+            found.append(oracle)
+    return found
+
+
 def main():
     elementwise = selected_oracles("h14")
     matvec = selected_matvec_oracles()
@@ -466,7 +479,10 @@ def main():
     conv = conv_oracles()
     assert len(conv) == 284, \
         f"expected 284 covered H14 convolution oracles, found {len(conv)}"
-    oracles = elementwise + matvec + probe + norm + conv
+    exp_chain = exp_chain_oracles()
+    assert sorted(oracle["parameters"]["shape"][1] for oracle in exp_chain) == [64, 512], \
+        f"expected the 64 and 512 channel scaled exp chains, found {len(exp_chain)}"
+    oracles = elementwise + matvec + probe + norm + conv + exp_chain
     with tempfile.TemporaryDirectory(prefix="h14-parity-") as directory:
         root = Path(directory)
         check_chain_package(root)
@@ -484,7 +500,7 @@ def main():
           f"{len(probe)} known-weight matvec probes over {len(grid)} (K, N) "
           f"grid points, {families['normalization']} softmax/layer_norm, "
           f"{families['reduction']} reduction over {len(templates)} norm "
-          f"templates, {len(conv)} convolution, "
+          f"templates, {len(conv)} convolution, {len(exp_chain)} scaled exp chain, "
           f"{len(oracles) * 2} artifacts)")
 
 

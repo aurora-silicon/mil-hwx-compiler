@@ -6,11 +6,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 
 ### 2026-10-14
-- Prepared, not minted: `research/mint_oracles.py` has two new cases, `chain_exp_d4_c64` and `chain_exp_d4_c512`. Each is one MIL program holding the five operations of the scaled
-  exp chain: c = x * 16 K, g = c + 16, p = exp(x) * g, y = p * 0.0625, with scalar constants. A Mac with the Apple compiler mints them (`--local --targets h14 --case 'chain_exp_d4_*'`).
-  The compiler does not emit this program yet. It needs the minted records and a template, and the minted program may fold the scalar constants into register words, so its arithmetic
-  has to be shown by a device run. `tests/test_exp_scaled_chain_case.py` pins the constants and the operation order and catches a wrong constant and a swapped operation.
-  The target is one ANEC program that meets the original exp bound at the original input, with a call time of at most 0.60 ms. No device run, no speed claim.
+- Compiler: the scaled exp chain now compiles to ONE program. A MIL function of exactly exp, mul by fp16 0x1b18 (16 K), add 16, mul, mul by 0.0625 over a [1, C, 1, 1] fp16 input, with C of 64 or 512,
+  emits the three-task program Apple's compiler produced for it, in ANEC and HWX form, under the per-op and the chain schedule. `research/oracles/h14/chain_exp_d4_c64.json` and `_c512.json` are the
+  decoded records, minted compile-only on a macOS Mac with a compiler build that differs from the one the older H14 records name (the older build is gone; the identity of the one used is in each record).
+  `tests/test_h14_parity.py` proves the task words, constant section, descriptors and tensors equal the records (720 cases now, 2 of them this program). `tests/test_h14_exp_chain_cli.py` proves that only the
+  decoded form takes the path: 8 changed forms (constant, order, size, operation) leave it, and mutants of the matcher are caught except two that the compiler's other checks make equivalent.
+  The mint cases are in `research/mint_oracles.py`, and `tests/test_exp_scaled_chain_case.py` pins their constants.
+  Not a device result: Apple folded the scalar constants into task words, so the arithmetic of the one program is not the arithmetic of the five-call chain, and only a run shows whether it meets the exp bound.
+  The cell for that run is prepared in `receipts/2026-10-14-h14-exp-scaled-one-anec-m2/` (preregistration, gate, run script). No device run and no speed claim.
 - Device status: the scaled exp chain ran on an M2 Max, alone on the ANE (`receipts/2026-10-14-h14-exp-chain-d4-run-m2/`). It met every preregistered criterion. Each of the four
   stages after exp equalled the ties-to-even result on all 64 and all 512 lanes, against 21 differing lanes in the first chain. The final output stayed inside the unchanged exp bound,
   with a largest relative error of 0.283 percent at 64 channels and 0.348 percent at 512 and no lane outside. The failed exp program had 0.446 and 0.429 percent. The exp stage
