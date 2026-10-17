@@ -165,6 +165,11 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-inspection-") as directory:
     assert "architecture subtype=0x0007 name=H16G isa=17" in result.stdout
     assert "__TEXT/__text" in result.stdout
 
+    h18g_path = root / "synthetic-h18g-envelope.hwx"
+    h18g_path.write_bytes(envelope(11, b""))
+    result = inspect(h18g_path)
+    assert "architecture subtype=0x000b name=H18G isa=unknown" in result.stdout
+
     h13_path = root / "synthetic-h13-multi-task.hwx"
     h13_path.write_bytes(h13_multi_task_hwx())
     result = inspect(h13_path)
