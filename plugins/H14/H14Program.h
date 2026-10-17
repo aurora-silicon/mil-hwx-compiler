@@ -136,6 +136,11 @@ Program encodeMatvecParity(MatvecShape shape, const std::uint8_t *weights,
 std::vector<std::uint8_t> packMatvecWeights(MatvecShape shape,
                                             const std::uint8_t *weights,
                                             std::size_t weightBytes);
+/// True when the decoded Apple corpus covers the scaled exp chain at this channel count: one MIL program of exp, mul by a scalar, add a
+/// scalar, mul, mul by a scalar, which Apple emits as three tasks.
+bool supportsExpScaledChainParity(std::uint32_t channels);
+/// Encodes Apple's three-task program for the scaled exp chain over a [1, channels, 1, 1] fp16 surface.
+Program encodeExpScaledChainParity(std::uint32_t channels);
 /// True when the decoded Apple corpus covers this softmax, layer_norm, or
 /// reduction geometry as one H14 program.
 bool supportsNormParity(NormOperation operation, NormShape shape);

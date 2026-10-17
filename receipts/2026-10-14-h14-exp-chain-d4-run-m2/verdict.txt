@@ -1,0 +1,11 @@
+c64 s2_c: 64 of 64 lanes equal the correctly rounded result
+c64 s3_g: 64 of 64 lanes equal the correctly rounded result
+c64 s4_p: 64 of 64 lanes equal the correctly rounded result
+c64 s5_y: 64 of 64 lanes equal the correctly rounded result
+c64 final: max relative error 0.00283 at x=-7.62891, bound rel 0.00390625, 0 lane(s) outside
+c512 s2_c: 512 of 512 lanes equal the correctly rounded result
+c512 s3_g: 512 of 512 lanes equal the correctly rounded result
+c512 s4_p: 512 of 512 lanes equal the correctly rounded result
+c512 s5_y: 512 of 512 lanes equal the correctly rounded result
+c512 final: max relative error 0.00348 at x=7.25, bound rel 0.00390625, 0 lane(s) outside
+numerical criteria: PASS; run identity, duty and time criteria: PASS

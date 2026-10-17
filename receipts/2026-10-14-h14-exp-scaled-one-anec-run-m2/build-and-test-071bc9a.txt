@@ -1,0 +1,111 @@
+date: 2026-10-14T08:08:41Z
+HEAD: 071bc9aa7a86cbebf4fc260ddcf59b97476df28d
+tree: 7b9c0db74897bed2c47e78988cfa99d30ee4e927
+tree of 28a66fc: 7b9c0db74897bed2c47e78988cfa99d30ee4e927
+uncommitted paths: 0
+--- clang++-14 --version
+Debian clang version 14.0.6
+Target: x86_64-pc-linux-gnu
+Thread model: posix
+InstalledDir: /usr/bin
+exit=0
+
+--- make build/mil-hwxc
+/usr/bin/clang++-14 -std=c++17 -fobjc-arc -MMD -MP -I<home>/.local/mil-hwx-gnustep/include -DGNUSTEP -DGNUSTEP_BASE_LIBRARY=1 -DGNUSTEP_RUNTIME=1 -D_NONFRAGILE_ABI=1 -DGNUSTEP_BASE_LIBRARY=1 -fno-strict-aliasing -fexceptions -fobjc-exceptions -D_NATIVE_OBJC_EXCEPTIONS -pthread -fPIC -Wall -DGSWARN -DGSDIAGNOSE -Wno-import -g -O2 -fobjc-runtime=gnustep-2.0 -fblocks -fconstant-string-class=NSConstantString -I. -I<home>/GNUstep/Library/Headers -I<home>/.local/mil-hwx-gnustep/include -I<home>/.local/mil-hwx-gnustep/include -Wall -Wextra -Werror -Iinclude -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 tools/mil-hwxc.mm lib/Support/ANEDiagnostic.mm lib/MIL/MILLexer.mm lib/MIL/MILSyntax.mm lib/MIL/MILParser.mm lib/MIL/MILPrinter.mm lib/IR/ANEGraphIR.mm lib/IR/ANEGraphVerifier.mm lib/MIL/MILGraphImporter.mm lib/IR/ANEOperationGraph.mm lib/Transform/ANENormalizePass.mm lib/Transform/ANEDecomposePass.mm lib/Transform/ANEFusionPass.mm plugins/H16G/H16GTarget.mm lib/Transform/ANEH16GLegalizePass.mm lib/IR/ANEScheduledGraph.mm lib/Planning/ANETilePlanner.mm lib/Planning/ANEMemoryPlanner.mm lib/Planning/ANEComposedRegionPlanner.mm lib/Planning/ANEProgramPartition.mm lib/Planning/ANETaskScheduler.mm plugins/H16G/Encoding/H16GTDWriter.mm plugins/H16G/Encoding/H16GConvEncoder.mm plugins/H16G/Encoding/H16GConvChainEncoder.mm plugins/H16G/Encoding/H16GDepthwiseEncoder.mm plugins/H16G/Encoding/H16GRegularConvEncoder.mm plugins/H16G/Encoding/H16GMatmulEncoder.mm plugins/H16G/Encoding/H16GALUEncoder.mm plugins/H16G/Encoding/H16GBroadcastALUEncoder.mm plugins/H16G/Encoding/H16GMatrixRowDivisionEncoder.mm plugins/H16G/Encoding/H16GLUTEncoder.mm plugins/H16G/Encoding/H16GReduceEncoder.mm plugins/H16G/Encoding/H16GSRAMChainEncoder.mm plugins/H16G/Encoding/H16GLayoutEncoder.mm plugins/H16G/Encoding/H16GLayoutConvChainEncoder.mm plugins/H16G/Encoding/H16GDecodedFormValidator.mm plugins/H16G/Encoding/H16GMixedTaskEncoder.mm lib/HWX/HWXObjectWriter.mm plugins/H16G/Encoding/H16GConstantPacker.mm lib/Driver/ANEStagedCompiler.mm plugins/H16G/Encoding/H16GProgramEncoder.mm plugins/H16G/Encoding/H16GProgramAssembler.mm plugins/H16G/Encoding/H16GEncodedTask.mm plugins/H16G/Encoding/H16GTaskEncoder.mm plugins/H16G/Encoding/H16GTaskComposer.mm lib/Driver/ANECompiler.mm lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm plugins/H13/ANEH13Compiler.mm plugins/H13/H13Program.cpp plugins/H13/H13ANEC.cpp plugins/H14/ANEH14Compiler.mm plugins/H14/H14Program.cpp -L<home>/.local/mil-hwx-gnustep/lib -Wl,-rpath,<home>/.local/mil-hwx-gnustep/lib -fuse-ld=lld-14 -pthread -fexceptions -rdynamic -fobjc-runtime=gnustep-2.0 -fblocks -L<home>/GNUstep/Library/Libraries -L<home>/.local/mil-hwx-gnustep/lib -L<home>/.local/mil-hwx-gnustep/lib -lgnustep-base -lpthread -lobjc -lm -o build/mil-hwxc
+exit=0
+
+binary sha256: fd840a8374ceb5f14e5e2f46f2b26185c732d04e0d6f295848639f614a9673bd
+--- make test-h14-parity
+python3 research/generate_h14_templates.py --check
+parity templates: up to date (<home>/scratch/upstream/wt-mil-d4/plugins/H14/H14ElementwiseTemplates.inc)
+parity templates: up to date (<home>/scratch/upstream/wt-mil-d4/plugins/H17/H17ElementwiseTemplates.inc)
+parity templates: up to date (<home>/scratch/upstream/wt-mil-d4/plugins/H18/H18ElementwiseTemplates.inc)
+parity templates: up to date (<home>/scratch/upstream/wt-mil-d4/plugins/H14/H14MatvecTemplates.inc)
+parity templates: up to date (<home>/scratch/upstream/wt-mil-d4/plugins/H14/H14ExpChainTemplates.inc)
+python3 tests/test_h14_parity.py build/mil-hwxc
+H14 matvec probes: 125 sections rebuilt byte-for-byte (0 Apple rejections)
+H14 oracle parity: PASS (720 cases, 165 elementwise, 36 matvec, 14 known-weight matvec probes over 9 (K, N) grid points, 105 softmax/layer_norm, 114 reduction over 186 norm templates, 284 convolution, 2 scaled exp chain, 1440 artifacts)
+python3 tests/test_h14_fixture_programs.py build/mil-hwxc
+PASS add
+PASS add-scalar
+PASS clip-high
+PASS clip-low
+PASS mul
+PASS mul-scalar
+PASS real-div-scalar
+PASS relu
+8 of 8 H14 fixture programs match
+python3 tests/test_h14_matvec_programs.py build/mil-hwxc
+PASS K=256 N=256
+PASS K=512 N=512
+PASS K=1024 N=1024
+PASS K=256 N=512
+PASS K=256 N=1024
+PASS K=512 N=256
+PASS K=512 N=1024
+PASS K=1024 N=256
+PASS K=1024 N=512
+9 of 9 H14 matvec shapes match
+python3 tests/test_h14_matvec_row_programs.py build/mil-hwxc
+PASS M=2 K=256 N=256
+PASS M=2 K=256 N=512
+PASS M=2 K=256 N=1024
+PASS M=2 K=512 N=256
+PASS M=2 K=512 N=512
+PASS M=2 K=512 N=1024
+PASS M=2 K=1024 N=256
+PASS M=2 K=1024 N=512
+PASS M=2 K=1024 N=1024
+PASS M=8 K=256 N=256
+PASS M=8 K=256 N=512
+PASS M=8 K=256 N=1024
+PASS M=8 K=512 N=256
+PASS M=8 K=512 N=512
+PASS M=8 K=512 N=1024
+PASS M=8 K=1024 N=256
+PASS M=8 K=1024 N=512
+PASS M=8 K=1024 N=1024
+PASS M=64 K=256 N=256
+PASS M=64 K=256 N=512
+PASS M=64 K=256 N=1024
+PASS M=64 K=512 N=256
+PASS M=64 K=512 N=512
+PASS M=64 K=512 N=1024
+PASS M=64 K=1024 N=256
+PASS M=64 K=1024 N=512
+PASS M=64 K=1024 N=1024
+27 of 27 H14 row-variant matvec shapes match
+python3 tests/test_h14_unary_programs.py build/mil-hwxc
+PASS unary_abs_c1024
+PASS unary_abs_c128
+PASS unary_abs_c2048
+PASS unary_abs_c256
+PASS unary_abs_c4096
+PASS unary_abs_c512
+PASS unary_abs_c64
+PASS unary_exp_c512
+PASS unary_exp_c64
+PASS unary_gelu_c512
+PASS unary_gelu_c64
+PASS unary_leaky_relu_c512
+PASS unary_leaky_relu_c64
+PASS unary_rsqrt_c512
+PASS unary_rsqrt_c64
+PASS unary_sigmoid_c512
+PASS unary_sigmoid_c64
+PASS unary_silu_c512
+PASS unary_silu_c64
+PASS unary_sqrt_c512
+PASS unary_sqrt_c64
+PASS unary_tanh_c512
+PASS unary_tanh_c64
+23 of 23 H14 unary programs match
+python3 tests/test_exp_scaled_chain_case.py
+chain_exp_d4 cases: constants and operation order as registered
+python3 tests/test_h14_exp_chain_cli.py build/mil-hwxc
+scaled exp chain: one program for the decoded form (64 and 512 channels, both schedules and formats); 8 changed forms leave the one-program path
+exit=0
+
+--- python3 tests/test_h14_exp_chain_cli.py build/mil-hwxc
+scaled exp chain: one program for the decoded form (64 and 512 channels, both schedules and formats); 8 changed forms leave the one-program path
+exit=0

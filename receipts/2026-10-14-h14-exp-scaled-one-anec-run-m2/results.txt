@@ -1,0 +1,27 @@
+H14 exp one-ANEC cell start=2026-10-14T08:05:55Z kernel=7.1.12-2-20261013.18-sep-ARCH target_s=30
+chip=apple,j414capple,t6021apple,arm-platform runner_sha256=943ae8c67598175a
+other_ane_run_before=0
+
+######## 64 channels ########
+
+== exp_c64.s1_y program_sha256=2d8bc52d06db401e inputs=/var/tmp/w7h-h14-exp-one/in/x_c64.f16 ==
+exec ms over 20 calls: min 0.258 p10 0.259 p25 0.271 median 0.361 p75 0.361 p90 0.461 p99 0.466 max 0.466
+rc_cal(exp_c64.s1_y)=0 median_ms=0.361
+exec ms over 83102 calls: min 0.205 p10 0.255 p25 0.256 median 0.306 p75 0.357 p90 0.403 p99 0.458 max 0.559
+rc_long(exp_c64.s1_y)=0 repeat=83102 wall_s=26.1 loop_duty_pct=99.6
+
+######## 512 channels ########
+
+== exp_c512.s1_y program_sha256=e78ed6f6847d09b2 inputs=/var/tmp/w7h-h14-exp-one/in/x_c512.f16 ==
+exec ms over 20 calls: min 0.287 p10 0.306 p25 0.308 median 0.356 p75 0.357 p90 0.407 p99 0.458 max 0.458
+rc_cal(exp_c512.s1_y)=0 median_ms=0.356
+exec ms over 84269 calls: min 0.241 p10 0.256 p25 0.306 median 0.357 p75 0.357 p90 0.407 p99 0.508 max 0.572
+rc_long(exp_c512.s1_y)=0 repeat=84269 wall_s=27.8 loop_duty_pct=99.6
+
+other_ane_run_after=0
+OUTPUT_SHA256 exp_c512.s1_y.cal.y.f16 b915f729d279bd13b201c42cbb2db747c22bcaedde137f291c7454ea825b9140
+OUTPUT_SHA256 exp_c512.s1_y.long.y.f16 b915f729d279bd13b201c42cbb2db747c22bcaedde137f291c7454ea825b9140
+OUTPUT_SHA256 exp_c64.s1_y.cal.y.f16 d8693cc87c43cbccfd1d7a8e2631b17109bc40556d32050537853278484fcf3c
+OUTPUT_SHA256 exp_c64.s1_y.long.y.f16 d8693cc87c43cbccfd1d7a8e2631b17109bc40556d32050537853278484fcf3c
+
+SUMMARY pass=2 fail=0 skipped_loops=0 total_wall_s=53.9 ticket_duty_pct=99.6

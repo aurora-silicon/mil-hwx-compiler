@@ -4,7 +4,7 @@ This page states how the repository proves that a source-native encoder matches 
 
 ## The claim
 
-For a covered case, the compiler in this repository emits a task stream, program descriptor, tensor descriptors, and constant section whose decoded fields are word-for-word identical to those Apple's compiler produced for the same MIL, target, and weights. **Evidence: high; it is a repeatable repository test.** Run `make test-h13-parity` (342 H13 cases) and `make test-h14-parity` (137 H14 cases); the checks are described in the [README](../../README.md#h13-apple-parity-programs) and the [verification guide](../../docs/VERIFICATION.md).
+For a covered case, the compiler in this repository emits a task stream, program descriptor, tensor descriptors, and constant section whose decoded fields are word-for-word identical to those Apple's compiler produced for the same MIL, target, and weights. **Evidence: high; it is a repeatable repository test.** Run `make test-h13-parity` (342 H13 cases) and `make test-h14-parity` (718 H14 cases); the checks are described in the [README](../../README.md#h13-apple-parity-programs) and the [verification guide](../../docs/VERIFICATION.md).
 
 ## How an oracle is made
 
@@ -38,7 +38,7 @@ Parity with an oracle proves this and only this:
 
 It does not prove:
 
-- **Device execution.** No H13 or H14 program in this repository has been executed on an M1 or M2 ANE. Parity with Apple's emitted stream is not proof that the hardware accepts or computes it. **Evidence: high; the repository's own hardware receipts record the blocker rather than a run.** See the [handoff receipt](../../receipts/2026-09-05-ane-community/h13-handoff.json) and the [M1 Ultra runtime blocker](../../receipts/2026-09-05-ane-community/m1ultra-runtime-blocker.json).
+- **Device execution.** Parity with Apple's emitted stream does not prove that the hardware accepts or computes a program. Separate receipts record H13 elementwise programs and H14 elementwise and matvec programs running on their respective hardware; those receipts support only the workloads they name. See the [H13 receipt](../../receipts/2026-10-11-h13-elementwise-m1/) and the [H14 receipts](../../receipts/2026-10-10-h14-elementwise-m2/README.md) and [matvec receipt](../../receipts/2026-10-11-h14-matvec-m2/README.md).
 - **Field understanding.** Unresolved words are copied, not understood: 54 of 70 H14 Kernel DMA words and 467 H13 normalization word slots remain unexplained. See [h14-td-fields.md](../../research/h14-td-fields.md) and [h13-td-fields.md](../../research/h13-td-fields.md).
 - **Portability.** The bytes are specific to a generation, a compiler build, and an operating-system release. Two runs of Apple's compiler on the same MIL produce different HWX **file** hashes with identical decoded task words, so the decoded stream is the stable evidence and the file hash is only a record identifier. See [oracle-diff.md](../../research/oracle-diff.md).
 - **Safe interpolation.** A covered grid point is not a covered neighborhood. `matmul` at M=128 K=4096 compiles and M=128 K=8192 is refused, with no size ceiling to explain it. See section 6 of [oracle-envelope.md](../../research/oracle-envelope.md).

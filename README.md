@@ -29,9 +29,11 @@ The compiler does not guess.
 
 | Target | Chip | Output | Device runs |
 | --- | --- | --- | --- |
-| H13 | M1 | ANEC package, or HWX with `--format hwx` | Runs on Linux M1 hardware through omarchy-ane. Eight elementwise programs built by this compiler ran on a 13-inch M1 and an M1 Max through omarchy-ane. Each was bit-exact on 64 of 64 lanes ([receipt](receipts/2026-10-11-h13-elementwise-m1/)). |
-| H14 | M2 | ANEC package, or HWX with `--format hwx` | Matches decoded Apple output byte for byte. Eight elementwise programs built by this compiler ran on an M2 Max through omarchy-ane. Each was bit-exact on 512 of 512 lanes ([receipt](receipts/2026-10-10-h14-elementwise-m2/README.md)). Matvec programs at K = N of 256, 512 and 1024 also ran on an M2 Max, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-11-h14-matvec-m2/README.md)). Other larger H14 programs have not run from this backend |
+| H13 | M1 | ANEC package, or HWX with `--format hwx` | Runs on Linux M1 hardware through omarchy-ane. Eight elementwise programs built by this compiler ran on a 13-inch M1 and an M1 Max through omarchy-ane. Each was bit-exact on 64 of 64 lanes ([receipt](receipts/2026-10-11-h13-elementwise-m1/)). The compiler pins H13 matvec packages for K=N=256, 512 and 1024 (1, 1 and 5 programs); device runs for 256 and 512 through `ane-run --check matvec` failed before numerical comparison ([run record](receipts/2026-10-12-h13-matvec-m1/README.md)). The 512 program then passed on an M1 Max with a gate that reads its channel layout, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-13-h13-matvec-k512-m1max/README.md)). The 256 program is refused at load and the 1024 package has five programs; neither has run. |
+| H14 | M2 | ANEC package, or HWX with `--format hwx` | Matches decoded Apple output byte for byte. Eight elementwise programs built by this compiler ran on an M2 Max through omarchy-ane. Each was bit-exact on 512 of 512 lanes ([receipt](receipts/2026-10-10-h14-elementwise-m2/README.md)). Matvec programs at K = N of 256, 512 and 1024 also ran on an M2 Max, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-11-h14-matvec-m2/README.md)). So did the six non-square matvec shapes of 256, 512 and 1024 ([receipt](receipts/2026-10-13-h14-matvec-nonsquare-m2/README.md)). Matvec programs with 2, 8 and 64 rows ran too: 21 of 27 passed `ane-run`'s check and the six non-square 64-row shapes, which it refused, were compared off the device ([receipt](receipts/2026-10-13-h14-matvec-rows-m2/README.md)). Of 23 unary programs (abs, exp, gelu, leaky_relu, rsqrt, sigmoid, silu, sqrt, tanh), 21 met their preregistered accuracy bound and exp did not ([receipt](receipts/2026-10-13-h14-unary-m2/README.md)). Other larger H14 programs have not run from this backend |
 | H16G | M4 | HWX object | Research compiler. Exercised by the macOS hardware tests in `tests/` |
+| H17 | A18, A18 Pro and M5 | HWX object, oracle-parity targets | Emits Apple's exact HWX for 165 decoded elementwise, unary and scalar-constant points and refuses every other shape by name. Byte parity only; not run on a device |
+| H18 | A19 and A19 Pro | HWX object, oracle-parity targets | Same as H17 for H18: 165 decoded points, named refusals, byte parity only; not run on a device |
 
 ## Install
 
@@ -107,7 +109,7 @@ H16G is the default target, so the flag is optional there.
 
 ```text
 usage: mil-hwxc --mil FILE --model-root DIR --output DIR
-                [--target H16G|H13|H14] [--format anec|hwx]
+                [--target H16G|H13|H14|H17|H18] [--format anec|hwx]
                 [--schedule per-op|chain]
 ```
 
@@ -169,6 +171,7 @@ You can use it to make reference outputs without a device.
 | `make test-h13` | H13 encoding, serialization, and the CLI, host-only |
 | `make test-h13-parity` | H13 output byte-equal to decoded Apple oracles. 891 cases at v0.1.0 |
 | `make test-h14-parity` | H14 output byte-equal to decoded Apple oracles. 718 cases at v0.1.0 |
+| `make test-h14-exp-model` | A model of the H14 `exp` program against saved M2 Max output. Needs NumPy, so it is not part of `make test` |
 | `make test-h17-parity`, `make test-h18-parity` | H17/H18 elementwise, unary and scalar-constant HWX byte-equal to decoded Apple oracles, plus named refusals. 165 cases each. Not device-run |
 | `scripts/verify-linux-compiler.sh all` | Build, software tests, emission, and hygiene on Linux |
 | `make test` | The full macOS suite |

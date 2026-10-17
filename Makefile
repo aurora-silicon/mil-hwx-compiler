@@ -274,12 +274,21 @@ test-h13-simulation: $(BUILD)/mil-hwxc
 test-h13-parity: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_fixture_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_h13_matvec_programs.py $(BUILD)/mil-hwxc
 .PHONY: test-h14-parity
 test-h14-parity: $(BUILD)/mil-hwxc
 	python3 research/generate_h14_templates.py --check
 	python3 tests/test_h14_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_fixture_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_matvec_row_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_unary_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_exp_scaled_chain_case.py
+	python3 tests/test_h14_exp_chain_cli.py $(BUILD)/mil-hwxc
+
+.PHONY: test-h14-exp-model
+test-h14-exp-model:
+	python3 tests/test_h14_exp_arithmetic.py
 
 .PHONY: test-h17-parity test-h18-parity
 test-h17-parity: $(BUILD)/mil-hwxc

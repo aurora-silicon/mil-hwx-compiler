@@ -62,6 +62,7 @@ checkout libs-base https://github.com/gnustep/libs-base.git "$base_commit"
 cmake -S "$sources/libobjc2" -B "$build/libobjc2" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_C_COMPILER="$cc" \
     -DCMAKE_CXX_COMPILER="$cxx" \
     -DTESTS=OFF

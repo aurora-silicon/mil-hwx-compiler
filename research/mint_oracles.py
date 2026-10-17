@@ -633,6 +633,27 @@ def envelope_campaign() -> list[dict[str, Any]]:
     return cases
 
 
+def exp_scaled_chain(channels: int) -> dict[str, Any]:
+    """exp with the scale correction in scaled form, as one MIL program (the five calls of the D4 cell, in one program).
+
+    c = x * 16 K, g = c + 16, p = exp(x) * g, y = p * 0.0625. K = 0x0b18 is the relative error of the exp program's fp16 scale word 0x3dc5.
+    The constants are scalars, so Apple may fold them into register words. Whether the result keeps the stage arithmetic of the five separate
+    programs is what a device run of the minted program has to show."""
+    kind = tensor_type((1, channels, 1, 1))
+    mil = program(f"{kind} x", [
+        'fp16 k16 = const()[name = string("k16"), val = fp16(0x1.c6p-9)];',
+        'fp16 sixteen = const()[name = string("sixteen"), val = fp16(0x1p+4)];',
+        'fp16 sixteenth = const()[name = string("sixteenth"), val = fp16(0x1p-4)];',
+        f'{kind} e = exp(x = x)[name = string("e")];',
+        f'{kind} c = mul(x = x, y = k16)[name = string("c")];',
+        f'{kind} g = add(x = c, y = sixteen)[name = string("g")];',
+        f'{kind} p = mul(x = e, y = g)[name = string("p")];',
+        f'{kind} y = mul(x = p, y = sixteenth)[name = string("y")];',
+    ], "y")
+    return case(f"chain_exp_d4_c{channels}", "chain",
+                {"operations": ["exp", "mul", "add", "mul", "mul"], "shape": (1, channels, 1, 1), "scale_shift": 4}, mil)
+
+
 def campaign() -> list[dict[str, Any]]:
     cases = []
     shapes = [(1, channels, 1, 1) for channels in
@@ -671,6 +692,7 @@ def campaign() -> list[dict[str, Any]]:
         convolution(1, 64, 64, 8, False, True),
     ])
     cases.extend(envelope_campaign())
+    cases.extend(exp_scaled_chain(channels) for channels in (64, 512))
     names = [item["name"] for item in cases]
     if len(names) != len(set(names)):
         raise AssertionError("campaign contains duplicate case names")

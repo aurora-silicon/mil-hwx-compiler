@@ -41,6 +41,19 @@ struct OracleTaskTemplate {
     std::size_t kernelBytes = 0;
 };
 
+/// One decoded Apple program for the scaled exp chain: exp, mul, add, mul, mul as one MIL program, three tasks. The constant section is the
+/// exponential table; the scalar constants of the MIL sit in the task words.
+struct OracleExpChainTemplate {
+    std::uint32_t channels;
+    const std::uint32_t *text;
+    std::size_t textWords;
+    std::uint32_t taskCount;
+    std::size_t constantBytes;
+    std::uint32_t programRecordCount;
+    std::uint32_t unresolvedDescriptorWord;
+    std::uint32_t scratchDescriptorWord;
+};
+
 struct OracleMatvecTemplate {
     std::uint32_t rows;
     std::uint32_t reduction;
@@ -102,6 +115,7 @@ struct OracleConvTemplate {
 #include "H17ElementwiseTemplates.inc"
 #include "H18ElementwiseTemplates.inc"
 #include "H14MatvecTemplates.inc"
+#include "H14ExpChainTemplates.inc"
 #include "H14NormTemplates.inc"
 #include "H14ConvTemplates.inc"
 // H14's exponential and reciprocal sections are the H13 tables byte-for-byte:
@@ -150,6 +164,12 @@ const OracleTaskTemplate *elementwiseTemplate(Generation generation,
             return findElementwise(kH18ElementwiseTasks, kind, operation, shape, operand);
     }
     throw std::logic_error("unknown parity generation");
+}
+
+const OracleExpChainTemplate *expChainTemplate(std::uint32_t channels) {
+    for (const auto &candidate : kExpChainTasks)
+        if (candidate.channels == channels) return &candidate;
+    return nullptr;
 }
 
 const OracleMatvecTemplate *matvecTemplate(MatvecShape shape) {
@@ -556,6 +576,27 @@ Program encodeMatvecParity(MatvecShape shape, const std::uint8_t *weights,
     program.constants = packMatvecWeights(shape, weights, weightBytes);
     program.inputs = {matvecTensor(5, shape.rows, shape.reduction)};
     program.output = matvecTensor(4, shape.rows, shape.columns);
+    return program;
+}
+
+bool supportsExpScaledChainParity(std::uint32_t channels) {
+    return expChainTemplate(channels);
+}
+
+Program encodeExpScaledChainParity(std::uint32_t channels) {
+    const auto *source = expChainTemplate(channels);
+    if (!source)
+        throw std::invalid_argument(
+            "H14 scaled exp chain is outside the decoded parity envelope");
+    Program program = streamProgram(source->text, source->textWords,
+                                    source->taskCount,
+                                    source->programRecordCount,
+                                    source->unresolvedDescriptorWord);
+    program.constants = normConstants(NormConstants::Exponential, source->constantBytes);
+    program.scratchDescriptorWord = source->scratchDescriptorWord;
+    const ElementwiseShape surface{source->channels, 1, 1};
+    program.inputs = {elementwiseTensor(5, surface)};
+    program.output = elementwiseTensor(4, surface);
     return program;
 }
 
