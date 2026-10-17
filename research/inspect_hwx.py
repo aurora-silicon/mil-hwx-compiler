@@ -16,6 +16,7 @@ ARCHITECTURES = {
     7: ("H16G", 17),
     9: ("H17", 19),
     10: ("H18", 20),
+    11: ("H18G", "unknown"),
 }
 # Subtypes whose __TEXT/__text is an H14-format aligned task stream.
 TASK_TARGETS = {5: "h14", 6: "h15", 9: "h17", 10: "h18"}

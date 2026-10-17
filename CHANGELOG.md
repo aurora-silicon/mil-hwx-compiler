@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+### 2026-10-17
+- Inspector: `research/inspect_hwx.py` names CPU subtype 11 as H18G. An HWX that the ANE compiler produced for target `h18g`
+  from a one-add fp16 MIL program (ios18 dialect, shape [1,64,1,64]) has Mach-O magic 0xbeefface, CPU type 0x80, subtype 11,
+  seven load commands, a 0x4138-byte text section and a 0x6000-byte const section. The existing H14-format splitter reads
+  that text as two tasks of 73 and 74 words. The ISA version of H18G prints as unknown because no field in the file
+  carries one. `tests/test_hwx_inspection.py` checks the name on a synthetic envelope and fails if the table entry is
+  removed.
+
 ### 2026-10-11
 - Test: `tests/test_h14_matvec_programs.py` compiles an H14 fp16 matvec at K = N = 256, 512 and 1024 and pins each program's
   size and the sha256 of its first 4,672 bytes (header and task streams), which do not depend on the weights. It checks
