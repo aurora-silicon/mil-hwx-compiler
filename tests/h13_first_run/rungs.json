@@ -87,6 +87,27 @@
         {"file": "mlp-b2.bin", "count": 768, "scale": 0.125, "modulus": 7, "offset": 3}
       ],
       "inputs": [{"name": "x", "count": 768, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 9,
+      "name": "09-matvec-k512-n512",
+      "title": "source-qualified native matvec K=512 N=512",
+      "encoders": {"h13-source-qualified": 1},
+      "taskDescriptors": 1,
+      "blobs": [{"file": "weights.bin", "count": 262144, "scale": 0.125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 512, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 10,
+      "name": "10-runtime-matmul-128",
+      "title": "runtime-runtime matmul M=128 K=128 N=128 transpose_y=false",
+      "encoders": {"apple-parity-matmul": 1},
+      "taskDescriptors": 2,
+      "blobs": [],
+      "inputs": [
+        {"name": "x", "count": 16384, "scale": 0.25, "modulus": 7, "offset": 3},
+        {"name": "w", "count": 16384, "scale": 0.125, "modulus": 5, "offset": 2}
+      ]
     }
   ]
 }

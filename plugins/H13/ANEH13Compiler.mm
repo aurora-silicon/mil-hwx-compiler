@@ -4033,8 +4033,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         NSNumber *count = [reductionCounts objectForKey:operation];
                         inputSliceElements =
                             count ? count.unsignedIntegerValue : reduction;
-                        inputPhysicalElements =
-                            inputSliceElements <= 256 ? 256 : 512;
+                        // The matvec task moves 512 input channels at both reductions, so the physical surface is 512 channels.
+                        inputPhysicalElements = 512;
                         outputPhysicalElements = 512;
                     }
                 }

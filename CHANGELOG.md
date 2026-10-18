@@ -4,6 +4,19 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+### 2026-10-18
+- Fix: the H13 source-qualified matvec at reduction 256 declared a 16,384-byte input surface on channel 5. Its task moves
+  32,768 bytes from that channel at both reductions. libane refuses such a program. A 13-inch M1 refused the K = 256,
+  N = 512 matvec of the first-run kit with "surface channel 5 needs 32768 bytes but is allocated 16384". The input
+  surface is now 512 channels at both reductions. The logical tensor stays 256 channels and the padding lanes are zero.
+  The task bytes are unchanged. The K = 256 program now has the header of the K = 512 program. So
+  `tests/test_h13_matvec_programs.py` pins one prefix for both.
+- Test: `tests/libane_overrun.py` ports libane's task walk and overrun check, with no device. `tests/test_libane_overrun.py`
+  checks it on synthetic programs and on H13 matvec programs at K and N of 256 and 512. It failed on K = 256 before the
+  fix. `first_run.py` runs it on every program of every rung. Two programs of the 77 in the MLP rung overran before the fix.
+- Kit: the first-run catalog gains `09-matvec-k512-n512` and `10-runtime-matmul-128`. A latency table then has points
+  above the per-call floor.
+
 ### 2026-10-17
 - Inspector: `research/inspect_hwx.py` names CPU subtype 11 as H18G. An HWX that the ANE compiler produced for target `h18g`
   from a one-add fp16 MIL program (ios18 dialect, shape [1,64,1,64]) has Mach-O magic 0xbeefface, CPU type 0x80, subtype 11,

@@ -275,6 +275,7 @@ test-h13-parity: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_fixture_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_matvec_programs.py $(BUILD)/mil-hwxc
+	python3 tests/test_libane_overrun.py $(BUILD)/mil-hwxc
 .PHONY: test-h14-parity
 test-h14-parity: $(BUILD)/mil-hwxc
 	python3 research/generate_h14_templates.py --check
