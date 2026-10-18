@@ -64,6 +64,11 @@ def write_weights(oracle, root):
                                  parameters["pattern"])
         assert hashlib.sha256(payload).hexdigest() == \
             description["payload_sha256"], oracle["case"]
+    elif description.get("value") == "fp16 signed period-5, scale 0.03125, offset 2":
+        pattern = b"".join(struct.pack("<e", 0.03125 * (i - 2)) for i in range(5))
+        size = description["payload_bytes"]
+        payload = (pattern * ((size + len(pattern) - 1) // len(pattern)))[:size]
+        assert hashlib.sha256(payload).hexdigest() == description["dense_sha256"]
     elif description.get("value") == "distinct":
         # The known-weight convolution probes carry one distinct fp16 pattern
         # per element, which is what proves the packing permutation.
@@ -466,8 +471,8 @@ def main():
     templates = check_norm_templates()
     assert len(elementwise) == 165, \
         f"expected 165 decoded elementwise oracles, found {len(elementwise)}"
-    assert len(matvec) == 36, \
-        f"expected 36 decoded matvec oracles, found {len(matvec)}"
+    assert len(matvec) == 38, \
+        f"expected 38 decoded matvec oracles, found {len(matvec)}"
     assert families == collections.Counter(
         {"normalization": 105, "reduction": 114}), \
         f"decoded H14 norm oracles per family: {dict(families)}"
