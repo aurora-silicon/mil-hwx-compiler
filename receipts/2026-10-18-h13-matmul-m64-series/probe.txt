@@ -1,0 +1,21 @@
+H13 matmul geometries probed with mil-hwxc --target H13 (rt: two runtime operands [1,M,K] x [1,K,N]; cw: constant weights, x[M,K] times w[N,K] transposed). Programs per shape, encoder, bytes of the first programs and libane overrun verdict.
+
+rt:128x128x128 -> 1 program(s) ['apple-parity-matmul'] bytes [21632] td 2 overrun-programs 0
+rt:256x256x256 -> REFUSED 7:5: error [h13.matmul-outside-envelope]: H13 matmul with two runtime operands needs a decoded geometry: fp16 
+rt:512x512x512 -> REFUSED 7:5: error [h13.matmul-outside-envelope]: H13 matmul with two runtime operands needs a decoded geometry: fp16 
+rt:128x64x128 -> 1 program(s) ['apple-parity-matmul'] bytes [21632] td 2 overrun-programs 0
+cw:64x256x256 -> 1 program(s) ['apple-parity-matvec'] bytes [136320] td 2 overrun-programs 0
+cw:64x512x256 -> 1 program(s) ['apple-parity-matvec'] bytes [267392] td 2 overrun-programs 0
+cw:64x256x512 -> 1 program(s) ['apple-parity-matvec'] bytes [267392] td 2 overrun-programs 0
+cw:64x512x512 -> 1 program(s) ['apple-parity-matvec'] bytes [529536] td 2 overrun-programs 0
+cw:64x1024x512 -> 1 program(s) ['apple-parity-matvec'] bytes [1053824] td 2 overrun-programs 0
+cw:64x1024x256 -> 1 program(s) ['apple-parity-matvec'] bytes [529536] td 2 overrun-programs 0
+cw:64x256x1024 -> 1 program(s) ['apple-parity-matvec'] bytes [530176] td 3 overrun-programs 0
+cw:64x1024x1024 -> 1 program(s) ['apple-parity-matvec'] bytes [2102400] td 2 overrun-programs 0
+cw:64x2048x2048 -> 1 program(s) ['apple-parity-matvec'] bytes [8394496] td 3 overrun-programs 0
+cw:64x4096x2048 -> 1 program(s) ['apple-parity-matvec'] bytes [16782464] td 2 overrun-programs 0
+cw:128x256x512 -> 128 program(s) ['h13-source-qualified'] bytes [529024, 529024, 529024] td 128 overrun-programs 0
+cw:32x256x512 -> 32 program(s) ['h13-source-qualified'] bytes [529024, 529024, 529024] td 32 overrun-programs 0
+cw:64x2048x512 -> 1792 program(s) ['h13-source-qualified'] bytes [529024, 529024, 529024] td 1792 overrun-programs 0
+cw:64x2048x4096 -> 14336 program(s) ['h13-source-qualified'] bytes [529024, 529024, 529024] td 14336 overrun-programs 0
+cw:64x4096x4096 -> 32768 program(s) ['h13-source-qualified'] bytes [529024, 529024, 529024] td 32768 overrun-programs 0
