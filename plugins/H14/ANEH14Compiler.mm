@@ -765,7 +765,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         static_cast<std::uint32_t>(columns)};
     if (!ane::h14::supportsMatvecParity(candidate))
         return reject(diagnostics,
-            @"H14 matmul supports only the decoded geometries: rows 1, 2, 8, or 64 with reduction and columns each 256, 512, or 1024",
+            @"H14 matmul supports only the decoded geometries: rows 1, 2, 8, or 64 with reduction and columns each 256, 512, or 1024; also rows 64 with (reduction, columns) (2048, 2048) or (4096, 2048)",
             operation, @"h14.outside-parity-envelope");
     NSUInteger count = reduction * columns;
     NSData *weights = [ANEBlobResolver loadConstantForOperation:y.producer

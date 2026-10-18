@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H14 matvec with 2, 8 and 64 rows (M x K times K x N, fp16 weights, K and N each 256, 512 or 1024) compiles to a fixed program structure.
+"""H14 matvec with 2, 8 and 64 rows (M x K times K x N, fp16 weights, the 256/512/1024 grid plus decoded M64 K2048/4096 N2048) compiles to a fixed program structure.
 
 Each program is a 4,672-byte header and task stream followed by the weight section. The first 4,672 bytes depend only on M, K and N,
 not on the weights (checked for every shape: two weight sets give the same head and different weight sections). The test pins each
@@ -60,6 +60,8 @@ EXPECTED = {  # (M, K, N): (program bytes, sha256 of the first 4,672 bytes)
     (64, 1024, 256): (528960, "aa2935075cc9b50f415a6f6400e6652cbf72d258d5e84dd81c7d3bbe28b8b54b"),
     (64, 1024, 512): (1053248, "fa6b50d6605ede4043321f1ba3755b7cbbdb372105a7484890f58e4bde3ae6f0"),
     (64, 1024, 1024): (2101824, "390dc1c09220127540768fb532d42193e632dfd900aeb97f5b41be1e48325ec7"),
+    (64, 2048, 2048): (8393280, "94d5fdfd86466caff9beb7f88b688f56daeb1cf062fbbcae6ebfe5fbbb1c7de2"),
+    (64, 4096, 2048): (16781888, "25c728ea81ea13d5892223d83a8cb5e749aeb1f95eeb85f554b344829b9d430c"),
 }
 
 MIL = """program(1.3)
@@ -115,6 +117,14 @@ def layout_problems(blob, m, k, n):
 
 
 def main():
+    # New decoded entries do not admit an unmeasured neighbour or other row count.
+    for m, k, n in ((64, 2048, 1024), (8, 2048, 2048)):
+        try:
+            compile_matvec(m, k, n, 1)
+        except subprocess.CalledProcessError as error:
+            assert "h14.outside-parity-envelope" in error.stderr, error.stderr
+        else:
+            raise AssertionError(f"undecoded shape accepted: {m}, {k}, {n}")
     bad = 0
     for (m, k, n), (size, head_sha) in EXPECTED.items():
         a, b = compile_matvec(m, k, n, 1), compile_matvec(m, k, n, 2)
