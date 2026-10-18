@@ -60,4 +60,4 @@ The times are the per-call execution times that `ane-run --time` prints for 200 
 
 ## Source records
 
-`SHA256SUMS` lists the sha256 of the source records in the lab archive. They are the device result of each machine, the check output, the sealed program directory and the earlier refusal record. They are not in this directory.
+`SHA256SUMS` lists the three output files in this directory. `SHA256SUMS-not-archived` lists the source records in the lab archive: the device result of each machine, the check output, the sealed program directory and the earlier refusal record (two copies of that file, before and after the 16-inch result was added). They are not in this directory.

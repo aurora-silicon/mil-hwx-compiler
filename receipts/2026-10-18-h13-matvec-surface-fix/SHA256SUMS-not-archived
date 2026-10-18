@@ -1,0 +1,7 @@
+600b78ed3141c243e769e4efc4cb27a0a1ab772959a124d0523e22b57b069f3c  device-result.13-inch.txt
+b60a247ff4e7b573d687ac8d1e4472a9c99f235d58308a98caa1266b371c15dd  device-result.16-inch.txt
+019d3d683130e5d21f7aa9f960dc5e31f9ed149cdc8623f54cb7245b9171b432  check.txt
+2a3c6912030b28f44b875f3d048a78540ac19460e2e8cccfeaad490cb5a0787c  device-result.summary.md
+5eca95eb769010b272941d5090108986461a22fc719a772b9514588f125f6d74  refusal-result.13-inch.md  (copy in the 13-inch run directory)
+b674fadb53f123e4f4ff84dcdd266dbf66c056e4d13a4caf9c153e8f38913c32  sealed-programs.SHA256SUMS
+11c78bf89ca24ca6c6140cf4f18a610983e6968bcaa1f85147febe71ea31f995  refusal-result.13-inch.updated.md  (the same entry after the 16-inch result was added)

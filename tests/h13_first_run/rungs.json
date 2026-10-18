@@ -108,6 +108,96 @@
         {"name": "x", "count": 16384, "scale": 0.25, "modulus": 7, "offset": 3},
         {"name": "w", "count": 16384, "scale": 0.125, "modulus": 5, "offset": 2}
       ]
+    },
+    {
+      "id": 11,
+      "name": "11-matmul-m64-k256-n256",
+      "title": "constant-weight matmul M=64 K=256 N=256, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 65536, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 16384, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 12,
+      "name": "12-matmul-m64-k512-n256",
+      "title": "constant-weight matmul M=64 K=512 N=256, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 131072, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 32768, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 13,
+      "name": "13-matmul-m64-k256-n512",
+      "title": "constant-weight matmul M=64 K=256 N=512, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 131072, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 16384, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 14,
+      "name": "14-matmul-m64-k512-n512",
+      "title": "constant-weight matmul M=64 K=512 N=512, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 262144, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 32768, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 15,
+      "name": "15-matmul-m64-k1024-n512",
+      "title": "constant-weight matmul M=64 K=1024 N=512, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 524288, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 65536, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 16,
+      "name": "16-matmul-m64-k1024-n256",
+      "title": "constant-weight matmul M=64 K=1024 N=256, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 262144, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 65536, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 17,
+      "name": "17-matmul-m64-k256-n1024",
+      "title": "constant-weight matmul M=64 K=256 N=1024, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 3,
+      "blobs": [{"file": "weights.bin", "count": 262144, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 16384, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 18,
+      "name": "18-matmul-m64-k1024-n1024",
+      "title": "constant-weight matmul M=64 K=1024 N=1024, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 1048576, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 65536, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 19,
+      "name": "19-matmul-m64-k2048-n2048",
+      "title": "constant-weight matmul M=64 K=2048 N=2048, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 3,
+      "blobs": [{"file": "weights.bin", "count": 4194304, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 131072, "scale": 0.25, "modulus": 7, "offset": 3}]
+    },
+    {
+      "id": 20,
+      "name": "20-matmul-m64-k4096-n2048",
+      "title": "constant-weight matmul M=64 K=4096 N=2048, one program",
+      "encoders": {"apple-parity-matvec": 1},
+      "taskDescriptors": 2,
+      "blobs": [{"file": "weights.bin", "count": 8388608, "scale": 0.03125, "modulus": 5, "offset": 2}],
+      "inputs": [{"name": "x", "count": 262144, "scale": 0.25, "modulus": 7, "offset": 3}]
     }
   ]
 }

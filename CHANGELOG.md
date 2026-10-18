@@ -5,6 +5,16 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 ## Unreleased
 
 ### 2026-10-18
+- Kit: the first-run catalog gains rungs 11 to 20, ten constant-weight matmuls with 64 rows that the compiler emits as one
+  program each (4.2 to 537 million multiply-adds). Other sizes compile to one program per row or row group.
+- Device status: the ten programs ran exact on a 13-inch M1 and a 16-inch M1 Max under `ane-run`, 200 calls each. The outputs
+  are identical on the two chips. The calls took 0.024 to 0.406 ms on the 13-inch and 0.067 to 1.101 ms on the 16-inch.
+  The 8.4 and 16.8 MB programs loaded and ran (receipt `receipts/2026-10-18-h13-matmul-m64-series/`).
+- Device status: fifteen H14 programs that ran on an M2 Max before ran again with `--repeat 200 --time`: the eight elementwise
+  programs, matvecs of 1 row at K = N of 256, 512 and 1024, and of 2, 8 and 64 rows. All passed the device-side check. The calls took
+  0.306 to 0.457 ms (receipt `receipts/2026-10-18-h14-floor-rows-m2/`).
+- Receipt: the sum lists of `receipts/2026-10-18-h13-matvec-surface-fix/` are split into the files in the directory and the source
+  records in the lab archive, and both copies of the refusal record are named.
 - Fix: the H13 source-qualified matvec at reduction 256 declared a 16,384-byte input surface on channel 5. Its task moves
   32,768 bytes from that channel at both reductions. libane refuses such a program. A 13-inch M1 refused the K = 256,
   N = 512 matvec of the first-run kit with "surface channel 5 needs 32768 bytes but is allocated 16384". The input
