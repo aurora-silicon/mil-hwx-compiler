@@ -925,7 +925,7 @@ with tempfile.TemporaryDirectory(prefix='mil-hwx-h13-test-') as directory:
     small_manifest = json.loads((small_projection / 'manifest.json').read_text())
     assert small_manifest['inputs'][0]['slice'] == {
         'tensor': 'x', 'elementOffset': 0, 'elementCount': 200,
-        'physicalElements': 256}
+        'physicalElements': 512}
     assert small_manifest['outputs'][0]['slice'] == {
         'tensor': 'y', 'elementOffset': 0, 'elementCount': 300,
         'physicalElements': 512}
@@ -1061,7 +1061,7 @@ with tempfile.TemporaryDirectory(prefix='mil-hwx-h13-test-') as directory:
     tail_manifest = json.loads((tail_reduction / 'manifest.json').read_text())
     assert tail_manifest['programs'][1]['inputs'][0]['slice'] == {
         'tensor': 'x', 'elementOffset': 512, 'elementCount': 188,
-        'physicalElements': 256}
+        'physicalElements': 512}
     tail_canonical_values = tail_values[1024:]
     tail_canonical_blob = bytearray(128 + len(tail_canonical_values))
     struct.pack_into('<IIQQ', tail_canonical_blob, 64, 0xDEADBEEF, 1,
@@ -1129,7 +1129,7 @@ with tempfile.TemporaryDirectory(prefix='mil-hwx-h13-test-') as directory:
                  'linear-runtime-weight', False, 'h13.linear-nonconstant-weight')
     compile_text(linear_source(256, 300, (), runtime_bias=True),
                  'linear-runtime-bias', False, 'h13.linear-nonconstant-bias')
-    for reduction, physical in ((1, 256), (257, 512)):
+    for reduction, physical in ((1, 512), (257, 512)):
         boundary_weights = bytearray(128 + reduction * 2)
         struct.pack_into('<IIQQ', boundary_weights, 64, 0xDEADBEEF, 1,
                          reduction * 2, 128)
@@ -1320,7 +1320,7 @@ with tempfile.TemporaryDirectory(prefix='mil-hwx-h13-test-') as directory:
                 # untransposed forms.
                 assert logical_program['encoder'] == 'h13-source-qualified', case
                 assert logical_program['inputs'][0]['nchw'] == \
-                    [1, reduction, 1, 1, 64, 64], case
+                    [1, 512, 1, 1, 64, 64], case
             assert (logical / 'program-0.anec').read_bytes() == payload
             assert logical_manifest['inputs'][0]['shape'] == list(x_shape)
             assert logical_manifest['outputs'][0]['shape'] == list(output_shape)

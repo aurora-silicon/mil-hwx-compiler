@@ -28,6 +28,8 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 ROOT = KIT.parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+import libane_overrun  # noqa: E402
 COMPILER = Path(os.environ.get("ANE_COMPILER_BIN") or ROOT / "build/mil-hwxc")
 REFERENCE = ROOT / "tools/h13_reference.py"
 RUNNER = ROOT / "tools/h13_run_linux.py"
@@ -98,6 +100,12 @@ def check(rung, work):
     (package / "compiler.sha256").write_text(
         f"{hashlib.sha256(COMPILER.read_bytes()).hexdigest()}  mil-hwxc\n")
     manifest = json.loads((package / "manifest.json").read_text())
+    for program in manifest["programs"]:
+        found = libane_overrun.overruns((package / program["file"]).read_bytes())
+        if found:
+            channel, need, have = found[0]
+            raise SystemExit(f"FAIL rung {rung['id']} {program['file']}: libane would refuse it, "
+                             f"surface channel {channel} needs {need} bytes but is allocated {have}")
     encoders = Counter(program["encoder"] for program in manifest["programs"])
     if encoders != Counter(rung["encoders"]):
         raise SystemExit(f"FAIL rung {rung['id']} encoders {dict(encoders)} "

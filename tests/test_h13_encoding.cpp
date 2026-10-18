@@ -238,7 +238,7 @@ void checkMatvec(std::uint32_t reduction) {
     const auto program = ane::h13::encodeMatvec(reduction, weights.data(), weights.size(), true);
     assert(program.task == expectedMatvecTask());
     assert(program.inputs.size() == 1);
-    checkLayout(program.inputs[0], 5, reduction, reduction * 64);
+    checkLayout(program.inputs[0], 5, 512, 512 * 64);
     checkLayout(program.output, 4, 512, 0x8000);
 
     assert(program.constants.size() == 16 * kBlockBytes);

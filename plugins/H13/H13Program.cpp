@@ -173,6 +173,7 @@ constexpr std::size_t destinationFormat = 0x270;
 } // namespace reg
 
 constexpr std::size_t outputRows = 512;
+constexpr std::uint32_t matvecInputChannels = 512; // channels matvecTask moves from surface channel 5, whatever the reduction
 constexpr std::size_t rowsPerBlock = 32;
 constexpr std::size_t blockBytes = 0x8000;
 constexpr std::size_t blockHalfwords = blockBytes / 2;
@@ -319,7 +320,7 @@ std::vector<std::uint8_t> matvecTask() {
     putLE32(task, reg::inputDimensions, (1u << 16) | 1u);
     putLE32(task, reg::commonPad0, 1);
     putLE32(task, reg::channelConfig, 2u | (2u << 4));
-    putLE32(task, reg::inputChannels, 512);
+    putLE32(task, reg::inputChannels, matvecInputChannels);
     putLE32(task, reg::outputChannels, 512);
     putLE32(task, reg::outputDimensions, (1u << 16) | 1u);
     putLE32(task, reg::commonPad1, 1);
@@ -1079,7 +1080,9 @@ Program encodeMatvec(std::uint32_t reduction, const std::uint8_t *weights,
         relocations[index] = 0x74 + index * sizeof(std::uint32_t);
     return {matvecTask(),
             packWeights(reduction, weights, transposeY),
-            {tensor(5, reduction, static_cast<std::uint64_t>(reduction) * 64)},
+            // The task always moves 512 input channels (matvecTask: 32768 bytes from channel 5), so the physical surface is 512 channels at
+            // both reductions. At reduction 256 the logical tensor is the first 256 channels and the padding lanes are zero.
+            {tensor(5, matvecInputChannels, matvecInputChannels * 64)},
             tensor(4, outputRows, 0x8000),
             taskBytes,
             1,

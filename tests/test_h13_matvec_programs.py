@@ -13,7 +13,7 @@ from timeouts import scaled_timeout
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/mil-hwxc").resolve()
 PINNED = {
-    256: ((529024, "b4720f876d3b0f47645eb6fa8dfa7fc9522cdbdee1dd36715a22c9f42358e2cc"),),
+    256: ((529024, "619076bd76e1e7208b54d630cb217b7f2382b44249a8b052c33cdc005fe38542"),),
     512: ((529024, "619076bd76e1e7208b54d630cb217b7f2382b44249a8b052c33cdc005fe38542"),),
     1024: (
         (529024, "619076bd76e1e7208b54d630cb217b7f2382b44249a8b052c33cdc005fe38542"),
