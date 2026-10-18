@@ -16,6 +16,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   fix. `first_run.py` runs it on every program of every rung. Two programs of the 77 in the MLP rung overran before the fix.
 - Kit: the first-run catalog gains `09-matvec-k512-n512` and `10-runtime-matmul-128`. A latency table then has points
   above the per-call floor.
+- Device status: the K = 256, N = 512 matvec with the fixed surface ran exact on a 13-inch M1 and on a 16-inch M1 Max under
+  `ane-run`, 200 calls each. So did the K = N = 512 matvec and a 128 x 128 x 128 runtime matmul. Every output equals the
+  exact fp16 reference, and the outputs are identical on the two chips. The calls took 0.027 to 0.035 ms on the 13-inch and
+  0.048 to 0.073 ms on the 16-inch (receipt `receipts/2026-10-18-h13-matvec-surface-fix/`). One run per rung and chip.
 
 ### 2026-10-17
 - Inspector: `research/inspect_hwx.py` names CPU subtype 11 as H18G. An HWX that the ANE compiler produced for target `h18g`
