@@ -4,6 +4,20 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+## 0.3.0 (2026-10-18)
+
+New since 0.2.0:
+- Fix: the H13 matvec at reduction 256 sizes its channel 5 input surface to the 32,768 bytes its task moves (PR #25).
+  A 13-inch M1 refused the old K = 256 program. The fixed program runs exact on a 13-inch M1 and a 16-inch M1 Max.
+  Its package manifest changes. The physical surface is 512 channels and the logical tensor stays 256.
+- Compiler: the scaled exp chain compiles to one H14 program. It ran on an M2 Max within its preregistered criteria.
+- Inspector: `research/inspect_hwx.py` names CPU subtype 11 as H18G (PR #24).
+- Tests: a device-free port of libane's overrun check. Pinned H14 matvec programs with 2, 8 and 64 rows. Non-square matvecs.
+  Twenty-three unary programs. A gate for the H13 matvec channel layout.
+- First-run kit: rungs 9 to 20 join the catalog (PRs #25 and #26). Among them are constant-weight matmuls with 64 rows.
+- Bootstrap: the toolchain script installs libobjc2 into `lib` on lib64 distributions (PR #10).
+- Device runs: the H13 and H14 runs of this period are listed by date below. Each is one run on one boot.
+
 ### 2026-10-18
 - Kit: the first-run catalog gains rungs 11 to 20, ten constant-weight matmuls with 64 rows that the compiler emits as one
   program each (4.2 to 537 million multiply-adds). Other sizes compile to one program per row or row group.
