@@ -31,7 +31,7 @@ Two more compiles on H13, for the 6144 x 2048 linear:
 
 ## Devices
 
-The converted programs ran under `ane-run --repeat 200 --time` on a 13-inch M1 (H13) and on a 14-inch M2 Max (H14). Each program ran once. The inputs were fixed random values. The outputs were not checked, because the weights are random. All runs returned 0 and logged no fault. The table gives the median exec time per call in ms, with the program file size in MB.
+The converted programs ran under `ane-run --repeat 200 --time` on a 13-inch M1 (H13) and on a 14-inch M2 Max (H14). The three 6144 x 2048 programs ran twice on each device and the three MLP programs once. The inputs were fixed random values. The outputs were not checked, because the weights are random. All runs returned 0 and logged no fault. The table gives the median exec time per call in ms of the first run, with the program file size in MB. The two runs of a program differ by at most 0.004 ms.
 
 | Program (MB) | 13-inch M1 | M2 Max |
 |---|---|---|
@@ -42,7 +42,7 @@ The converted programs ran under `ane-run --repeat 200 --time` on a 13-inch M1 (
 | MLP int8 (37.8) | 0.982 | 2.493 |
 | MLP 4-bit (18.9) | 0.507 | 1.483 |
 
-On the M1 the time follows the file size. The line 0.072 ms plus 0.022 ms per MB fits the six programs with R squared 0.994, about 45 GB/s. On the M2 Max the line is 0.66 ms plus 0.039 ms per MB with R squared 0.96, about 26 GB/s. The runs came from a package built here and were made by someone else.
+On the M1 the time follows the file size. The fits use the mean of the two runs where there are two. The line 0.072 ms plus 0.022 ms per MB fits the six programs with R squared 0.994, about 45 GB/s. On the M2 Max the line is 0.66 ms plus 0.039 ms per MB with R squared 0.96, about 26 GB/s. The runs came from a package built here and were made by someone else.
 
 ## A fused pair
 
@@ -55,7 +55,7 @@ The fused program has not run on a device.
 
 ## Limits
 
-- One boot of each machine, one run per program (the 13-inch M1 repeated three of them). Timer steps are about 0.05 ms.
+- One boot of each machine. Timer steps are about 0.05 ms.
 - Random weights. The receipt says nothing about the quality of 4-bit weights on real weights.
 - The sizes come from one build of the bridge `ane-compile-hwx`, sha256 `2060776c98e385d091ca244a2083be25919ed0c340ba1c8c89840208473b05d5`.
 - The per-row table was compiled for H13 only.

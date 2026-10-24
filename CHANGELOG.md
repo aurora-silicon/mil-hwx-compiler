@@ -4,7 +4,7 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
-- Receipt `2026-10-24-weight-formats-apple-compiler-h13-h14`: what Apple's compiler keeps of int8, 4-bit and blocked int8 weights for H13 and H14. A 4-bit table per output row compiles on H13. Tables per group of columns are refused. It gives the device times of 16 programs on a 13-inch M1 and an M2 Max. It also records a fused pair of decode programs that compiles for H14 and not for H13. No compiler code changed.
+- Receipt `2026-10-24-weight-formats-apple-compiler-h13-h14`: what Apple's compiler keeps of int8, 4-bit and blocked int8 weights for H13 and H14. A 4-bit table per output row compiles on H13. Tables per group of columns are refused. It gives the device times of six programs on a 13-inch M1 and on an M2 Max. It also records a fused pair of decode programs that compiles for H14 and not for H13. No compiler code changed.
 
 ## 0.3.0 (2026-10-18)
 
