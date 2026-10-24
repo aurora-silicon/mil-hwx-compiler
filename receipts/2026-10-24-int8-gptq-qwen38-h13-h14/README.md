@@ -1,6 +1,6 @@
 # Int8 weights chosen by GPTQ for the Qwen decode package, H13 and H14, 2026-10-24
 
-The decode package keeps its large matmul weights as int8 with one fp16 scale per output row. Plain rounding of those weights misses the quality gate on a 14-inch M2 Max. Choosing the integers with GPTQ error feedback, on captured matmul inputs, passes it on all three machines that ran it, at the same speed. This receipt holds the recipe scripts and the seals of the two packages.
+The decode package keeps its large matmul weights as int8 with one fp16 scale per output row. Plain rounding of those weights misses the quality gate on a 14-inch M2 Max. Choosing the integers with GPTQ error feedback, on captured matmul inputs, passes it on both machines that ran it, at the same speed. This receipt holds the recipe scripts and the seals of the two packages.
 
 ## The packages
 
@@ -26,7 +26,7 @@ For one weight W [N, K] and captured inputs X [T, K] at that matmul:
 
 ## Quality and speed
 
-Quality is the KL divergence of the decode logits against the fp16 package, on 50 prompts of 128 tokens, with the top-1 agreement.
+Quality is the KL divergence of the decode logits against the CPU fp32 reference, on 50 prompts of 128 tokens, with the top-1 agreement.
 
 | Machine | Variant | KL | Top-1 | Gate |
 |---|---|---|---|---|
