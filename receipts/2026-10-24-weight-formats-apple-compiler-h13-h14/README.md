@@ -51,7 +51,6 @@ Two adjacent programs of a decode package were fused at the MIL level. The first
 - H14: compiles. The program file is 34,160,640 bytes. It converts to an ANEC of 34,099,648 bytes with 39 tasks. The port table has one open ambiguity: two outputs have the same shape.
 - H13: refused, `ANECCompile=22` with no message. Each of the two programs compiles alone on H13. The cause is not known.
 
-The fused program has not run on a device.
 
 ## Limits
 
@@ -59,7 +58,8 @@ The fused program has not run on a device.
 - Random weights. The receipt says nothing about the quality of 4-bit weights on real weights.
 - The sizes come from one build of the bridge `ane-compile-hwx`, sha256 `2060776c98e385d091ca244a2083be25919ed0c340ba1c8c89840208473b05d5`.
 - The per-row table was compiled for H13 only.
+- The fused program has not run on a device.
 
 ## Source records
 
-The MIL, weights and compiled files are in the lab archive and are not in this directory. `SHA256SUMS-not-archived` lists the sha256 of the sealed packages the devices ran.
+The MIL, weights and compiled files are in the lab archive and are not in this directory. `SHA256SUMS-not-archived` lists, for each sealed package, the sha256 of its own `SHA256SUMS` file.
