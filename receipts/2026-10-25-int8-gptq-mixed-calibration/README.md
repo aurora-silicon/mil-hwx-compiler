@@ -4,7 +4,7 @@ The first GPTQ int8 package for the Qwen decode was calibrated on prose and mult
 
 ## Calibration
 
-The activation capture holds 64 prompts of 128 forced positions, 9,136 rows per tensor, for the 15 int8 programs: 20 prose prompts, 20 multilingual prompts and 24 code prompts. The code prompts come from the odd-numbered source documents of the code test set, 12 of 25. The 26 prompts of the even-numbered documents stay unseen as the code test. The long-position set is not in the calibration at all. It is made of windows of 10 base streams.
+The activation capture holds 64 prompts of 128 forced positions. With the prompt tokens that is 9,136 rows per tensor, for the 15 int8 programs: 20 prose prompts, 20 multilingual prompts and 24 code prompts. The code prompts come from the odd-numbered source documents of the code test set, 12 of 25. The 26 prompts of the even-numbered documents stay unseen as the code test. The long-position set is not in the calibration at all. It is made of windows of 10 base streams.
 
 GPTQ ran on all 125 large tensors with damping 0.3, 1, 3 and 10. The last 20 percent of the rows chose per tensor between plain rounding and each damping. The chosen damping was 0.3 on 101 tensors, 1 on 19 and 3 on 5. The earlier set chose 1 on 115 of 125, the lowest value it was offered.
 
@@ -25,7 +25,7 @@ KL divergence of the decode logits against the CPU fp32 reference, with top-1 ag
 
 | Set | Shipped | First GPTQ set | Mixed |
 |---|---|---|---|
-| Technical, 50 prompts x 128 | gate 0.000534 | 0.000397 / 0.9958 | 0.000390 / 0.9956 |
+| Technical, 50 prompts x 128 | 0.000267 (the gate, 0.000534, is twice this) | 0.000397 / 0.9958 | 0.000390 / 0.9956 |
 | Code, 26 unseen prompts | 0.000254 / 0.9958 | 0.000407 (1.60x) / 0.9934 | 0.000351 (1.38x) / 0.9952 |
 | Long position, 50 prompts x 170 | 0.000293 / 0.9935 | 0.000605 (2.06x) / 0.9896 | 0.000663 (2.26x) / 0.9898 |
 
