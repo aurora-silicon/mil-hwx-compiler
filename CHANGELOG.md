@@ -4,6 +4,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+## 0.3.1 (2026-10-25)
+
+New since 0.3.0:
+
+- H14: two more matmul shapes compile, both decoded from Apple's compiler output: M = 64 with K = 2048, N = 2048 and with K = 4096, N = 2048. Each has two tasks and a 520 byte task stream. The encoder still needs an exact decoded shape and does not interpolate. Before, both shapes failed with `h14.outside-parity-envelope`. The parity gate now covers 722 cases (PR #28).
+
 - Receipt `2026-10-25-int8-gptq-mixed-calibration`: a second GPTQ int8 calibration for the Qwen decode that adds code prompts to prose and multilingual text, with the seals of the H13 and H14 packages. On a 13-inch M1 it passes the technical set (KL 0.000390) and the code set (1.38 times the shipped KL, against 1.60 for the first set). It fails the long-position set at 2.26 times, 10 percent worse than the first set. No run on the other chips yet.
 
 - Receipt `2026-10-24-int8-gptq-qwen38-h13-h14`: the recipe scripts and the seals of the Qwen decode packages whose int8 weights are chosen by GPTQ on captured matmul inputs. KL against the CPU fp32 reference is 0.000397 on a 13-inch M1 and 0.000400 on a 14-inch M2 Max. The gate is 0.000534. Plain int8 gave 0.000547 on the M2 Max. The speed is the same. The packages were not rebuilt from the scripts after the path lines were changed to environment variables.
