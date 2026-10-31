@@ -40,6 +40,8 @@ state. State inputs/outputs are explicit. The 512-lane variant zero-pads every
 gate separately and supplies bias and +/-1 vectors as fixed model feeds.
 Consumers must bind those exact vectors and zero invalid input/state lanes.
 
+Coverage receipts record the exact dependency versions used by each run.
+
 The tests compare unpadded recurrent equations against independent ONNX Runtime
 operators for 100 steps, compare padded and unpadded state including zero tails,
 and compile padded cells for both generations, schedules and artifact formats.

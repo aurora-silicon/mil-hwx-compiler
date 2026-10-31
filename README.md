@@ -129,7 +129,7 @@ The pair then becomes one program with no intermediate buffer.
 inside a larger DAG and reuses the same decoded epilogues. Returned values and
 fan-out block that fusion. Other edges keep their per-operation programs.
 H14 now uses the same ordered `logicalResults` and distinct `physicalOutputs`
-contract as H13, including state values consumed after being returned.
+contract as H13, including returned state values also consumed by later operations.
 See [recurrent coverage](docs/recurrent-coverage.md) for the exact limits and
 DFN3 audit commands. This does not establish a complete native denoiser.
 `--model-root` is the directory where `BLOBFILE` constants resolve.
