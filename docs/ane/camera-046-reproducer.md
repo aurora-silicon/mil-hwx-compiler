@@ -44,16 +44,20 @@ be empty so earlier failures and readbacks are preserved.
 python3 tools/h13-conv-bench/repro_camera046.py build --target H13 --output /tmp/camera046-gather
 python3 tools/h13-conv-bench/repro_camera046.py build --target H13 --kind dense --output /tmp/camera046-dense
 python3 tools/h13-conv-bench/repro_camera046.py build --target H13 --kind mix --output /tmp/camera046-mix
+python3 tools/h13-conv-bench/repro_camera046.py build --target H13 --kind pair --output /tmp/camera046-pair
 ```
 
 Use `--target H14` to prepare the corresponding M2 packages. Each directory
-contains MIL, source-owned weights, one two-task ANEC program, packed input,
+contains MIL, source-owned weights, one ANEC program (two tasks for a
+standalone stage, four for the linked pair), packed input,
 float64 reference rounded to fp16 with ties away, and artifact hashes.
 
 The gather uses the four corner shifts over 96 live channels and zeros all
 padded channels. Dense mode exercises every one of the 128 input and 512
 output channels. Mix mode uses a sparse exact 5×5-to-3×3 coefficient rewrite
 with 384 live inputs and 96 live outputs.
+Pair mode links gather and mix into one four-task program and rounds the
+intermediate surface to fp16 before computing the second CPU reference.
 
 On a lead-authorized device run, start with one cold execution and fresh
 input through the existing `anechain` runner from
@@ -67,7 +71,7 @@ python3 tools/h13-conv-bench/repro_camera046.py compare \
 ```
 
 The gather requires exact numerical fp16 agreement (+0 and -0 compare equal).
-Dense and mix modes use rel. L2 ≤0.002 and reject nonfinite output. The
+Dense, mix and pair modes use rel. L2 ≤0.002 and reject nonfinite output. The
 comparator reports max absolute error and its channel/row/column. Repeat
 with a different seed, then check the original whole island and its host
 crop/select separately. Host parity is not a device numerical receipt.

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Prepare or compare either camera island-046 dense stage on H13/H14.
 
-build writes a standalone 128->512, 3x3 s1 p1, 35x35 fp16 package, input
+build writes a 3x3 s1 p1, 35x35 fp16 package, input
 surface, and float64 reference rounded to fp16 with ties away. It never
 executes a device. gather exercises the exact 96->384 padded channel layout;
 dense exercises every one of the 128 input and 512 output channels. mix
 exercises the padded 384->96 second-stage layout in a 512->128 surface.
+pair links gather and mix into one four-task program.
 """
 import argparse
 import hashlib
@@ -54,30 +55,40 @@ def build(args):
     if args.output.exists() and any(args.output.iterdir()):
         raise FileExistsError("fixture output must be empty; preserve previous results")
     args.output.mkdir(parents=True, exist_ok=True)
-    x, w, b = parameters(args.kind, args.seed)
+    pair=args.kind=="pair"
+    x, w, b = parameters("gather" if pair else args.kind, args.seed)
     layer = dict(cout=w.shape[0], k=3, s=1, g=1, bias=True, relu=False)
-    mil, _, _ = conv_mil([layer], x.shape, str(args.output / "src"),
-                         weights=[dict(w=w, b=b)])
+    layers=[layer];weights=[dict(w=w,b=b)]
+    if pair:
+        _,wm,bm=parameters("mix",args.seed)
+        layers.append(dict(cout=128,k=3,s=1,g=1,bias=True,relu=False))
+        weights.append(dict(w=wm,b=bm))
+    mil, _, _ = conv_mil(layers, x.shape, str(args.output / "src"),weights=weights)
     package = args.output / "pkg"
-    subprocess.run([str(args.compiler.resolve()), "--target", args.target, "--mil", mil,
-                    "--model-root", str(args.output / "src"), "--output", str(package)],
+    command=[str(args.compiler.resolve()), "--target", args.target, "--mil", mil,
+             "--model-root", str(args.output / "src"), "--output", str(package)]
+    if pair: command += ["--schedule","linked"]
+    subprocess.run(command,
                    env=dict(os.environ, MILHWXC_H13_CONV_GENERIC="1"), check=True)
     manifest = json.loads((package / "manifest.json").read_text())
     assert len(manifest["programs"]) == 1
     program = manifest["programs"][0]
-    assert program["taskDescriptors"] == 2
+    assert program["taskDescriptors"] == (4 if pair else 2)
     reference = f16_ties_away(conv_ref(x, w, b, 1, 1, 1, False))
+    if pair: reference=f16_ties_away(conv_ref(reference,wm,bm,1,1,1,False))
     (args.output / "input.bin").write_bytes(pack(x, program["inputs"][0]["nchw"],
                                                program["inputs"][0]["allocationBytes"]))
     (args.output / "expected.bin").write_bytes(pack(reference, program["outputs"][0]["nchw"],
                                                   program["outputs"][0]["allocationBytes"]))
-    np.savez(args.output / "reference.npz", x=x, w=w, b=b, y=reference)
+    np.savez(args.output / "reference.npz", x=x, w=w, b=b, y=reference,
+             **(dict(w_mix=wm,b_mix=bm) if pair else {}))
     hashes = {str(p.relative_to(args.output)): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in (args.output / "input.bin", args.output / "expected.bin",
                         package / program["file"])}
     (args.output / "reproducer.json").write_text(json.dumps(dict(
-        geometry=f"{x.shape[0]}->{w.shape[0]} k3 s1 p1 35x35 fp16", target=args.target, kind=args.kind, seed=args.seed,
-        active_channels=[96,384] if args.kind=="gather" else ([384,96] if args.kind=="mix" else [128,512]),
+        geometry=("128->512->128" if pair else f"{x.shape[0]}->{w.shape[0]}")+" k3 s1 p1 35x35 fp16", target=args.target, kind=args.kind, seed=args.seed,
+        compiler_sha256=hashlib.sha256(args.compiler.read_bytes()).hexdigest(),
+        active_channels=[96,384,96] if pair else [96,384] if args.kind=="gather" else ([384,96] if args.kind=="mix" else [128,512]),
         reference="float64, fp16 ties away", sha256=hashes), indent=2) + "\n")
     print(args.output / "reproducer.json")
 
@@ -104,7 +115,7 @@ def main():
     make = commands.add_parser("build")
     make.add_argument("--compiler", type=Path, default=Path("build/mil-hwxc"))
     make.add_argument("--target", choices=("H13","H14"), default="H13")
-    make.add_argument("--kind", choices=("gather", "dense", "mix"), default="gather")
+    make.add_argument("--kind", choices=("gather", "dense", "mix", "pair"), default="gather")
     make.add_argument("--seed", type=int, default=3991)
     make.add_argument("--output", type=Path, required=True)
     check = commands.add_parser("compare")

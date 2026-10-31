@@ -26,7 +26,7 @@ encoding when both scales are exactly two. Bilinear accepts
 `upsample_bilinear(align_corners=false)` or
 `resize_bilinear(sampling_mode="UNALIGN_CORNERS")`, with both scales two.
 Other coordinate conventions are refused. These coordinate definitions
-follow the [Core ML MIL resize specification](https://github.com/apple/coremltools/blob/main/coremltools/converters/mil/mil/ops/defs/iOS15/image_resizing.py).
+follow the [Core ML MIL resize specification](https://github.com/apple/coremltools/blob/a207b1a3452eafe02f2d870f486287834af2c82d/coremltools/converters/mil/mil/ops/defs/iOS15/image_resizing.py).
 
 Hardswish recognizes the canonical MIL expression
 `mul(x, real_div(relu6(add(x, fp16(3))), fp16(6)))`, with no escaping
@@ -35,7 +35,7 @@ loads. Direct `hard_swish` probes were rejected by Apple. The accepted
 `sigmoid_hard` experiments decoded a slope of 0.2 even with an explicit 1/6
 argument; they are retained as **unqualified evidence**, not used as
 hardswish. The arithmetic form uses the relu6 clamp and 1/6 scale. See the
-[MIL activation definitions](https://github.com/apple/coremltools/blob/main/coremltools/converters/mil/mil/ops/defs/iOS15/activation.py).
+[MIL activation definitions](https://github.com/apple/coremltools/blob/a207b1a3452eafe02f2d870f486287834af2c82d/coremltools/converters/mil/mil/ops/defs/iOS15/activation.py).
 
 New convolution points, each with kernels 1/3/5:
 
@@ -124,7 +124,8 @@ retains Apple's BAR slots for parity. H14 routing is based on the public
   unsupported native concat shapes, and escaping hardswish intermediates.
 - Linked graphs outside the native/conv/concat envelope, more than two
   boundary inputs, multiple results, private per-layer DRAM scratch, and
-  graph L2 edges without a decoded form. Whisper transpose extension is
+  graph L2 edges without a decoded form. H14 dependencies more than 16 tasks
+  back exceed their four-bit distance and are refused. Whisper transpose extension is
   separate from this envelope; existing transpose support is unchanged.
 
 `make test-h13` and `make test-h14-parity` include native task/constant parity,

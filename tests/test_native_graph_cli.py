@@ -71,6 +71,23 @@ def main():
             else:
                 concat_start=2
                 assert regs[concat_start][dst]!=regs[concat_start+1][dst]
+    if args.target=="H14":
+        # A shared early producer cannot be represented by the 4-bit native
+        # dependency distance after a long branch. Refuse instead of wrapping
+        # or saturating that distance and waiting on the wrong task.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);mil,blob=graph_case(True,False)
+            line=next(s for s in mil.splitlines() if " = concat(" in s)
+            chain=[];previous="b"
+            for i in range(18):
+                chain.append(f'    tensor<fp16, [1, 16, 16, 16]> late{i} = sigmoid(x = {previous})[name = string("late{i}")];')
+                previous=f"late{i}"
+            mil=mil.replace(line,"\n".join(chain)+"\n"+line.replace("(a,b)",f"(a,{previous})"))
+            (root/"model.mil").write_text(mil);(root/"weights.bin").write_bytes(blob)
+            run=subprocess.run([compiler,"--target","H14","--schedule","linked",
+                "--mil",str(root/"model.mil"),"--model-root",tmp,"--output",str(root/"out")],
+                capture_output=True,text=True,timeout=120)
+            assert run.returncode and "4-bit task distance" in run.stderr,run.stderr
     print(f"{args.target} native graphs: PASS (zero-copy output/intermediate, shared producer copies)")
 
 

@@ -209,7 +209,8 @@ h14::Program linkH14Graph(const std::vector<h14::Program> &layers,
                         // Native DRAM handoffs in env_mm_r2br_m1_k2048_n2048
                         // and sched_fused_lut_d512_s512: DependencyMode 1,
                         // distance-minus-one, and scratch cache hints.
-                        const auto distance=static_cast<unsigned>(std::min<std::int64_t>(global-writer[route.owner]-1,15));
+                        const auto distance=static_cast<unsigned>(global-writer[route.owner]-1);
+                        if (distance>15) refuse("graph dependency exceeds the 4-bit task distance");
                         regs[cfg] = (regs[cfg] & ~0xff0000f0u) | 0x100000e0u | (distance << 24);
                         regs[0x1108 + 4 * source] = 0xee;
                         task.extra[0x1108 + 4 * source] = 0xee;

@@ -39,15 +39,29 @@ def bound_h14(task):
     return dict(task,records=records)
 
 
-def compile_case(compiler, target, root, mil, success=True):
+def compile_case(compiler, target, root, mil, success=True, artifact_format="anec"):
     (root / "model.mil").write_text(mil)
     run = subprocess.run([compiler, "--target", target.upper(), "--mil", str(root / "model.mil"),
-                          "--model-root", str(root), "--output", str(root / "out")], capture_output=True, text=True, timeout=120)
+                          "--model-root", str(root), "--format", artifact_format,
+                          "--output", str(root / ("out" if artifact_format=="anec" else "out-hwx"))], capture_output=True, text=True, timeout=120)
     if not success:
         assert run.returncode != 0, run.stdout
         return
     assert run.returncode == 0, run.stderr
-    return json.loads((root / "out/manifest.json").read_text())
+    return json.loads((root / ("out" if artifact_format=="anec" else "out-hwx") / "manifest.json").read_text())
+
+
+def hwx_sections(data):
+    sections={};cursor=32
+    for _ in range(struct.unpack_from("<I",data,16)[0]):
+        command,size=struct.unpack_from("<II",data,cursor)
+        if command==0x19:
+            segment=struct.unpack_from("<2I16s4Q4I",data,cursor)
+            for index in range(segment[-2]):
+                s=struct.unpack_from("<16s16s2Q8I",data,cursor+72+80*index)
+                sections[(segment[2].rstrip(b"\0"),s[0].rstrip(b"\0"))]=data[s[4]:s[4]+s[3]]
+        cursor+=size
+    return sections
 
 
 def main():
@@ -87,6 +101,17 @@ def main():
                 n, c, h, w, plane, row = binding["nchw"]
                 assert [n,c,h,w] == tensor["shape"]
                 assert [plane*c,plane,row,2] == tensor["strides"]
+            hwx=compile_case(compiler,target,root,oracle["mil"],artifact_format="hwx")
+            hp=hwx["programs"][0]
+            sections=hwx_sections((root/"out-hwx"/hp["file"]).read_bytes())
+            hs=sections[(b"__TEXT",b"__text")]
+            raw=(split_h13_tasks(hs,oracle["task_descriptors"][0]["size_bytes"]//4-1,tasks)
+                 if target=="h13" else split_h14_tasks(hs))
+            # H13 HWX uses the same explicit binding roles as its ANEC;
+            # H14 HWX restores the oracle BAR roles from normalized ANEC.
+            hwx_expected=expected if target=="h13" else oracle["task_descriptors"]
+            assert [decode_task(t,target) for t in raw]==hwx_expected,(oracle["case"],"HWX task fields")
+            assert hashlib.sha256(sections[(b"__TEXT",b"__const")]).hexdigest()==oracle["constant_section"]["sha256"]
             count += 1
     for target in (args.target,) if args.target else ("h13", "h14"):
         base = json.loads((ROOT / "research/oracles" / target /
@@ -96,7 +121,7 @@ def main():
                        base.replace("int32(32)", "fp32(32)")):
             with tempfile.TemporaryDirectory() as tmp:
                 compile_case(compiler, target, Path(tmp), source, success=False)
-    print(f"native layer CLI: PASS ({count} exact field/constant points)")
+    print(f"native layer CLI: PASS ({count} exact field/constant points, ANEC and HWX)")
 
 
 if __name__ == "__main__":

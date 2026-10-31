@@ -3286,9 +3286,9 @@ Program linkConvChain(const std::vector<Program> &layers,
                             throw std::invalid_argument("h13.linked-outside-envelope: native output exceeds its region");
                         selectors = (selectors & ~(31u << 12)) | (3u << 12);
                         storeLE32(task, base, loadLE32(task, base) + static_cast<std::uint32_t>(regions[index]));
-                        if (dstConfig != 0x40000c1)
+                        if (dstConfig != 0x40000c1 && dstConfig != 0xc1)
                             throw std::invalid_argument("h13.linked-outside-envelope: unknown native destination DMA config");
-                        storeLE32(task, regWord(0x17800), 0x40003c1);
+                        storeLE32(task, regWord(0x17800), dstConfig | 0x300);
                     }
                 }
                 // Internal task headers and selectors keep their decoded
@@ -3572,7 +3572,8 @@ Program linkLayerGraph(const std::vector<Program> &layers,
                 selectors=(selectors&~(31u<<shift))|(bound<<shift);
             }
             if (value(0x17800)&1) {
-                if (((selectors>>12)&31)!=5 || !(selectors&(1u<<17)) || value(0x17800)!=0x40000c1)
+                if (((selectors>>12)&31)!=5 || !(selectors&(1u<<17)) ||
+                    (value(0x17800)!=0x40000c1 && value(0x17800)!=0xc1))
                     fail("unqualified graph destination form");
                 const auto first=value(0x17804);
                 if (static_cast<std::uint64_t>(first)+layer.output.nchw[4]*value(0x10)>layer.output.allocationBytes ||
@@ -3585,7 +3586,7 @@ Program linkLayerGraph(const std::vector<Program> &layers,
                     if (depth>0xffffffffu) fail("concat owner stride exceeds 32 bits");
                     storeLE32(task,pos(0x17810),static_cast<unsigned>(depth));
                 }
-                if (!target.output) storeLE32(task,pos(0x17800),0x40003c1);
+                if (!target.output) storeLE32(task,pos(0x17800),value(0x17800)|0x300);
                 writer[target.owner]=global;wrote=true;
             }
             selectors=(selectors&~(1u<<23))|(last?0u:1u<<23);
