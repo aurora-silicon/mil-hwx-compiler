@@ -117,11 +117,33 @@ def compare(milc, fact):
         anec = Path(tmp, "out", "program-0.anec").read_bytes()
     ours = tasks(anec)
     theirs = d["task_descriptors"]
-    bad = []
     if len(ours) != len(theirs):
         # The open compiler splits some layers into more tasks (128-output
         # stride-2 slices, the 1 MiB kernel budget); no field comparison.
         return case, None
+    # Split-producer slices: the open encoder runs channel slices in
+    # ascending order and Apple's descend, so slice result bases are compared
+    # as a set (docs/ane/linked-programs.md).
+    def is_slice(regs_of, k):
+        return regs_of(k).get(0x04830) == 0x140 and regs_of(k).get(0x04804) in (0x160, 0x100) and \
+            k + 1 < len(ours) and regs_of(k + 1).get(0x04804) in (0x100, 0x120)
+    apple_regs = [{int(a, 16): int(v, 16) for blk in t["blocks"].values() for a, v in blk["words"].items()} for t in theirs]
+    slice_tasks = [k for k in range(len(ours)) if is_slice(lambda q: apple_regs[q], k)
+                   and (k + 1 < len(ours) and apple_regs[k + 1].get(0x04804) in (0x100, 0x120))]
+    groups = []
+    for k in slice_tasks:
+        if groups and groups[-1][-1] == k - 1: groups[-1].append(k)
+        else: groups.append([k])
+    groups = [g + [g[-1] + 1] if apple_regs[g[-1] + 1].get(0x04804) == 0x100 else g for g in groups]
+    set_checked = set()
+    bad = []
+    for grp in groups:
+        if len(grp) < 2: continue
+        a = sorted(ours[k][1].get(0x04834) for k in grp)
+        b = sorted(apple_regs[k].get(0x04834) for k in grp)
+        if a != b:
+            bad.append(f"slice result bases {[hex(x) for x in a]} vs {[hex(x) for x in b]}")
+        set_checked.update(grp)
     for i, ((h, regs), t) in enumerate(zip(ours, theirs)):
         ah = [int(x, 16) for x in t["header_words"]]
         for j in range(9):
@@ -137,7 +159,8 @@ def compare(milc, fact):
         for blk in ("0x00000", "0x04800", "0x13800", "0x17800"):
             for k, v in t["blocks"][blk]["words"].items():
                 a, b = regs.get(int(k, 16)), int(v, 16)
-                if a != b and int(k, 16) not in NON_EDGE:
+                if a != b and int(k, 16) not in NON_EDGE and not (
+                        int(k, 16) == 0x04834 and i in set_checked):
                     bad.append(f"t{i} {k} ours {a if a is None else hex(a)} apple {v}")
     return case, bad
 

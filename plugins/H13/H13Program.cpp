@@ -3251,9 +3251,14 @@ Program linkConvChain(const std::vector<Program> &layers,
             }
             if (outL2) {
                 // Resident result in the consumer's source layout. A split
-                // producer writes one aggregate: slice j of n at
-                // base + (n - 1 - j) * sliceChannels * rowL2, each with the
-                // full aggregate strides (t-4020).
+                // producer writes one aggregate, each slice with the full
+                // aggregate strides (t-4020). Slice j (output channels
+                // j * sliceChannels onward) sits at base + j * sliceChannels *
+                // rowL2. Apple's decoded slices descend instead, which matches
+                // only if its tasks run the channel slices in reverse order;
+                // the descending form was wrong on the M1 Pro for this
+                // encoder's ascending slices (cold rel. L2 1.15), the
+                // ascending form exact.
                 const auto &next = layers[index + 1];
                 auto nextReg = [&](std::uint32_t a) {
                     return loadLE32(next.task, h13RegisterOffset(next.task, 0, next.firstTaskBytes, a));
@@ -3261,8 +3266,7 @@ Program linkConvChain(const std::vector<Program> &layers,
                 const auto g = layerGeometry(layer);
                 const std::size_t slice = static_cast<std::size_t>(&span - &spans[index].front());
                 const std::uint64_t sliceBase = l2.resultBase[index] +
-                    static_cast<std::uint64_t>(layer.taskCount - 1 - slice) *
-                        g.sliceChannels * nextReg(0x0480c);
+                    static_cast<std::uint64_t>(slice) * g.sliceChannels * nextReg(0x0480c);
                 putRegister(task, offset, bytes, 0x04830,
                             outEdge == EdgeMode::AliasInit ? 0x500170u : 0x140u);
                 putRegister(task, offset, bytes, 0x04834,

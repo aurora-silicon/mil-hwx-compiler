@@ -292,6 +292,32 @@ chained alias into a split consumer, stride-2 split consumers reading L2, and
 a depthwise task after a 0x120 edge emitting a chained alias. They still
 need the device ladder.
 
+**On the M1 Pro (01/11/2026, kernel tt3 = aurora-wip with the #717 recovery and #718 boost
+fallback, real weights).** The ladder ran cold against the per-layer programs, each step exact:
+
+- the six-layer tails at 14x14 and 28x28;
+- the split-producer aggregate with 2 and 4 slices, after one fix (below);
+- MobileNet layers 8 to 13 and 8 to 27;
+- the whole network.
+
+Top-1 is 16/16 and top-5 5/5 against the CPU reference.
+
+| MobileNetV1 224 | p50 exec | p99 | inf/s | busy |
+| --- | ---: | ---: | ---: | ---: |
+| `linked` (DRAM edges), 1000 passes | 2.249 ms | 2.316 ms | 443 | 2.244 ms |
+| `linked-l2`, 1000 passes | 1.641 ms | 1.659 ms | 609 | 1.627 ms |
+| `linked-l2`, 5000 passes, boost on | 1.645 ms | 1.678 ms | 605 | 1.639 ms |
+| `linked-l2`, 5000 passes, boost_idle_ms=0 | 1.629 ms | 2.051 ms | 605 | 1.633 ms |
+
+That is 27 % faster than DRAM edges, with no task errors in either 5000-pass
+soak. The boost-0 error that the DRAM-chained net shows did not appear here.
+
+The one fix: Apple's decoded split-producer slices descend (slice 0 at the
+highest base). This encoder runs its slices in ascending channel order, and
+with descending bases the device output was wrong (cold rel. L2 1.15). Slice j
+now sits at base + j * slice channels * rowL2, and the parity check compares
+slice bases as a set.
+
 ## Remaining gap to macOS and next steps
 
 macOS runs MobileNetV1 224 on the M4 Pro (H16) in 0.30 ms (measured). For
