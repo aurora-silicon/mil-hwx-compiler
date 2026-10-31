@@ -179,6 +179,14 @@ def campaign() -> list[dict]:
         single("conv_desc_pw_c512_n512_s14", 512, 512, 14, 1),
         single("conv_desc_pw_c512_n1024_s7", 512, 1024, 7, 1),
         single("conv_desc_pw_c1024_n1024_s7", 1024, 1024, 7, 1),
+        single("conv_desc_pw_c512_n1024_s14", 512, 1024, 14, 1,
+               relu=True),
+        single("conv_desc_pw_c1024_n1024_s14", 1024, 1024, 14, 1,
+               relu=True),
+        single("conv_desc_pw_c512_n1024_s28", 512, 1024, 28, 1,
+               relu=True),
+        single("conv_desc_pw_c1024_n1024_s28", 1024, 1024, 28, 1,
+               relu=True),
         single("conv_desc_dw_k3_c256_s28", 256, 256, 28, 3,
                groups=256),
         single("conv_desc_dw_k3_c256_s28_st2", 256, 256, 28, 3, 2, 256),
@@ -205,6 +213,10 @@ def campaign() -> list[dict]:
             (1024, 3, 1, 1024, False),
             (1024, 1, 1, 1, True),
         ]),
+        # Full-width stress form: two output-channel tasks per layer and
+        # DRAM-chained inter-layer edges at this measured schedule.
+        chain("conv_desc_chain6_dram_pw1024_s28", 1024, 28,
+              [(1024, 1, 1, 1, False)] * 6),
     ]
 
 
