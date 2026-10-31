@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Device-free, fail-closed H16G container gate for the initial fp16 ABI.
 
-Implements the derived SPEC-r3 container rules. This is independent of the
-writer and never opens an accelerator. Passing does not prove task semantics,
+Implements the derived SPEC-r3 container and SPEC-r4 resource rules.
+This is independent of the writer and never opens an accelerator. Passing does not prove task semantics,
 firmware identity, runtime ownership, or Linux execution readiness.
 """
 from __future__ import annotations
@@ -81,7 +81,8 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
     Record-count and format words are opaque and never size this walk.
     """
     require(policy in ('driver', 'public'), "unknown-task-policy")
-    prefix = bytes(16) if policy == 'driver' else b'\x01' + bytes(15)
+    # 'public' remains a CLI alias; both use the corrected H16 driver contract.
+    prefix = b'\x01' + bytes(15)
     require(expected > 0 and 16 <= len(data) <= 0x60000 and
             len(data) % 4 == 0 and data[:16] == prefix, "task-envelope")
     pos, count = 16, 0
@@ -348,14 +349,108 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         symbols[sym] = (ordinal, value)
     for s, (_, short) in zip(surface, refs):
         require(symbols.get(short) == (s['sections'][0]['ordinal'], s['vm']), "symbol-binding")
+    # The initial ABI maps only external input/output surfaces. Indices are
+    # local to class, matching the separate input/output request arrays.
+    ordered = [short for direction in (1, 2) for short in bound
+               if by_short[short]['direction'] == direction]
+    require([t['short'] for t in tensors] == ordered, "tensor-order")
+    indices = {1: 0, 2: 0}
+    buffers = []
+    for i, s in enumerate(surface):
+        buffers.append(dict(apertureSlot=i, index=indices[s['prot']],
+                            **{'class': s['prot'] - 1}, offsetBytes=0,
+                            sizeBytes=s['size'], mappingBytes=s['size']))
+        indices[s['prot']] += 1
+    resources = dict(version=1, commandBytes=0xca8, bufferOffset=0x60,
+                     bufferStride=0x30, customBarOffset=0xca8, customBarStride=0x18,
+                     buffers=buffers, customBars=[])
     digest = hashlib.sha256(data).hexdigest()
     if owner:
         require(digest == OWNER_SHA256, "owner-fixture-identity")
     return dict(target="H16G", sha256=digest, bytes=len(data), tasks=tasks,
                 tensors=len(tensors), apertures=apertures, scratch=mixed,
                 owner_fixture=digest == OWNER_SHA256,
-                task_policy=task_policy, driver_task_gate=taskdata[:16] == bytes(16),
+                task_policy=task_policy, driver_task_gate=True, execute_resources=resources,
                 validation="container-structure-only")
+
+
+def validate_resources(metadata: dict, expected: dict) -> None:
+    """Cross-check emitted metadata against facts from validate(HWX).
+
+    JSON metadata is advisory, never mapping or selector authority. The current
+    writer has no custom-BAR description, so any appended BAR is refused here.
+    """
+    require(json.dumps(metadata, sort_keys=True) == json.dumps(expected, sort_keys=True),
+            "execute-resource-mapping")
+
+
+def uint(value: int, bits: int, code: str) -> None:
+    require(type(value) is int and 0 <= value < 1 << bits, code)
+
+
+def validate_custom_bars(bars: list[dict]) -> None:
+    """Check record geometry only; a validated program must authorize all fields."""
+    require(type(bars) is list and len(bars) <= 2, "custom-bar-count")
+    fields = dict(configuration=32, valueType=32, bar=32, bitOffset=8,
+                  bitWidth=8, flags=16, value=64)
+    for i, bar in enumerate(bars):
+        require(type(bar) is dict and bar.keys() == fields.keys(), "custom-bar-fields")
+        for key, bits in fields.items():
+            uint(bar[key], bits, "custom-bar-field")
+        end = bar['bitOffset'] + bar['bitWidth']
+        require(bar['bitWidth'] > 0 and end <= 64, "custom-bar-bit-range")
+        for previous in bars[:i]:
+            require(previous['configuration'] != bar['configuration'] or
+                    previous['bar'] != bar['bar'] or
+                    previous['bitOffset'] >= end or
+                    bar['bitOffset'] >= previous['bitOffset'] + previous['bitWidth'],
+                    "custom-bar-overlap")
+
+
+def validate_execute(command: bytes, resources: dict, mappings: list[dict], *,
+                     uuid: int, program: int, process: int, procedure: int) -> None:
+    """Device-free wire comparison against an already validated resource plan.
+
+    mappings supplies test/consumer-owned DVA and length per ordinary buffer.
+    This checks geometry; it cannot establish ownership, permissions or lifetime.
+    Call validate_resources with validate(HWX)['execute_resources'] first.
+    """
+    bars, buffers = resources['customBars'], resources['buffers']
+    validate_custom_bars(bars)
+    require(0 < len(buffers) <= 64 and len(mappings) == len(buffers), "execute-buffer-count")
+    size = 0xca8 + len(bars) * 0x18
+    require(resources['commandBytes'] == size and resources['bufferOffset'] == 0x60 and
+            resources['bufferStride'] == 0x30 and resources['customBarOffset'] == 0xca8 and
+            resources['customBarStride'] == 0x18 and len(command) == size, "execute-size")
+    uint(uuid, 64, "execute-key")
+    for value in (program, process, procedure):
+        uint(value, 32, "execute-key")
+    expected = bytearray(size)
+    struct.pack_into('<H', expected, 4, 0x20c)
+    struct.pack_into('<3I', expected, 8, program, process, procedure)
+    struct.pack_into('<I', expected, 0x18, 5)
+    struct.pack_into('<Q', expected, 0x20, uuid)
+    struct.pack_into('<I', expected, 0x28, len(buffers))
+    for i, (buffer, mapping) in enumerate(zip(buffers, mappings)):
+        for key in ('index', 'class'):
+            uint(buffer[key], 32, "execute-buffer-field")
+        for value in (mapping['dva'], mapping['size'], buffer['offsetBytes'],
+                      buffer['sizeBytes'], buffer['mappingBytes']):
+            uint(value, 64, "execute-buffer-field")
+        require(mapping['dva'] + mapping['size'] <= U64_MAX and
+                0 < buffer['sizeBytes'] <= mapping['size'] - buffer['offsetBytes'] and
+                buffer['mappingBytes'] <= mapping['size'], "execute-buffer-range")
+        off = 0x60 + i * 0x30
+        struct.pack_into('<3I', expected, off, 1, buffer['index'], buffer['class'])
+        struct.pack_into('<I', expected, off + 0x10, 3)
+        struct.pack_into('<2Q', expected, off + 0x18,
+                         mapping['dva'] + buffer['offsetBytes'], buffer['sizeBytes'])
+    struct.pack_into('<I', expected, 0xca0, len(bars))
+    for i, bar in enumerate(bars):
+        struct.pack_into('<3IBBHQ', expected, 0xca8 + i * 0x18,
+                         bar['configuration'], bar['valueType'], bar['bar'],
+                         bar['bitOffset'], bar['bitWidth'], bar['flags'], bar['value'])
+    require(command == expected, "execute-wire")
 
 
 def main() -> int:
@@ -363,12 +458,19 @@ def main() -> int:
     parser.add_argument('hwx', type=Path)
     parser.add_argument('--owner', action='store_true', help='require the pinned add-128 SHA-256')
     parser.add_argument('--task-policy', choices=('driver', 'public'), default='driver',
-                        help='driver: current zero prefix; public: diagnostic pinned compiler prefix 1')
+                        help='both aliases require the corrected H16 prologue (u32 1, then twelve zero bytes)')
+    parser.add_argument('--manifest', type=Path, help='cross-check this artifact h16Execute metadata')
     args = parser.parse_args()
     try:
-        print(json.dumps(validate(args.hwx.read_bytes(), owner=args.owner,
-                                  task_policy=args.task_policy), sort_keys=True))
-    except (OSError, ValidationError) as error:
+        result = validate(args.hwx.read_bytes(), owner=args.owner, task_policy=args.task_policy)
+        if args.manifest:
+            manifest = json.loads(args.manifest.read_text())
+            require(manifest['target'] == 'H16G', "manifest-target")
+            records = [r for r in manifest['artifacts'] if r['file'] == args.hwx.name]
+            require(len(records) == 1, "manifest-artifact")
+            validate_resources(records[0]['h16Execute'], result['execute_resources'])
+        print(json.dumps(result, sort_keys=True))
+    except (OSError, ValueError, KeyError, TypeError) as error:
         print(str(error), file=sys.stderr)
         return 2
     return 0
