@@ -144,9 +144,22 @@ still equal to per-layer; top-1 16/16.
 **Open hazard.** With the driver's CPU boost off (`boost_idle_ms=0`, slower
 fabric) the linked program raised a task error (-5) at pass 455 and the
 engine wedged. It did not happen in 1000 passes with boost on. The 28 per-layer programs ran 5000 passes clean at boost 0, and so did
-the linked 8-layer prefix, so the fault is in the longer linked stream. Boost
-0 has not been retested since the scratch DMA configs went in; until it is,
-treat linked programs at low fabric clocks as unproven. Linking halves the wall time: it removes
+the linked 8-layer prefix, so the fault is in the longer linked stream. With the scratch DMA configs in place (01/11/2026, #692
+recovery kernel, so each error cost one -EIO and the engine recovered), the
+boost-0 error remains, as a -5 task error at a random pass:
+
+- clean over 5000 passes: linked prefixes 1-8, 1-16, 1-24, layer slices 5-25,
+  9-25, 13-25, 17-25, 21-25, 23-28, 25-28, and the 28 per-layer programs;
+- failing within 5000 passes: the full net, prefixes 1-25/26/27, slices 3-25,
+  4-25, 3-8 and 1-4.
+
+The dependency variants did not move it: every consumer task waiting, the
+program-input cache hints on scratch reads, and TSE+TSR on every task. Nor
+did the scratch address (up to 48 MB), the constant size (8.4 MB), the task
+count (40) or capping the L2 tile at 2 MiB. Every failing stream contains the
+112x112 layers 3 and 4 together with a long enough tail, but not every such
+stream fails in 5000 passes, so this is a rate, not a deterministic hazard.
+With the CPU boost on (the shipping configuration), 10,000 passes are clean. Linking halves the wall time: it removes
 27 submits (about 25 us each), the host copies, and about 0.7 ms of engine
 time per inference.
 
@@ -234,10 +247,13 @@ self-consistent.
 
 In MobileNetV1 these rules take two triplets at 14x14 (layers 15 to 17 and 19
 to 21). The 56x56 triplet does not fit in 2 MiB, and the others meet a
-multi-task or stride-2 layer. None of this has run on the device yet. The
-plan is one geometry at a time: pw-pw 8x8, conv-dw-pw 8x8, 16x16, with relu
-and bias, 512 channels at 14x14, then the whole net, checking `wedged` after
-each.
+multi-task or stride-2 layer. On the M1 Pro (01/11/2026) every step ran exact and cold against the
+per-layer programs, with no task error: pw-pw 8x8 (the pair that hung the
+first attempt), conv-dw-pw at 8x8 and 16x16, with relu and bias, and 512
+channels at 14x14. The 512-channel triplet takes 0.188 ms busy against
+0.228 ms with DRAM edges (-18 %). The whole real-weight MobileNetV1 with its
+two L2 triplets is exact cold, top-1 16/16, and 2.190 ms p50 exec against
+2.243 ms (-2.4 %) over 2000 passes.
 
 ## Remaining gap to macOS and next steps
 

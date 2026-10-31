@@ -25,6 +25,11 @@ reshape, squeeze, and expand_dims round out the set.
 A shape outside a backend's verified envelope is refused with a named error, such as `h13.conv-outside-envelope`.
 The compiler does not guess.
 
+The Aurora fork's [change inventory](docs/aurora-compiler-status.md) separates
+the existing H16G backend and branch work from the added SPEC-r3 validation
+and spatial CPU references. H16 bundles also emit [execute resource metadata](docs/h16-execute-resources.md), checked independently with
+`python3 tools/h16g_validate.py program-0.hwx --manifest manifest.json`.
+
 ## Supported targets
 
 | Target | Chip | Output | Device runs |
@@ -110,7 +115,7 @@ H16G is the default target, so the flag is optional there.
 ```text
 usage: mil-hwxc --mil FILE --model-root DIR --output DIR
                 [--target H16G|H13|H14|H17|H18] [--format anec|hwx]
-                [--schedule per-op|chain]
+                [--schedule per-op|chain|spatial]
 ```
 
 `--target` picks the backend.
@@ -129,6 +134,14 @@ The manifest lists each tensor's shape, byte count, and role.
 Roles are input, output, intermediate, or constant.
 It also lists the dispatch plan and each program's bindings.
 A runner can drive the package without parsing programs.
+
+For H13/H14 full-frame convolution, nearest/bilinear resize, concat and the
+MobileNetV1 head, select `--schedule spatial`. This emits the separate
+[spatial dispatch contract](docs/spatial-dispatch.md), with reusable ANEC
+kernels and bounded loops. `tools/spatial_package.py` validates and simulates
+these packages without a device; original per-op/chain readers retain their
+existing contracts. Spatial arithmetic uses fp16 dispatch boundaries and is
+checked against CPU references with explicit tolerances.
 
 | Operation | Accepted shapes |
 | --- | --- |
