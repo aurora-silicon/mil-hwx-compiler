@@ -20,12 +20,14 @@ import mint_oracles as om  # noqa: E402
 
 def conv_stage(name: str, input_name: str, output_name: str, channels_in: int,
                channels_out: int, spatial: int, kernel: int, stride: int,
-               groups: int, relu: bool) -> tuple[list[str], tuple[int, ...], int]:
+               groups: int, relu: bool, bias: bool = False
+               ) -> tuple[list[str], tuple[int, ...], int]:
     output_spatial = (spatial + stride - 1) // stride
     input_shape = (1, channels_in, spatial, spatial)
     output_shape = (1, channels_out, output_spatial, output_spatial)
     weight_shape = (channels_out, channels_in // groups, kernel, kernel)
     weight, elements = om.blobfile(f"{name}_w", weight_shape)
+    bias_arg = ""
     intermediate = f"{name}_conv" if relu else output_name
     lines = [
         f'string {name}_pt = const()[name = string("{name}_pt"), '
@@ -39,11 +41,18 @@ def conv_stage(name: str, input_name: str, output_name: str, channels_in: int,
         f'int32 {name}_gp = const()[name = string("{name}_gp"), '
         f'val = int32({groups})];',
         weight,
+    ]
+    if bias:
+        bias_shape = (channels_out,)
+        bias_source, bias_elements = om.blobfile(f"{name}_b", bias_shape)
+        lines.append(bias_source)
+        bias_arg = f", bias = {name}_b"
+        elements = max(elements, bias_elements)
+    lines.append(
         f'{om.tensor_type(output_shape)} {intermediate} = conv('
         f'dilations = {name}_dl, groups = {name}_gp, pad = {name}_pd, '
         f'pad_type = {name}_pt, strides = {name}_st, weight = {name}_w, '
-        f'x = {input_name})[name = string("{intermediate}")];',
-    ]
+        f'x = {input_name}{bias_arg})[name = string("{intermediate}")];')
     if relu:
         lines.append(
             f'{om.tensor_type(output_shape)} {output_name} = relu('
@@ -53,10 +62,10 @@ def conv_stage(name: str, input_name: str, output_name: str, channels_in: int,
 
 def single(name: str, channels_in: int, channels_out: int, spatial: int,
            kernel: int, stride: int = 1, groups: int = 1,
-           relu: bool = False) -> dict:
+           relu: bool = False, bias: bool = False) -> dict:
     lines, weight_shape, elements = conv_stage(
         "s0", "x", "y", channels_in, channels_out, spatial, kernel, stride,
-        groups, relu)
+        groups, relu, bias)
     input_shape = (1, channels_in, spatial, spatial)
     output_spatial = (spatial + stride - 1) // stride
     output_shape = (1, channels_out, output_spatial, output_spatial)
@@ -65,7 +74,8 @@ def single(name: str, channels_in: int, channels_out: int, spatial: int,
         "kernel": kernel, "input_channels": channels_in,
         "output_channels": channels_out, "spatial": spatial,
         "output_spatial": output_spatial, "stride": stride,
-        "groups": groups, "relu": relu, "input_shape": input_shape,
+        "groups": groups, "relu": relu, "bias": bias,
+        "input_shape": input_shape,
         "output_shape": output_shape, "weight_shape": weight_shape,
     }, f"{om.tensor_type(input_shape)} x", lines, "y", elements,
        [weight_shape])
@@ -104,6 +114,49 @@ def chain3() -> dict:
        max(n0, n1, n2), [w0, w1, w2])
 
 
+def chain(name: str, input_channels: int, spatial: int,
+          stages: list[tuple[int, int, int, int, bool]]) -> dict:
+    """Build a linked MobileNet chain.
+
+    Each stage is ``(Cout, kernel, stride, groups, bias)``.  ReLU follows
+    every convolution, matching the measured MobileNetV1 body/tail forms.
+    A single uniform BLOBFILE payload is deliberately reused by every stage;
+    only decoded facts and section hashes are retained by the minting path.
+    """
+    lines: list[str] = []
+    weight_shapes: list[tuple[int, ...]] = []
+    operations: list[str] = []
+    elements = 0
+    cin = input_channels
+    current_spatial = spatial
+    input_name = "x"
+    for index, (cout, kernel, stride, groups, bias) in enumerate(stages):
+        output_name = "y" if index == len(stages) - 1 else f"v{index}"
+        stage_lines, weight_shape, stage_elements = conv_stage(
+            f"s{index}", input_name, output_name, cin, cout,
+            current_spatial, kernel, stride, groups, True, bias)
+        lines.extend(stage_lines)
+        weight_shapes.append(weight_shape)
+        operations.extend([
+            "depthwise_conv" if groups == cin == cout else "pointwise_conv",
+            "relu",
+        ])
+        elements = max(elements, stage_elements)
+        current_spatial = (current_spatial + stride - 1) // stride
+        cin = cout
+        input_name = output_name
+    input_shape = (1, input_channels, spatial, spatial)
+    output_shape = (1, cin, current_spatial, current_spatial)
+    return om.env_case(name, "conv_descriptor_chain", {
+        "operations": operations,
+        "input_shape": input_shape,
+        "output_shape": output_shape,
+        "weight_shapes": weight_shapes,
+        "stage_count": len(stages),
+    }, f"{om.tensor_type(input_shape)} x", lines, "y", elements,
+       weight_shapes)
+
+
 def campaign() -> list[dict]:
     return [
         single("conv_desc_cmp_pw_c64_n64_s64", 64, 64, 64, 1),
@@ -119,6 +172,39 @@ def campaign() -> list[dict]:
                relu=True),
         chain2(),
         chain3(),
+        # MobileNetV1 224 body/tail forms omitted by the first campaign.
+        single("conv_desc_pw_c128_n256_s28", 128, 256, 28, 1),
+        single("conv_desc_pw_c256_n256_s28", 256, 256, 28, 1),
+        single("conv_desc_pw_c256_n512_s14", 256, 512, 14, 1),
+        single("conv_desc_pw_c512_n512_s14", 512, 512, 14, 1),
+        single("conv_desc_pw_c512_n1024_s7", 512, 1024, 7, 1),
+        single("conv_desc_pw_c1024_n1024_s7", 1024, 1024, 7, 1),
+        single("conv_desc_dw_k3_c256_s28", 256, 256, 28, 3,
+               groups=256),
+        single("conv_desc_dw_k3_c256_s28_st2", 256, 256, 28, 3, 2, 256),
+        single("conv_desc_dw_k3_c512_s14", 512, 512, 14, 3,
+               groups=512),
+        single("conv_desc_dw_k3_c512_s14_st2", 512, 512, 14, 3, 2, 512),
+        single("conv_desc_dw_k3_c1024_s7", 1024, 1024, 7, 3,
+               groups=1024),
+        single("conv_desc_pw_c512_n1024_s7_bias", 512, 1024, 7, 1,
+               bias=True),
+        chain("conv_desc_chain6_mob_c128_s28", 128, 28, [
+            (256, 1, 1, 1, False),
+            (256, 3, 1, 256, False),
+            (256, 1, 1, 1, False),
+            (256, 3, 2, 256, False),
+            (512, 1, 1, 1, False),
+            (512, 3, 1, 512, False),
+        ]),
+        chain("conv_desc_chain_tail_c512_s14", 512, 14, [
+            (512, 3, 1, 512, False),
+            (512, 1, 1, 1, False),
+            (512, 3, 2, 512, False),
+            (1024, 1, 1, 1, False),
+            (1024, 3, 1, 1024, False),
+            (1024, 1, 1, 1, True),
+        ]),
     ]
 
 
