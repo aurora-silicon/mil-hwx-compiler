@@ -643,6 +643,8 @@ std::vector<std::uint8_t> encodeANEC(const Program &program) {
 
     std::array<std::uint32_t, channelCount> tiles{};
     tiles[0] = tileCount(contentSize, "ANEC content tile count overflows");
+    if (program.scratchAllocationBytes)
+        tiles[3] = tileCount(program.scratchAllocationBytes, "scratch tile count overflows");
     tiles[4] = tileCount(program.output.allocationBytes,
                          "output tile count overflows");
     for (std::size_t index = 0; index != program.inputs.size(); ++index)
@@ -949,6 +951,8 @@ Program encodeConvParity(ConvShape shape, const std::uint8_t *weights,
     program.scratchDescriptorWord = source->scratchDescriptorWord;
     return program;
 }
+
+#include "H14ConvGeneric.inc"
 
 Program composePrograms(const std::vector<Program> &programs) {
     if (programs.empty())

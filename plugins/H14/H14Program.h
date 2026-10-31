@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace ane::h14 {
 
@@ -86,6 +87,8 @@ struct TensorLayout {
 };
 
 struct Program {
+    bool formulaBuilt = false;
+    std::uint64_t scratchAllocationBytes = 0;
     /// Complete __TEXT/__text content: the zero-size prefix frame followed by
     /// 16-byte aligned tasks, with the final task left unpadded.
     std::vector<std::uint8_t> taskStream;
@@ -163,6 +166,21 @@ Program encodeConvParity(ConvShape shape, const std::uint8_t *weights,
                          std::size_t weightBytes,
                          const std::uint8_t *bias = nullptr,
                          std::size_t biasBytes = 0);
+/// Formula-built dense/depthwise square 1x1/3x3, stride 1, and dense 1x1
+/// stride 2. Wide stride-2 layers split into at most eight lanes per task.
+std::string convGenericRefusal(ConvShape shape);
+Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
+                          std::size_t weightBytes,
+                          const std::uint8_t *bias = nullptr,
+                          std::size_t biasBytes = 0);
+void fuseConvRelu(Program &program);
+struct LinkedLayer {
+    std::uint32_t firstTask, taskCount;
+    std::uint64_t inputOffset, outputOffset;
+};
+Program linkConvChain(const std::vector<Program> &layers,
+                      std::vector<LinkedLayer> *layout = nullptr);
+
 /// Byte lengths of the tasks a task stream carries, in stream order.
 /// A decoded epilogue Apple folds into the producer's own task instead of
 /// emitting the consumer as a separate program.

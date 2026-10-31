@@ -357,7 +357,7 @@ static NSData *encodeHWX(const ane::h14::Program &program,
         initWithTaskCount:program.taskCount
         recordCount:program.programRecordCount
         formatCode:h14 ? 0 : program.unresolvedDescriptorWord
-        scratchByteLength:0 descriptorLayout:HWXProgramDescriptorLayoutLinear];
+        scratchByteLength:program.scratchAllocationBytes descriptorLayout:HWXProgramDescriptorLayoutLinear];
     info.unresolvedDescriptorWord = program.unresolvedDescriptorWord;
     info.h14ScratchDescriptorWord = program.scratchDescriptorWord;
     if (!program.kernelTable.empty())
@@ -639,7 +639,8 @@ static BOOL convSurface(ANEGraphValue *value, ane::h14::ElementwiseShape *shape)
 /// `same`, `same_lower` and `valid` spellings. The decoded corpus covers
 /// square kernels, unit dilations, `same` and `valid`, and the explicit `pad`
 /// vector only when it is all zeroes, which is what those two spellings emit.
-static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan) {
+static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan,
+                           BOOL generic = NO) {
     if (![operation.operationName isEqualToString:@"conv"]) return NO;
     ANEGraphValue *x = operation.operands[@"x"].value;
     ANEGraphValue *weight = operation.operands[@"weight"].value;
@@ -659,12 +660,13 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan) {
         !int32Vector(operation.operands[@"dilations"].value, 2, dilations) ||
         !int32Vector(operation.operands[@"pad"].value, 4, padding) ||
         !int32Scalar(operation.operands[@"groups"].value, &groups)) return NO;
-    if (![padType isEqualToString:@"same"] && ![padType isEqualToString:@"valid"])
+    if (![padType isEqualToString:@"same"] && ![padType isEqualToString:@"valid"] &&
+        !(generic && [padType isEqualToString:@"custom"]))
         return NO;
     if (strides[0] != strides[1] || dilations[0] != 1 || dilations[1] != 1 ||
         strides[0] < 1 || groups < 1) return NO;
     for (NSUInteger index = 0; index < 4; ++index)
-        if (padding[index]) return NO;
+        if (padding[index] && !generic) return NO;
     const std::uint32_t kernel = weight.type.shape[2].unsignedIntValue;
     if (weight.type.shape[3].unsignedIntValue != kernel || !kernel) return NO;
     if (weight.type.shape[0].unsignedIntValue != candidate.shape.output.channels)
@@ -681,7 +683,12 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan) {
                                       candidate.shape.output.width};
     for (NSUInteger axis = 0; axis < 2; ++axis) {
         const std::uint32_t stride = static_cast<std::uint32_t>(strides[0]);
-        if ([padType isEqualToString:@"same"]) {
+        if (generic && [padType isEqualToString:@"custom"]) {
+            const auto p = (kernel - 1) / 2;
+            for (unsigned i = 0; i < 4; ++i)
+                if (padding[i] != p) return NO;
+            if (results[axis] != (extents[axis] + 2 * p - kernel) / stride + 1) return NO;
+        } else if ([padType isEqualToString:@"same"]) {
             if (results[axis] != (extents[axis] + stride - 1) / stride) return NO;
         } else {
             if (extents[axis] < kernel ||
@@ -696,7 +703,8 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan) {
     if (bias && (!fp16Tensor(bias) || bias.type.shape.count != 1 ||
                  bias.type.shape[0].unsignedIntValue !=
                      candidate.shape.output.channels)) return NO;
-    if (!ane::h14::supportsConvParity(candidate.shape)) return NO;
+    if (generic ? !ane::h14::convGenericRefusal(candidate.shape).empty()
+                : !ane::h14::supportsConvParity(candidate.shape)) return NO;
     *plan = candidate;
     return YES;
 }
@@ -788,6 +796,8 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     return YES;
 }
 
+#include "H14ConvCompiler.inc"
+
 @implementation ANEH14Compiler
 + (BOOL)compileMILData:(NSData *)milData
              modelRoot:(NSURL *)modelRoot
@@ -817,9 +827,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         return NO;
     }
     if (![schedule isEqualToString:@"per-op"] &&
-        (!h14 || ![schedule isEqualToString:@"chain"]))
+        (!h14 || (![schedule isEqualToString:@"chain"] &&
+                  ![schedule isEqualToString:@"linked"])))
         return reject(diagnostics, h14
-            ? @"H14 schedule must be 'per-op' or 'chain'"
+            ? @"H14 schedule must be 'per-op', 'chain', or 'linked'"
             : [NSString stringWithFormat:@"%@ schedule must be 'per-op'",
                   target.name], nil, code(target, @"unsupported-schedule"));
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
@@ -849,6 +860,24 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     if (!sourceOperations.count)
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires at least one operation", target.name], nil, unsupported);
+    BOOL allConv = h14, hasConv = NO, hasRelu = NO, unknownConv = NO;
+    for (ANEGraphOperation *op in sourceOperations) {
+        const BOOL conv = [op.operationName isEqualToString:@"conv"];
+        const BOOL relu = [op.operationName isEqualToString:@"relu"];
+        allConv = allConv && (conv || relu);
+        hasConv = hasConv || conv; hasRelu = hasRelu || relu;
+        H14ConvPlan plan{};
+        if (conv && !convParityPlan(op, &plan)) unknownConv = YES;
+    }
+    const BOOL linkedConv = [schedule isEqualToString:@"linked"];
+    const char *forceGeneric = std::getenv("MILHWXC_H14_CONV_GENERIC");
+    if (allConv && hasConv && (linkedConv || hasRelu || unknownConv ||
+        (forceGeneric && std::string(forceGeneric) != "0")))
+        return emitConvGraph(function, sourceOperations, modelRoot, directory,
+                             format, linkedConv, diagnostics, error);
+    if (linkedConv)
+        return reject(diagnostics, @"H14 linked scheduling requires a straight convolution chain",
+                      nil, @"h14.linked-outside-envelope");
     BOOL chain = sourceOperations.count > 1;
     BOOL chainSchedule = [schedule isEqualToString:@"chain"];
     ANEGraphOperation *lastOperation = sourceOperations.lastObject;
