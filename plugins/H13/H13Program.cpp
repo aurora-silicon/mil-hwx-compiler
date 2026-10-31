@@ -2262,6 +2262,11 @@ std::vector<std::uint8_t> packConvPadconvColumns(
 
 bool supportsConvParity(ConvShape shape) { return convTemplate(shape); }
 
+std::size_t convParitySectionBytes(ConvShape shape) {
+    const auto *source = convTemplate(shape);
+    return source ? source->constantBytes : 0;
+}
+
 /// The captured W-major depthwise section (k1x9 `same`, bias present): 64
 /// lanes x `outputs / 64` slots, slot `s` carrying channel
 /// `16 * (s % 64) + s / 64` as 22 halfwords — the bias twice, then the nine
@@ -2445,6 +2450,403 @@ Program encodeConvParity(ConvShape shape, const std::uint8_t *weights,
     return program;
 }
 
+namespace {
+
+/// The L2 budget a generic convolution tile may fill: input rows plus the
+/// result rows. The largest decoded single-task tile fills 0x3c0000 bytes
+/// (encoder_conv_idx_c256_n256_k1x1_s1_g1_bias1_valid_pw375 and _pw750);
+/// staying under it keeps every generic tile inside a measured envelope.
+constexpr std::uint64_t kGenericL2Budget = 0x380000;
+/// Kernel bytes one task streams through its 16 kernel-DMA chunks. Every
+/// decoded task stays at or under 1 MiB (conv_probe_k1_c1024_n1024 splits
+/// into two 1 MiB tasks; 3x3 at 1024 inputs into 576 KiB tasks).
+constexpr std::uint64_t kGenericKernelBudget = 0x100000;
+
+enum class ConvKind { Dense, Depthwise, Other };
+
+ConvKind convKind(const ConvShape &shape) {
+    if (shape.groups == 1) return ConvKind::Dense;
+    if (shape.groups == shape.input.channels &&
+        shape.groups == shape.output.channels) return ConvKind::Depthwise;
+    return ConvKind::Other;
+}
+
+/// Symmetric padding the output surface implies, or -1 for an unsupported pad.
+int convPadding(const ConvShape &shape) {
+    const std::uint32_t k = shape.kernel, s = shape.stride;
+    const std::uint32_t h = shape.input.height, w = shape.input.width;
+    const std::uint32_t ho = shape.output.height, wo = shape.output.width;
+    const int same = static_cast<int>((k - 1) / 2);
+    auto outFor = [&](std::uint32_t extent, int pad) -> std::int64_t {
+        const std::int64_t padded = static_cast<std::int64_t>(extent) + 2 * pad;
+        if (padded < static_cast<std::int64_t>(k)) return -1;
+        return (padded - k) / s + 1;
+    };
+    if (outFor(h, same) == ho && outFor(w, same) == wo) return same;
+    if (outFor(h, 0) == ho && outFor(w, 0) == wo) return 0;
+    return -1;
+}
+
+/// The decoded single-task template this family borrows its invariant words
+/// from: same kernel, stride, group form and bias, smallest surface first.
+const OracleConvTemplate *convFamilyBase(const ConvShape &shape) {
+    const ConvKind kind = convKind(shape);
+    const OracleConvTemplate *best = nullptr;
+    for (const auto &candidate : kConvTasks) {
+        if (candidate.taskCount != 1 || candidate.kernel != shape.kernel ||
+            candidate.kernelWidth != shape.kernelWidth ||
+            candidate.stride != shape.stride || candidate.bias != shape.bias)
+            continue;
+        if (candidate.input.channels < 64 || candidate.input.height > 64 ||
+            candidate.input.width > 64)
+            continue;
+        ConvShape probe{candidate.kernel, candidate.kernelWidth,
+                        candidate.stride, candidate.groups, candidate.bias,
+                        candidate.input, candidate.output};
+        if (convKind(probe) != kind) continue;
+        // Same padding form, so the base's ConvCfg pad bits are the family's.
+        if (shape.kernel > 1 &&
+            (convPadding(probe) == 0) != (convPadding(shape) == 0)) continue;
+        if (!best || candidate.wordCount < best->wordCount ||
+            (candidate.wordCount == best->wordCount &&
+             candidate.output.channels < best->output.channels))
+            best = &candidate;
+    }
+    return best;
+}
+
+void putRegister(std::vector<std::uint8_t> &task, std::size_t offset,
+                 std::size_t bytes, std::uint32_t address, std::uint32_t value) {
+    storeLE32(task, h13RegisterOffset(task, offset, bytes, address), value);
+}
+
+std::uint32_t floorLog2(std::uint32_t value) {
+    std::uint32_t log = 0;
+    while (value > 1) { value >>= 1; ++log; }
+    return log;
+}
+
+struct ConvGenericPlan {
+    ConvKind kind;
+    std::uint32_t inputPerTask;      // Common Cin
+    std::uint32_t rowL2;             // L2 row bytes of the input
+    std::uint32_t sourceRow;         // L2 input row stride incl. bank skew
+    std::uint32_t tileHeight;
+    std::uint32_t tileRows;          // input rows resident per tile
+    std::vector<std::uint32_t> slices;  // output channels per task
+};
+
+/// The bank skew Apple adds to the L2 input row stride; reproduces all 175
+/// decoded single-task templates (stride 1: 0x20/0x30 up to W 16, 0x50 to
+/// W 32, none from W 64; stride 2: 0x20, 0x30 from W 64).
+std::uint32_t l2Skew(std::uint32_t stride, std::uint32_t width,
+                     std::uint32_t inputs) {
+    if (stride == 2) return width >= 64 ? 0x30 : 0x20;
+    if (width >= 64) return 0;
+    if (width > 16) return 0x50;
+    return inputs >= 32 ? 0x30 : 0x20;
+}
+
+std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
+    plan.kind = convKind(shape);
+    if (plan.kind == ConvKind::Other)
+        return "grouped convolutions other than depthwise have no generic form";
+    if (shape.kernel != shape.kernelWidth ||
+        (shape.kernel != 1 && shape.kernel != 3))
+        return "the generic form covers square 1x1 and 3x3 kernels";
+    if (shape.stride != 1 && shape.stride != 2)
+        return "the generic form covers stride 1 and 2";
+    if (shape.stride == 2 && (shape.kernel != 1 || plan.kind != ConvKind::Dense))
+        return "stride 2 is generic only for dense 1x1 kernels";
+    if (convPadding(shape) < 0)
+        return "the output surface implies neither same nor valid padding";
+    const auto &in = shape.input;
+    const auto &out = shape.output;
+    if (!in.channels || !out.channels || !in.height || !in.width ||
+        !out.height || !out.width)
+        return "convolution surfaces must be nonempty";
+    if (in.channels % 16 || out.channels % 16)
+        return "the generic form needs channel counts that are multiples of 16";
+    if (in.width > 4096 || in.height > 16384)
+        return "the generic form caps rows at 4096 columns";
+    if (!convFamilyBase(shape))
+        return "no decoded template of this family supplies the invariant words";
+    plan.inputPerTask = in.channels;
+    plan.rowL2 = static_cast<std::uint32_t>(
+        alignUp(std::max<std::uint32_t>(16, in.width * 2), 16));
+    plan.sourceRow = plan.inputPerTask * plan.rowL2 +
+                     l2Skew(shape.stride, in.width, plan.inputPerTask);
+    const std::uint32_t taps = shape.kernel * shape.kernelWidth;
+    const std::uint64_t reduction =
+        plan.kind == ConvKind::Depthwise ? taps : in.channels * taps;
+    // Output-channel tasks: each task's kernel bytes must fit the budget.
+    const std::uint64_t perChannel = (reduction + (shape.bias ? 1 : 0)) * 2;
+    std::uint32_t slice = out.channels;
+    if (plan.kind == ConvKind::Dense && slice * perChannel > kGenericKernelBudget) {
+        if (shape.stride != 1)
+            return "a strided convolution above the per-task kernel budget has no generic split";
+        std::uint64_t fit = kGenericKernelBudget / perChannel;
+        slice = static_cast<std::uint32_t>(fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
+        if (!slice) return "one output channel exceeds the per-task kernel budget";
+    }
+    if (plan.kind == ConvKind::Dense) {
+        // Uniform lane chunks only: a mixed split (768 outputs at cap 32 ->
+        // 32 + 16 lanes) is decoded for one template but never ran from this
+        // encoder, so the generic form keeps every chunk the same width.
+        const auto chunks = laneChunks(out.channels, laneCap(in));
+        for (const auto lanes : chunks)
+            if (lanes != chunks.front())
+                return "the output channels split into lane chunks of different widths";
+    }
+    if (shape.stride == 2) {
+        // Device-verified only up to 8 interleaved lanes per plane (one lane
+        // chunk): a 16-lane zero-skipping section (128 -> 256 at 56 -> 28)
+        // hung the engine on the M1 Pro, matching the decoded record that the
+        // 16-lane body count is two bytes off the model.
+        const auto chunks = laneChunks(out.channels, laneCap(in));
+        if (chunks.size() != 1 || chunks.front() > 8)
+            return "stride 2 is verified only up to 8 interleaved lanes "
+                   "(at most 128 output channels)";
+    }
+    if (plan.kind == ConvKind::Depthwise &&
+        out.channels * perChannel > kGenericKernelBudget)
+        return "depthwise kernel exceeds the per-task kernel budget";
+    plan.slices.clear();
+    for (std::uint32_t done = 0; done < out.channels; done += slice)
+        plan.slices.push_back(std::min(slice, out.channels - done));
+    const std::uint32_t widestSlice = plan.slices.front();
+    const std::uint64_t outRowL2 =
+        alignUp(std::max<std::uint32_t>(16, out.width * 2), 16);
+    plan.tileHeight = 0;
+    for (std::uint32_t tile = out.height; tile >= 1; --tile) {
+        const std::uint32_t rows = std::min<std::uint32_t>(
+            in.height, tile * shape.stride + shape.kernel - 1);
+        const std::uint64_t used =
+            static_cast<std::uint64_t>(rows) * plan.sourceRow +
+            static_cast<std::uint64_t>(tile) * widestSlice * outRowL2;
+        if (used <= kGenericL2Budget) {
+            plan.tileHeight = tile;
+            plan.tileRows = rows;
+            break;
+        }
+    }
+    if (!plan.tileHeight)
+        return "one output row does not fit the L2 tiling budget";
+    return {};
+}
+
+/// Byte offset and size of each of the 16 kernel-DMA chunks of one packed
+/// section. Dense and depthwise sections are 16 equal groups; the stride-2
+/// zero-skipping section is 16 variable planes, each a bias row, a 16-bit
+/// body count and the body, padded to 64 bytes.
+void kernelChunks(const ConvShape &shape, const std::vector<std::uint8_t> &packed,
+                  std::uint32_t lanes, std::array<std::uint32_t, 16> &offsets,
+                  std::array<std::uint32_t, 16> &sizes) {
+    if (shape.stride == 1) {
+        if (packed.size() % 16)
+            throw std::logic_error("H13 generic conv section is not 16 chunks");
+        const auto chunk = static_cast<std::uint32_t>(packed.size() / 16);
+        for (std::uint32_t i = 0; i != 16; ++i) {
+            offsets[i] = i * chunk;
+            sizes[i] = chunk;
+        }
+        return;
+    }
+    std::size_t cursor = 0;
+    const std::size_t biasBytes = shape.bias ? lanes * 2 : 0;
+    for (std::uint32_t i = 0; i != 16; ++i) {
+        if (cursor + biasBytes + 2 > packed.size())
+            throw std::logic_error("H13 generic strided section is truncated");
+        const std::size_t body = packed[cursor + biasBytes] |
+                                 (packed[cursor + biasBytes + 1] << 8);
+        const std::size_t plane = alignUp(biasBytes + 2 + body, 64);
+        offsets[i] = static_cast<std::uint32_t>(cursor);
+        sizes[i] = static_cast<std::uint32_t>(plane);
+        cursor += plane;
+    }
+    if (cursor != packed.size())
+        throw std::logic_error("H13 generic strided section has trailing bytes");
+}
+
+} // namespace
+
+std::string convGenericRefusal(ConvShape shape) {
+    ConvGenericPlan plan{};
+    return planConvGeneric(shape, plan);
+}
+
+Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
+                          std::size_t weightBytes, const std::uint8_t *bias,
+                          std::size_t biasBytes) {
+    ConvGenericPlan plan{};
+    const std::string refusal = planConvGeneric(shape, plan);
+    if (!refusal.empty())
+        throw std::invalid_argument("h13.conv-outside-envelope: " + refusal);
+    const auto *base = convFamilyBase(shape);
+    const auto &in = shape.input;
+    const auto &out = shape.output;
+    const std::uint32_t taps = shape.kernel * shape.kernelWidth;
+    const std::uint32_t reduction =
+        plan.kind == ConvKind::Depthwise ? taps : in.channels * taps;
+    if (!weights || weightBytes != static_cast<std::size_t>(out.channels) *
+                                       reduction * 2)
+        throw std::invalid_argument(
+            "H13 convolution requires Cout * Cin / groups * kh * kw fp16 weights");
+    if (shape.bias != (bias != nullptr) ||
+        (bias && biasBytes != static_cast<std::size_t>(out.channels) * 2))
+        throw std::invalid_argument(
+            "H13 convolution bias must hold one fp16 value per output channel");
+
+    const TensorLayout input = convTensor(5, in);
+    const TensorLayout output = convTensor(4, out);
+    const std::uint64_t inPlane = input.nchw[4], inRow = input.nchw[5];
+    const std::uint64_t outPlane = output.nchw[4], outRow = output.nchw[5];
+    const int pad = convPadding(shape);
+    const std::uint32_t outputWidth = out.width;
+    const std::uint32_t cfgClass = outputWidth <= 8 ? 4
+        : std::min<std::uint32_t>(4, 7 - std::min<std::uint32_t>(7,
+              floorLog2(outputWidth - 1) + 1));
+    // Common 0x34: 0x20 in bits 23:16 plus a width class (4 up to 8 output
+    // columns, then 3, 2, 1 per doubling, 0 from 128). The low half repeats
+    // the class in two nibbles in the forms Apple picks for them: always at
+    // class 4, for dense 3x3 kernels and for 1x1 kernels with 512 or more
+    // channels on both sides at classes 2 and 3, never for depthwise or at
+    // class 1. That rule reproduces every decoded single-task template.
+    const bool repeatClass = cfgClass == 4 ||
+        ((cfgClass == 2 || cfgClass == 3) && plan.kind == ConvKind::Dense &&
+         (shape.kernel == 3 || (in.channels >= 512 && out.channels >= 512)));
+    const std::uint32_t common34 = (0x20u << 16) | (cfgClass << 16) |
+        (repeatClass ? (cfgClass << 12) | (cfgClass << 8) |
+                       (cfgClass == 4 ? 0x05u : 0x01u)
+                     : 0x0001u);
+
+    const auto baseTask = taskBytesFor(base->words, base->wordCount);
+    const std::size_t baseBytes = baseTask.size();
+    const std::size_t stride = alignUp(baseBytes, 0x100);
+    Program program;
+    program.taskSurfaceChannels = {5, 4, 6, 7};
+    program.taskCount = static_cast<std::uint32_t>(plan.slices.size());
+    program.firstTaskBytes = base->firstTaskBytes;
+    program.task.assign(stride * (plan.slices.size() - 1) + baseBytes, 0);
+
+    std::uint32_t firstChannel = 0;
+    for (std::size_t index = 0; index != plan.slices.size(); ++index) {
+        const std::uint32_t slice = plan.slices[index];
+        ConvShape part = shape;
+        part.output.channels = slice;
+        std::vector<std::uint8_t> packed;
+        std::uint32_t lanes = 1;
+        if (plan.kind == ConvKind::Depthwise) {
+            packed = packConvDepthwise(taps, slice, weights, bias);
+        } else {
+            const auto chunks = laneChunks(slice, laneCap(in));
+            lanes = chunks.front();
+            const std::uint8_t *w = weights +
+                static_cast<std::size_t>(firstChannel) * reduction * 2;
+            const std::uint8_t *b = bias ? bias + firstChannel * 2 : nullptr;
+            if (shape.stride == 2) {
+                if (chunks.size() != 1)
+                    throw std::invalid_argument(
+                        "h13.conv-outside-envelope: the generic strided "
+                        "section needs one lane chunk");
+                packed = packConvStrided(reduction, chunks, w, b);
+            } else {
+                packed = packConvDense(reduction, chunks, w, b, false);
+            }
+        }
+        const std::uint32_t sectionBase =
+            static_cast<std::uint32_t>(program.constants.size());
+        std::array<std::uint32_t, 16> offsets{}, sizes{};
+        kernelChunks(part, packed, lanes, offsets, sizes);
+        program.constants.insert(program.constants.end(), packed.begin(),
+                                 packed.end());
+        program.constants.resize(alignUp(program.constants.size(), 64), 0);
+
+        const std::size_t offset = index * stride;
+        std::copy(baseTask.begin(), baseTask.end(),
+                  program.task.begin() + static_cast<std::ptrdiff_t>(offset));
+        auto &task = program.task;
+        const std::size_t bytes = baseBytes;
+        // Task header: id, last-task flags, and the link to the next task.
+        const bool last = index + 1 == plan.slices.size();
+        if (plan.slices.size() > 1) {
+            std::uint32_t word0 = static_cast<std::uint32_t>(index);
+            if (index) word0 |= 1u << 24;
+            if (last) word0 |= 1u << 24 | 1u << 25;
+            storeLE32(task, offset, word0);
+            const std::uint32_t header1 = loadLE32(task, offset + 4) & 0xffffu;
+            storeLE32(task, offset + 4,
+                      last ? header1
+                           : header1 | ((static_cast<std::uint32_t>(baseBytes / 4) - 1) << 16));
+            storeLE32(task, offset + 28,
+                      last ? 0 : static_cast<std::uint32_t>(offset + stride));
+            // Header flags of a linked stream, from the decoded multi-task
+            // convolutions (conv_probe_k3_c1024_n128 and kin): the end-of-
+            // stream bits (header[2] 0x22, header[4] 0x2, header[6] 0x9000)
+            // only on the last task, header[8] bit 23 on every task with a
+            // successor. Every generic task reloads the input surface, so
+            // each keeps the input-side bits Apple's first task carries
+            // (header[2] 0x8, header[4] 0x68, header[6] 0x10000800, the
+            // header[8] source selectors).
+            storeLE32(task, offset + 8, 0x400u | 0x08u | (last ? 0x22u : 0u));
+            storeLE32(task, offset + 16, 0x00fff868u | (last ? 0x2u : 0u));
+            storeLE32(task, offset + 24, 0x30000800u | (last ? 0x9000u : 0u));
+            storeLE32(task, offset + 32,
+                      (loadLE32(task, offset + 32) & ~(1u << 23)) |
+                      (last ? 0u : 1u << 23));
+        }
+        const std::uint32_t commonIn = plan.kind == ConvKind::Depthwise ? in.channels : plan.inputPerTask;
+        const std::uint32_t commonOut = plan.kind == ConvKind::Depthwise ? out.channels : slice;
+        putRegister(task, offset, bytes, 0x00000, (in.height << 16) | in.width);
+        putRegister(task, offset, bytes, 0x0000c, commonIn);
+        putRegister(task, offset, bytes, 0x00010, commonOut);
+        putRegister(task, offset, bytes, 0x00014, (out.height << 16) | out.width);
+        const std::uint32_t baseCfg = loadLE32(task,
+            h13RegisterOffset(task, offset, bytes, 0x0001c));
+        const std::uint32_t ocg =
+            plan.kind == ConvKind::Depthwise ? 0 : floorLog2(lanes);
+        const std::uint32_t convCfg = (baseCfg & 0xf8000000u) |
+            shape.kernelWidth | (shape.kernel << 5) | (ocg << 10) |
+            (shape.stride << 13) | (shape.stride << 15) |
+            (static_cast<std::uint32_t>(pad) << 17) |
+            (static_cast<std::uint32_t>(pad) << 22);
+        putRegister(task, offset, bytes, 0x0001c, convCfg);
+        putRegister(task, offset, bytes, 0x00028, plan.tileHeight);
+        putRegister(task, offset, bytes, 0x00034, common34);
+        putRegister(task, offset, bytes, 0x0480c, plan.rowL2);
+        putRegister(task, offset, bytes, 0x04810, plan.sourceRow);
+        putRegister(task, offset, bytes, 0x04814, commonIn * plan.rowL2);
+        putRegister(task, offset, bytes, 0x04818, commonIn * plan.rowL2);
+        putRegister(task, offset, bytes, 0x04834, plan.tileRows * plan.sourceRow);
+        putRegister(task, offset, bytes, 0x1380c, static_cast<std::uint32_t>(inRow));
+        putRegister(task, offset, bytes, 0x13810, static_cast<std::uint32_t>(inPlane));
+        putRegister(task, offset, bytes, 0x13814,
+                    static_cast<std::uint32_t>(inPlane * in.channels));
+        putRegister(task, offset, bytes, 0x13818,
+                    static_cast<std::uint32_t>(inPlane * commonIn));
+        putRegister(task, offset, bytes, 0x17804,
+                    static_cast<std::uint32_t>(outPlane * firstChannel));
+        putRegister(task, offset, bytes, 0x17808, static_cast<std::uint32_t>(outRow));
+        putRegister(task, offset, bytes, 0x1780c, static_cast<std::uint32_t>(outPlane));
+        putRegister(task, offset, bytes, 0x17810,
+                    static_cast<std::uint32_t>(outPlane * out.channels));
+        putRegister(task, offset, bytes, 0x17814,
+                    static_cast<std::uint32_t>(outPlane * commonOut));
+        for (std::uint32_t i = 0; i != 16; ++i) {
+            putRegister(task, offset, bytes, 0x1f848 + 4 * i, sectionBase + offsets[i]);
+            putRegister(task, offset, bytes, 0x1f888 + 4 * i, sizes[i]);
+        }
+        firstChannel += slice;
+    }
+    program.inputs = {input};
+    program.output = output;
+    program.formulaBuilt = true;
+    program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
+    program.scratchAllocationBytes = 0;
+    if (program.constants.empty()) program.constants.assign(64, 0);
+    return program;
+}
+
 Program composePrograms(const std::vector<Program> &programs) {
     if (programs.empty())
         throw std::invalid_argument("H13 chain requires at least one program");
@@ -2485,6 +2887,35 @@ void fuseMatmulPostOperation(Program &program, PostOperation operation) {
             "h13.chain-unrepresentable-edge: matmul compute task is not the "
             "decoded no-post-operation form 0x00101c00");
     storeLE32(program.task, word, value | 0x00010000u);
+}
+
+void fuseConvPostOperation(Program &program, PostOperation operation) {
+    if (operation != PostOperation::Relu)
+        throw std::invalid_argument(
+            "h13.chain-unrepresentable-edge: only the relu post-operation has a "
+            "decoded convolution epilogue");
+    std::size_t offset = 0;
+    std::size_t bytes = program.firstTaskBytes;
+    for (std::uint32_t index = 0; index != program.taskCount; ++index) {
+        if (!bytes || offset + bytes > program.task.size())
+            throw std::invalid_argument(
+                "h13.chain-unrepresentable-edge: convolution task stream is truncated");
+        const auto word = h13RegisterOffset(program.task, offset, bytes, 0x0c804);
+        const auto value = loadLE32(program.task, word);
+        if (value != 0x00101c00 && value != 0x00101c10)
+            throw std::invalid_argument(
+                "h13.chain-unrepresentable-edge: convolution NE word is not a "
+                "decoded no-post-operation form");
+        storeLE32(program.task, word, value | 0x00010000u);
+        const auto header1 = loadLE32(program.task, offset + 4);
+        const auto next = loadLE32(program.task, offset + 28);
+        if (index + 1 == program.taskCount) break;
+        if (!next)
+            throw std::invalid_argument(
+                "h13.chain-unrepresentable-edge: convolution task link is missing");
+        offset = next;
+        bytes = (((header1 >> 16) & 0x1ff) + 1) * sizeof(std::uint32_t);
+    }
 }
 
 void fuseElementwisePostOperation(Program &program, PostOperation operation) {

@@ -135,7 +135,7 @@ A runner can drive the package without parsing programs.
 | add, mul | Two matching fp16 tensors, or a tensor plus a fp16 constant. Rank-4 NCHW pairs also broadcast per channel, by space, by scalar, or by batch |
 | sub, real_div | One runtime input and one same-shape constant. The host folds the constant |
 | relu, clip | Any positive static shape. Clip takes fp16-exact finite `alpha` and `beta` |
-| conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. At stride 1: channels 64 to 1024, space 1 to 64 |
+| conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. Decoded templates cover channels 64 to 1024 and space 1 to 64. On H13 a formula-built encoder takes dense and depthwise 1x1/3x3 convolutions at any spatial size, channels in multiples of 16, and stride-2 1x1 up to 128 outputs, as one program ([fused-conv.md](docs/ane/fused-conv.md)). A following relu folds into the same program |
 | matmul, linear | Constant weight `[K,N]` or `[N,K]`, or two runtime inputs in attention's shape, on the decoded grids |
 | softmax | Constant axis over covered flat, sequence, spatial, and attention-score shapes |
 | layer_norm | Constant axes, `epsilon` of 1e-5, no `gamma` or `beta` |
