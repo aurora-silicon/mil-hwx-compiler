@@ -115,6 +115,65 @@ class ReferenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ref._layer_norm(x, (-1,), eps, ref.MILType('fp16', x.shape), tensor((1,), [1]))
 
+    def test_exact_conv1d_geometry_samples_and_borders(self):
+        class Pattern:
+            # Lazy finite fp16 values avoid allocating the entire dense input
+            # and sparse weight blobs just to sample exact output coordinates.
+            def __init__(self, shape, kind):
+                self.shape, self.kind = shape, kind
+            def __len__(self):
+                return math.prod(self.shape)
+            def __getitem__(self, index):
+                if not 0 <= index < len(self):
+                    raise IndexError(index)
+                if self.kind == 'input':
+                    channel, position = divmod(index, 3000)
+                    return ((13*channel + position) % 17 - 8)/16
+                channel_input, tap = divmod(index, 3)
+                channel, inner = divmod(channel_input, self.shape[1])
+                return (1., -.5, .25)[tap] if inner == channel % self.shape[1] else 0.
+        count = 0
+        for d in (384, 512, 768):
+            for channels, stride, length in ((80, 1, 3000), (d, 2, 1500)):
+                xs, ws, ys = (1, channels, 3000), (d, channels, 3), (1, d, length)
+                x = ref.Tensor('fp16', xs, Pattern(xs, 'input'))
+                w = ref.Tensor('fp16', ws, Pattern(ws, 'weight'))
+                b = tensor((d,), [(i%5-2)/16 for i in range(d)])
+                indices = [channel*length + position for channel in (0, d//2, d-1)
+                           for position in (0, 1, 63, 64, 65, length//2, length-2, length-1)]
+                actual = ref.conv1d_samples(x, w, b, (stride,), (1,), (1, 1), 'custom',
+                                            1, ref.MILType('fp16', ys), indices)
+                for index, value in actual.items():
+                    channel, position = divmod(index, length)
+                    inner = channel % channels
+                    # Closed form: one active input channel and three dyadic
+                    # taps. All intervening zero products are exactly zero.
+                    samples = [((13*inner + t)%17-8)/16 if 0 <= t < 3000 else 0.
+                               for t in (position*stride-1, position*stride, position*stride+1)]
+                    expected = samples[0] - samples[1]/2 + samples[2]/4 + (channel%5-2)/16
+                    self.assertEqual(value, ref.fp16(expected))
+                    count += 1
+                with self.assertRaises(ValueError):
+                    ref.conv1d_samples(x, w, b, (stride,), (1,), (1, 1), 'custom',
+                        1, ref.MILType('fp16', ys), [math.prod(ys)])
+        self.assertEqual(count, 144)
+
+    def test_actual_normalization_widths_with_affine_parameters(self):
+        for d in (384, 512, 768):
+            values = [((i%19)-9)/256 for i in range(d)] + [1.]*d
+            x = tensor((1, 2, d), values)
+            gamma = tensor((d,), [.5+(i%7)/8 for i in range(d)])
+            beta = tensor((d,), [(i%9-4)/16 for i in range(d)])
+            eps = ref.fp16(1e-5)
+            actual = ref._layer_norm(x, (-1,), eps, ref.MILType('fp16', x.shape), gamma, beta)
+            mean = sum(values[:d])/d
+            variance = sum((v-mean)**2 for v in values[:d])/d
+            for i in range(d):
+                expected = ref.fp16((values[i]-mean)/math.sqrt(variance+eps)*gamma.values[i]+beta.values[i])
+                ulp = max(2**-24, 2**(math.frexp(abs(expected))[1]-11))
+                self.assertLessEqual(abs(actual.values[i]-expected), 2*ulp)
+            self.assertEqual(actual.values[d:], beta.values)
+
     def test_attention_softmax_full_key_extent_sampled_queries(self):
         # Full 1500-key reduction, two queries; deliberately not full attention.
         x = tensor((1, 1, 2, 1500), [0]*1500 + [1000]*1500)

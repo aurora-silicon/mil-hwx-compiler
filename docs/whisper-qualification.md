@@ -26,10 +26,13 @@ that a model runs on the ANE.
 | H14 bias | D-to-D, D-to-4D, 4D-to-D with nonzero vector bias | CPU linear+bias example; `h14.linear-bias-unsupported` retained |
 | Bounded/fused emission | 1500-token projections and linear/GELU/linear FFN | H13 program materialization budget checked before payload encoding; exact FFN chain retains its named fusion refusal |
 
-Here `D=384/512/768` and `H=6/8/12` for tiny/base/small. CPU semantic tests for
-convolution, affine normalization, matmul, GELU and bias use small independent
-examples; they are not dense numerical comparisons of all large Whisper
-operations or the learned checkpoints. Movement tests cover complete exact
+Here `D=384/512/768` and `H=6/8/12` for tiny/base/small. CPU semantic tests use independent small examples. Conv1d additionally checks
+144 output samples over all six exact input/weight/output geometries, including
+borders and positions around 64-element boundaries, with sparse dyadic synthetic
+weights and lazy finite fp16 inputs. `conv1d_samples` returns selected outputs
+without cropping the original geometry. Affine normalization checks full
+384/512/768 widths on two rows. These are not dense numerical comparisons of all
+large operations or learned checkpoints. Movement tests cover complete exact
 layouts. The softmax test covers full key extent on two queries. No device
 numerical parity, WER, RTF, energy or full-encoder execution result is implied.
 
