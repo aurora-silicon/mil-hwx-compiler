@@ -1,0 +1,47 @@
+{
+  "case": "layer_hardswish_c3_16x16",
+  "compiler": {
+    "command": [
+      "ane-compile-hwx",
+      "CAPTURE_DIR",
+      "OUTPUT_DIR",
+      "h14"
+    ],
+    "decoder_sha256": "789f5df961cd62d19199539718cbf7b4c4ff6fed93b761358eb4d050f320fb11",
+    "driver_sha256": "df32148a4bc051930629e3119db58acd58f5a134c7b652458b5185a044781660",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "probe_driver_sha256": "ed96818ce6f1bebdfce65e9e3842a2f8d4ea394c1e572bbcf8b1ee619007a952",
+    "tool": "ane-compile-hwx",
+    "tool_sha256": "9c843c1b9323096f333573f6f915f64f80b2d3522bbdd16413a1b08d7f7f9183"
+  },
+  "constant_section": null,
+  "error": "Apple compiler rejected probe; no decoded task stream",
+  "family": "layer_activation",
+  "hwx_bytes": null,
+  "hwx_sha256": null,
+  "mil": "program(1.3)\n[buildInfo = dict<string, string>({})]\n{\n  func main<ios18>(tensor<fp16, [1, 3, 16, 16]> x) {\n    tensor<fp16, [1, 3, 16, 16]> h = hard_sigmoid(x = x, alpha = fp32(0.16666666666666666), beta = fp32(0.5))[name = string(\"h\")];\n    tensor<fp16, [1, 3, 16, 16]> y = mul(x = x, y = h)[name = string(\"y\")];\n  } -> (y);\n}\n",
+  "parameters": {
+    "input_shape": [
+      1,
+      3,
+      16,
+      16
+    ],
+    "operation": "hardswish",
+    "output_shape": [
+      1,
+      3,
+      16,
+      16
+    ]
+  },
+  "program_descriptor": null,
+  "schema_version": 1,
+  "source_commit": "e03ca24a025b1020e2e6abf6ee2542f7864f9329",
+  "target": "h14",
+  "task_descriptors": [],
+  "tensor_descriptors": [],
+  "weights": {
+    "storage": "none"
+  }
+}

@@ -1,4 +1,5 @@
 #include "H13Program.h"
+#include "../LayerGraph.h"
 
 #include <algorithm>
 #include <cstring>
@@ -464,6 +465,9 @@ struct OracleConvTemplate {
     std::size_t constantOffsetBytes;
     std::size_t constantBytes;
     std::uint64_t scratchAllocationBytes;
+    std::uint32_t padTop;
+    std::uint32_t padLeft;
+    bool nativeLayer;
 };
 
 /// One decoded Apple matmul program, keyed by everything the compiler knows
@@ -2019,7 +2023,7 @@ std::vector<std::uint32_t> laneChunks(std::uint32_t outputs, std::uint32_t cap) 
             while (lanes > remaining / 16) lanes /= 2;
         }
         chunks.push_back(lanes);
-        remaining -= 16 * lanes;
+        remaining -= std::min(remaining, 16 * lanes);
     }
     return chunks;
 }
@@ -2032,6 +2036,34 @@ void putHalfword(std::vector<std::uint8_t> &bytes, std::size_t offset,
                  const std::uint8_t *source) {
     bytes[offset] = source[0];
     bytes[offset + 1] = source[1];
+}
+
+/// Native small-output packing (c3/c8/c24): distribute adjacent outputs
+/// evenly over up to 16 cores, padding each core's interleaved plane.
+std::vector<std::uint8_t> packConvSmallDense(std::uint32_t reduction,
+    std::uint32_t outputs, const std::uint8_t *weights, const std::uint8_t *bias) {
+    const auto cores = std::min(16u, outputs);
+    const std::uint64_t rows = reduction + (bias ? 1 : 0);
+    std::vector<std::uint8_t> packed;
+    unsigned first = 0;
+    for (unsigned core = 0; core != cores; ++core) {
+        const unsigned lanes = outputs / cores + (core < outputs % cores);
+        const auto base = packed.size();
+        packed.resize(base + alignUp(rows * lanes * 2, 64), 0);
+        for (unsigned lane = 0; lane != lanes; ++lane) {
+            auto cursor = base + lane * 2;
+            if (bias) {
+                putHalfword(packed, cursor, bias + (first + lane) * 2);
+                cursor += lanes * 2;
+            }
+            for (unsigned row = 0; row != reduction; ++row) {
+                putHalfword(packed, cursor, weights + (static_cast<std::size_t>(first + lane) * reduction + row) * 2);
+                cursor += lanes * 2;
+            }
+        }
+        first += lanes;
+    }
+    return packed;
 }
 
 /// Apple's dense convolution section. A plane interleaves `lanes` output
@@ -2138,13 +2170,20 @@ std::vector<std::uint8_t> packConvDepthwise(std::uint32_t taps,
                                             const std::uint8_t *weights,
                                             const std::uint8_t *bias) {
     const std::uint32_t lanes = std::min<std::uint32_t>(16, outputs);
-    const std::uint32_t slots = outputs / lanes;
     const std::uint64_t rows = taps + (bias ? 1 : 0);
-    const std::uint64_t laneBytes = alignUp(slots * rows * 2, 64);
-    std::vector<std::uint8_t> packed(laneBytes * lanes, 0);
+    // A non-multiple of 16 has unequal core chunks: c24 gives two channels
+    // to cores 0..7 and one to 8..15. Pad each core's actual span separately.
+    std::vector<std::uint64_t> laneBases(lanes);
+    std::uint64_t total = 0;
+    for (std::uint32_t lane = 0; lane != lanes; ++lane) {
+        laneBases[lane] = total;
+        const auto slots = (outputs - lane + lanes - 1) / lanes;
+        total += alignUp(slots * rows * 2, 64);
+    }
+    std::vector<std::uint8_t> packed(total, 0);
     for (std::uint32_t column = 0; column != outputs; ++column) {
         std::size_t cursor = static_cast<std::size_t>(
-            (column % lanes) * laneBytes + (column / lanes) * rows * 2);
+            laneBases[column % lanes] + (column / lanes) * rows * 2);
         if (bias) {
             putHalfword(packed, cursor, bias + column * 2);
             cursor += 2;
@@ -2403,6 +2442,29 @@ std::vector<std::uint8_t> packConvWeights(ConvShape shape,
             return packConvPadconvColumns(weights, weightBytes);
         return packConvDepthwise(taps, shape.output.channels, weights, bias);
     }
+    if (shape.kernel == 3 && shape.kernelWidth == 3 && shape.stride == 1 &&
+        shape.groups == 1 && ((shape.input.channels == 128 && shape.output.channels == 512) ||
+                             (shape.input.channels == 512 && shape.output.channels == 128)) &&
+        shape.input.height == 35 && shape.input.width == 35 &&
+        shape.output.height == 35 && shape.output.width == 35) {
+        // The native 35x35 schedule writes the upper output slice first.
+        // Indexed-weight hashes prove the two contiguous coefficient groups.
+        std::vector<std::uint8_t> packed;
+        const unsigned split = shape.output.channels == 512 ? 256 : 96;
+        for (const unsigned first : {split, 0u}) {
+            const unsigned count = first ? shape.output.channels - split : split;
+            const auto part = packConvSmallDense(reduction, count,
+                weights + static_cast<std::size_t>(first) * reduction * 2,
+                bias ? bias + first * 2 : nullptr);
+            packed.insert(packed.end(), part.begin(), part.end());
+        }
+        return packed;
+    }
+    if (shape.output.channels % 16) {
+        if (shape.groups != 1 || shape.stride != 1)
+            throw std::invalid_argument("small dense outputs are qualified only for stride 1, groups 1");
+        return packConvSmallDense(reduction, shape.output.channels, weights, bias);
+    }
     const auto chunks = laneChunks(shape.output.channels, laneCap(shape.input));
     if (shape.stride > 1) {
         if (shape.groups != 1 || taps != 1 ||
@@ -2431,6 +2493,11 @@ std::vector<std::uint8_t> packConvWeights(ConvShape shape,
                                             shape.output.channels, chunks,
                                             weights);
     return packConvDense(reduction, chunks, weights, bias, false);
+}
+
+bool convParityLeadingPaddingMatches(ConvShape shape,std::uint32_t top,std::uint32_t left) {
+    const auto *source=convTemplate(shape);
+    return source && source->padTop==top && source->padLeft==left;
 }
 
 Program encodeConvParity(ConvShape shape, const std::uint8_t *weights,
@@ -2500,6 +2567,7 @@ const OracleConvTemplate *convFamilyBase(const ConvShape &shape) {
     const ConvKind kind = convKind(shape);
     const OracleConvTemplate *best = nullptr;
     for (const auto &candidate : kConvTasks) {
+        if (candidate.nativeLayer) continue;
         if (candidate.taskCount != 1 || candidate.kernel != shape.kernel ||
             candidate.kernelWidth != shape.kernelWidth ||
             candidate.stride != shape.stride || candidate.bias != shape.bias)
@@ -2574,8 +2642,14 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
         return "convolution surfaces must be nonempty";
     if (in.channels % 16 || out.channels % 16)
         return "the generic form needs channel counts that are multiples of 16";
+    if (in.channels & (in.channels - 1))
+        return "non-power-of-two inputs need a qualified decoded native layout";
     if (in.width > 4096 || in.height > 16384)
         return "the generic form caps rows at 4096 columns";
+    if (shape.groups == 1 && shape.kernel == 3 &&
+        ((in.channels == 128 && out.channels >= 256) || (in.channels == 512 && out.channels == 128)) &&
+        out.width > 32 && out.width < 64)
+        return "unaligned dense 3x3 writeout needs a qualified decoded layout";
     if (!convFamilyBase(shape))
         return "no decoded template of this family supplies the invariant words";
     plan.inputPerTask = in.channels;
@@ -2608,7 +2682,15 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
         if (shape.stride != 1)
             return "a strided convolution above the per-task kernel budget has no generic split";
         std::uint64_t fit = kGenericKernelBudget / perChannel;
-        slice = static_cast<std::uint32_t>(fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
+        if (fit >= 256) slice = static_cast<std::uint32_t>(fit / 256 * 256);
+        else {
+            // Every task needs one uniform interleave. Rounding 113 fitting
+            // channels to 112 makes 4+2+1-lane planes under an OCG=2 header.
+            // Pick a power-of-two channel slice: 64 here, then another 64.
+            slice = 16;
+            while (slice <= fit / 2) slice *= 2;
+            if (slice > fit) slice = 0;
+        }
         if (!slice) return "one output channel exceeds the per-task kernel budget";
     }
     if (plan.kind == ConvKind::Dense) {
@@ -2692,7 +2774,15 @@ void kernelChunks(const ConvShape &shape, const std::vector<std::uint8_t> &packe
 
 } // namespace
 
+namespace {
+const OracleConvTemplate *qualifiedNativeConv(const ConvShape &shape) {
+    const auto *source=convTemplate(shape);
+    return source && source->nativeLayer && !source->scratchAllocationBytes ? source : nullptr;
+}
+} // namespace
+
 std::string convGenericRefusal(ConvShape shape) {
+    if (qualifiedNativeConv(shape)) return {};
     ConvGenericPlan plan{};
     return planConvGeneric(shape, plan);
 }
@@ -2700,6 +2790,12 @@ std::string convGenericRefusal(ConvShape shape) {
 Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
                           std::size_t weightBytes, const std::uint8_t *bias,
                           std::size_t biasBytes) {
+    if (qualifiedNativeConv(shape)) {
+        Program program = encodeConvParity(shape, weights, weightBytes, bias, biasBytes);
+        program.nativeDramLayer = true;
+        program.depthwiseConv = shape.groups==shape.input.channels && shape.groups==shape.output.channels;
+        return program;
+    }
     ConvGenericPlan plan{};
     const std::string refusal = planConvGeneric(shape, plan);
     if (!refusal.empty())
@@ -2966,7 +3062,8 @@ L2Plan planL2(const std::vector<Program> &layers) {
     plan.resultBase.assign(n, 0); plan.resultBytes.assign(n, 0);
     plan.sourceBase.assign(n, 0); plan.stagingBase.assign(n, 0);
     std::vector<LayerGeometry> g;
-    for (const auto &layer : layers) g.push_back(layerGeometry(layer));
+    for (const auto &layer : layers)
+        g.push_back(layer.nativeDramLayer ? LayerGeometry{} : layerGeometry(layer));
     for (std::size_t i = 0; i < n; ++i) plan.stagingBase[i] = g[i].stagedInput;
     // Only the task forms Apple's compiler is observed to emit (t-3891):
     //   dense (DRAM in) -alias-> depthwise -dependent-> dense 1x1 (DRAM out)
@@ -2975,7 +3072,7 @@ L2Plan planL2(const std::vector<Program> &layers) {
     // tile. A task that both reads and writes L2 is only ever the depthwise
     // middle of the first form. Everything else stays in DRAM.
     auto single = [&](std::size_t k) {
-        return layers[k].taskCount == 1 && g[k].tileHeight == g[k].outHeight &&
+        return !layers[k].nativeDramLayer && layers[k].taskCount == 1 && g[k].tileHeight == g[k].outHeight &&
                g[k].outHeight >= 8 && g[k].outHeight <= 64 &&
                g[k].outWidth >= 8 && g[k].outWidth <= 64 &&
                g[k].inHeight == g[k].outHeight && g[k].inWidth == g[k].outWidth;
@@ -3033,8 +3130,9 @@ Program linkConvChain(const std::vector<Program> &layers,
     constexpr std::array<std::uint32_t, 4> convChannels{5, 4, 6, 7};
     for (std::size_t index = 0; index != layers.size(); ++index) {
         const auto &layer = layers[index];
-        if (!layer.formulaBuilt || layer.inputs.size() != 1 ||
-            layer.inputs[0].index != 5 || layer.output.index != 4 ||
+        const bool firstConcat = index == 0 && layer.nativeDramLayer && layer.inputs.size() == 2;
+        if ((!layer.formulaBuilt && !layer.nativeDramLayer) || (layer.inputs.size() != 1 && !firstConcat) ||
+            layer.inputs[0].index != 5 || (firstConcat && layer.inputs[1].index != 6) || layer.output.index != 4 ||
             layer.taskSurfaceChannels != convChannels ||
             layer.scratchAllocationBytes || !layer.taskCount)
             throw std::invalid_argument(
@@ -3050,7 +3148,7 @@ Program linkConvChain(const std::vector<Program> &layers,
     // ordering the stream relies on is producer before consumer.
     L2Plan l2;
     l2.edge.assign(layers.size() - 1, EdgeMode::Dram);
-    if (l2Resident) l2 = planL2(layers);
+    if (l2Resident) l2=planL2(layers); // Native layers retain their qualified DRAM edges.
     std::vector<std::uint64_t> regions;
     std::uint64_t arena = 0;
     for (std::size_t index = 0; index + 1 != layers.size(); ++index) {
@@ -3065,7 +3163,7 @@ Program linkConvChain(const std::vector<Program> &layers,
 
     Program program;
     program.taskSurfaceChannels = convChannels;
-    program.inputs = {layers.front().inputs[0]};
+    program.inputs = layers.front().inputs;
     program.output = layers.back().output;
     program.formulaBuilt = true;
     program.scratchAllocationBytes = arena;
@@ -3105,6 +3203,7 @@ Program linkConvChain(const std::vector<Program> &layers,
             entry.l2ResultBytes = outL2 ? l2.resultBytes[index] : 0;
             layout->push_back(entry);
         }
+        bool nativeBoundaryRead = false;
         for (const auto &span : spans[index]) {
             const bool last = global + 1 == totalTasks;
             const std::size_t offset = cursor;
@@ -3142,6 +3241,77 @@ Program linkConvChain(const std::vector<Program> &layers,
             storeLE32(task, offset + 4,
                       last ? exeCycles
                            : exeCycles | ((static_cast<std::uint32_t>(nextBytes / 4) - 1) << 16));
+            if (layer.nativeDramLayer) {
+                // Preserve a native layer's internal L2 tasks. Some tasks
+                // stage a per-channel scale from the constant BAR; only the
+                // task that actually selects input channel 4 reads the edge.
+                auto regWord = [&](std::uint32_t address) {
+                    return h13RegisterOffset(task, offset, bytes, address);
+                };
+                auto regValue = [&](std::uint32_t address) { return loadLE32(task, regWord(address)); };
+                auto selectors = loadLE32(task, offset + 32);
+                const auto srcConfig = regValue(0x13800);
+                const auto dstConfig = regValue(0x17800);
+                const auto readChannel = selectors & 31;
+                if (srcConfig & 1) {
+                    const auto base = regWord(0x13808);
+                    if (readChannel == 4 && (selectors & (1u << 5))) {
+                        if (readsScratch) {
+                            if (loadLE32(task, base) || regValue(0x13814) > layer.inputs[0].allocationBytes)
+                                throw std::invalid_argument("h13.linked-outside-envelope: native input exceeds its region");
+                            selectors = (selectors & ~31u) | 3u;
+                            storeLE32(task, base, static_cast<std::uint32_t>(regions[index - 1]));
+                            if (srcConfig != 0x33881)
+                                throw std::invalid_argument("h13.linked-outside-envelope: unknown native source DMA config");
+                            storeLE32(task, regWord(0x13800),
+                                !nativeBoundaryRead && &span == &spans[index].front() ? 0x7bb81 : 0x3bb81);
+                        }
+                        nativeBoundaryRead = true;
+                    } else if (index == 0 && layer.inputs.size() == 2 && readChannel == 6 && (selectors & (1u << 5))) {
+                        if (loadLE32(task, base) || regValue(0x13814) > layer.inputs[1].allocationBytes)
+                            throw std::invalid_argument("h13.linked-outside-envelope: second concat input exceeds its surface");
+                    } else if (readChannel == 1 && (selectors & (1u << 5))) {
+                        if (static_cast<std::uint64_t>(loadLE32(task, base)) + regValue(0x13814) > layer.constants.size())
+                            throw std::invalid_argument("h13.linked-outside-envelope: native constant read exceeds its section");
+                        storeLE32(task, base, loadLE32(task, base) + constantBase);
+                    } else throw std::invalid_argument("h13.linked-outside-envelope: unknown native source channel");
+                }
+                if (dstConfig & 1) {
+                    if (((selectors >> 12) & 31) != 5 || !(selectors & (1u << 17)))
+                        throw std::invalid_argument("h13.linked-outside-envelope: unknown native destination channel");
+                    if (writesScratch) {
+                        const auto base = regWord(0x17804);
+                        if (static_cast<std::uint64_t>(loadLE32(task, base)) +
+                            layer.output.nchw[4] * regValue(0x10) > layer.output.allocationBytes)
+                            throw std::invalid_argument("h13.linked-outside-envelope: native output exceeds its region");
+                        selectors = (selectors & ~(31u << 12)) | (3u << 12);
+                        storeLE32(task, base, loadLE32(task, base) + static_cast<std::uint32_t>(regions[index]));
+                        if (dstConfig != 0x40000c1 && dstConfig != 0xc1)
+                            throw std::invalid_argument("h13.linked-outside-envelope: unknown native destination DMA config");
+                        storeLE32(task, regWord(0x17800), dstConfig | 0x300);
+                    }
+                }
+                // Internal task headers and selectors keep their decoded
+                // engine/L2 roles; only stream termination and links move.
+                storeLE32(task, offset + 8, (loadLE32(task, offset + 8) & ~0x22u) | (last ? 0x22u : 0u));
+                storeLE32(task, offset + 16, (loadLE32(task, offset + 16) & ~2u) | (last ? 2u : 0u));
+                if (&span == &spans[index].back())
+                    storeLE32(task, offset + 24, loadLE32(task, offset + 24) | 0x9000u);
+                storeLE32(task, offset + 28, static_cast<std::uint32_t>(nextOffset));
+                selectors = (selectors & ~(1u << 23)) | (last ? 0u : 1u << 23);
+                storeLE32(task, offset + 32, selectors);
+                for (unsigned core = 0; core != 16; ++core)
+                    if (regValue(0x1f808 + core * 4) & 1) {
+                        const auto word = regWord(0x1f848 + core * 4);
+                        const auto first = loadLE32(task, word);
+                        if (static_cast<std::uint64_t>(first) + regValue(0x1f888 + core * 4) > layer.constants.size())
+                            throw std::invalid_argument("h13.linked-outside-envelope: native kernel read exceeds its section");
+                        storeLE32(task, word, first + constantBase);
+                    }
+                cursor = last ? offset + bytes : nextOffset;
+                ++global;
+                continue;
+            }
             // Event words: the input-DMA bits only when the task loads its
             // input from DRAM (t-3891: L2-reading tasks use 0x400 / 0xfff800).
             storeLE32(task, offset + 8, 0x400u | (inL2 ? 0u : 0x08u) | (last ? 0x22u : 0u));
@@ -3290,7 +3460,8 @@ Program linkConvChain(const std::vector<Program> &layers,
         }
         program.constants.insert(program.constants.end(), layer.constants.begin(),
                                  layer.constants.end());
-        program.constants.resize(alignUp(program.constants.size(), 64), 0);
+        // Preserve the alignment of the native 128-byte activation tables.
+        program.constants.resize(alignUp(program.constants.size(), 128), 0);
     }
     program.taskCount = totalTasks;
     program.firstTaskBytes = spans.front().front().bytes;
@@ -3303,6 +3474,140 @@ Program linkConvChain(const std::vector<Program> &layers,
         throw std::logic_error(
             "h13.linked-outside-envelope: kernel base would not match the constant offset");
     return program;
+}
+
+Program linkLayerGraph(const std::vector<Program> &layers,
+    const std::vector<ane::layers::Connection> &connections,
+    const std::vector<std::string> &boundaries,const std::string &result,
+    ane::layers::GraphPlan *placement,std::vector<LinkedLayer> *layout) {
+    auto fail=[](const char *why)->void {
+        throw std::invalid_argument(std::string("h13.linked-outside-envelope: ")+why);
+    };
+    auto plan=ane::layers::planGraph(layers,connections,boundaries,result,"h13.linked-outside-envelope");
+    std::vector<std::vector<TaskSpan>> spans;
+    std::vector<std::size_t> sizes;
+    for (std::size_t i=0;i<layers.size();++i) {
+        const auto &p=layers[i];
+        if ((!p.formulaBuilt && !p.nativeDramLayer) || p.scratchAllocationBytes ||
+            p.taskSurfaceChannels!=std::array<std::uint32_t,4>{5,4,6,7} || p.output.index!=4)
+            fail("graph layer has no qualified DRAM routing");
+        for (std::size_t j=0;j<p.inputs.size();++j)
+            if (p.inputs[j].index!=5+j || p.inputs[j].elementSize!=2) fail("invalid graph input role");
+        spans.push_back(taskSpans(p));
+        if (!plan.zeroCopy[i]) for (const auto &span:spans.back()) sizes.push_back(span.bytes);
+    }
+    if (sizes.empty() || sizes.size()>65535) fail("native graph task budget exceeded");
+    Program out;
+    out.taskSurfaceChannels={5,4,6,7};
+    out.inputs.resize(boundaries.size());
+    for (std::size_t i=0;i<layers.size();++i)
+        for (std::size_t j=0;j<plan.inputs[i].size();++j)
+            if (plan.inputs[i][j].boundary) {
+                const auto b=plan.inputs[i][j].index;
+                out.inputs[b]=layers[i].inputs[j];out.inputs[b].index=static_cast<unsigned>(5+b);
+            }
+    out.output=layers[plan.result].output;
+    out.scratchAllocationBytes=plan.scratchBytes;
+    std::vector<std::int64_t> writer(layers.size(),-1);
+    unsigned global=0;
+    std::size_t cursor=0;
+    if (layout) layout->clear();
+    for (std::size_t i=0;i<layers.size();++i) {
+        const auto &layer=layers[i];
+        const auto target=plan.outputs[i];
+        const auto constantBase=out.constants.size();
+        if (constantBase>0xffffffffull-layer.constants.size()) fail("graph constants exceed 32 bits");
+        bool readsScratch=false;
+        std::uint64_t firstRead=0;
+        for (const auto ref:plan.inputs[i])
+            if (!ref.boundary) { readsScratch=true;firstRead=plan.outputs[ref.index].offset;break; }
+        if (layout) layout->push_back({global,plan.zeroCopy[i]?0:layer.taskCount,readsScratch,firstRead,
+                                      !target.output,target.offset});
+        if (plan.zeroCopy[i]) continue;
+        bool wrote=false;
+        for (const auto span:spans[i]) {
+            const auto offset=cursor,bytes=span.bytes;
+            const bool last=global+1==sizes.size();
+            out.task.resize(offset+bytes,0);
+            std::copy(layer.task.begin()+span.offset,layer.task.begin()+span.offset+bytes,out.task.begin()+offset);
+            auto &task=out.task;
+            auto pos=[&](unsigned address){ return h13RegisterOffset(task,offset,bytes,address); };
+            auto value=[&](unsigned address){ return loadLE32(task,pos(address)); };
+            const auto next=last?0:alignUp(offset+bytes,0x100);
+            if (next>0xffffffffu || (!last && sizes[global+1]/4-1>0x1ff)) fail("graph task link exceeds its field");
+            unsigned id=global|(global?1u<<24:0u)|(last?(1u<<24)|(1u<<25):0u);
+            storeLE32(task,offset,id);
+            storeLE32(task,offset+4,(loadLE32(task,offset+4)&0xffffu)|
+                (last?0:static_cast<unsigned>(sizes[global+1]/4-1)<<16));
+            storeLE32(task,offset+8,(loadLE32(task,offset+8)&~0x22u)|(last?0x22u:0u));
+            storeLE32(task,offset+16,(loadLE32(task,offset+16)&~2u)|(last?2u:0u));
+            if (span.offset==spans[i].back().offset)
+                storeLE32(task,offset+24,loadLE32(task,offset+24)|0x9000u);
+            storeLE32(task,offset+28,static_cast<unsigned>(next));
+            auto selectors=loadLE32(task,offset+32);
+            for (unsigned source=0;source!=2;++source) {
+                const auto cfg=0x13800u+source*4,base=0x13808u+source*0x34;
+                if (!(value(cfg)&1)) continue;
+                const auto shift=source*6,channel=(selectors>>shift)&31;
+                if (!(selectors&(1u<<(shift+5)))) fail("active source has no declared channel");
+                if (channel==1) {
+                    if (static_cast<std::uint64_t>(value(base))+value(0x13814+source*0x34)>layer.constants.size())
+                        fail("graph constant DMA exceeds its layer section");
+                    storeLE32(task,pos(base),value(base)+static_cast<unsigned>(constantBase));
+                    continue;
+                }
+                const unsigned input=channel==4?0:channel==6?1:3;
+                if (input>=plan.inputs[i].size() || value(base) || value(cfg)!=0x33881)
+                    fail("unqualified graph runtime source form");
+                const auto ref=plan.inputs[i][input];
+                unsigned bound;
+                if (ref.boundary) bound=ref.index?6:4;
+                else {
+                    const auto route=plan.outputs[ref.index];
+                    if (route.output || writer[route.owner]<0) fail("graph reads an unavailable surface");
+                    bound=3;
+                    storeLE32(task,pos(base),static_cast<unsigned>(route.offset));
+                    storeLE32(task,pos(cfg),writer[route.owner]==static_cast<std::int64_t>(global)-1?0x7bb81:0x3bb81);
+                }
+                selectors=(selectors&~(31u<<shift))|(bound<<shift);
+            }
+            if (value(0x17800)&1) {
+                if (((selectors>>12)&31)!=5 || !(selectors&(1u<<17)) ||
+                    (value(0x17800)!=0x40000c1 && value(0x17800)!=0xc1))
+                    fail("unqualified graph destination form");
+                const auto first=value(0x17804);
+                if (static_cast<std::uint64_t>(first)+layer.output.nchw[4]*value(0x10)>layer.output.allocationBytes ||
+                    first+target.offset>0xffffffffu) fail("graph output exceeds its owning surface");
+                selectors=(selectors&~(31u<<12))|((target.output?5u:3u)<<12);
+                storeLE32(task,pos(0x17804),static_cast<unsigned>(first+target.offset));
+                if (target.owner!=i) {
+                    const auto &owner=layers[target.owner].output;
+                    const auto depth=owner.nchw[1]*owner.nchw[4];
+                    if (depth>0xffffffffu) fail("concat owner stride exceeds 32 bits");
+                    storeLE32(task,pos(0x17810),static_cast<unsigned>(depth));
+                }
+                if (!target.output) storeLE32(task,pos(0x17800),value(0x17800)|0x300);
+                writer[target.owner]=global;wrote=true;
+            }
+            selectors=(selectors&~(1u<<23))|(last?0u:1u<<23);
+            storeLE32(task,offset+32,selectors);
+            for (unsigned core=0;core!=16;++core)
+                if (value(0x1f808+core*4)&1) {
+                    const auto first=value(0x1f848+core*4);
+                    if (static_cast<std::uint64_t>(first)+value(0x1f888+core*4)>layer.constants.size())
+                        fail("graph kernel DMA exceeds its layer section");
+                    storeLE32(task,pos(0x1f848+core*4),first+static_cast<unsigned>(constantBase));
+                }
+            cursor=last?offset+bytes:next;++global;
+        }
+        if (!wrote) fail("native graph layer does not write its declared output");
+        out.constants.insert(out.constants.end(),layer.constants.begin(),layer.constants.end());
+        out.constants.resize(alignUp(out.constants.size(),128),0);
+    }
+    out.taskCount=global;out.firstTaskBytes=sizes.front();out.constantOffsetBytes=alignUp(out.task.size(),64);
+    if (alignUp(out.task.size(),16)!=out.constantOffsetBytes) fail("graph kernel base differs from its constant offset");
+    if (placement) *placement=std::move(plan);
+    return out;
 }
 
 Program composePrograms(const std::vector<Program> &programs) {

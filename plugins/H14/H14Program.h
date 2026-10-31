@@ -107,6 +107,8 @@ struct Program {
     /// for the three-task layer_norm-over-every-axis form on a multi-channel
     /// surface and leaves zero for every other decoded H14 program.
     std::uint32_t scratchDescriptorWord = 0;
+    std::uint64_t scratchAllocationBytes = 0;
+    bool normalizedBarRoles = false;
 };
 
 bool supportsElementwise(Generation generation, BinaryOperation operation,

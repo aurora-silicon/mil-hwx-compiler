@@ -1,3 +1,4 @@
+#include "../NativeLayerPlan.h"
 #import "ANEH14Compiler.h"
 
 #import "ANEBlobResolver.h"
@@ -8,6 +9,7 @@
 #import "HWXObjectWriter.h"
 #include "H14Program.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <exception>
@@ -344,8 +346,9 @@ static NSData *encodeHWX(const ane::h14::Program &program,
             [sorted addObject:bindings[index.unsignedIntegerValue]];
         bindings = sorted;
     }
-    NSData *task = [NSData dataWithBytes:program.taskStream.data()
-                                  length:program.taskStream.size()];
+    const auto nativeTask = ane::layers::h14HWXStream(program);
+    NSData *task = [NSData dataWithBytes:nativeTask.data()
+                                  length:nativeTask.size()];
     NSData *constants = [NSData dataWithBytes:program.constants.data()
                                        length:program.constants.size()];
     // firstTaskByteLength stays zero: the descriptor records the whole text
@@ -659,14 +662,27 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan) {
         !int32Vector(operation.operands[@"dilations"].value, 2, dilations) ||
         !int32Vector(operation.operands[@"pad"].value, 4, padding) ||
         !int32Scalar(operation.operands[@"groups"].value, &groups)) return NO;
-    if (![padType isEqualToString:@"same"] && ![padType isEqualToString:@"valid"])
-        return NO;
-    if (strides[0] != strides[1] || dilations[0] != 1 || dilations[1] != 1 ||
-        strides[0] < 1 || groups < 1) return NO;
-    for (NSUInteger index = 0; index < 4; ++index)
-        if (padding[index]) return NO;
     const std::uint32_t kernel = weight.type.shape[2].unsignedIntValue;
     if (weight.type.shape[3].unsignedIntValue != kernel || !kernel) return NO;
+    if (strides[0] != strides[1] || dilations[0] != 1 || dilations[1] != 1 ||
+        strides[0] < 1 || groups < 1) return NO;
+    if ([padType isEqualToString:@"custom"]) {
+        const BOOL zero = !padding[0] && !padding[1] && !padding[2] && !padding[3];
+        BOOL canonicalSame=YES;
+        const std::uint32_t input[2]={candidate.shape.input.height,candidate.shape.input.width};
+        const std::uint32_t output[2]={candidate.shape.output.height,candidate.shape.output.width};
+        for (unsigned axis=0;axis!=2;++axis) {
+            const auto total=std::max<long long>(0,(static_cast<long long>(output[axis])-1)*strides[0]+kernel-input[axis]);
+            canonicalSame=canonicalSame && output[axis]==(input[axis]+strides[0]-1)/strides[0] &&
+                padding[2*axis]==total/2 && padding[2*axis+1]==total-total/2;
+        }
+        if (!zero && !canonicalSame) return NO;
+        padType = zero ? @"valid" : @"same";
+    } else {
+        if (![padType isEqualToString:@"same"] && ![padType isEqualToString:@"valid"]) return NO;
+        for (NSUInteger index = 0; index < 4; ++index)
+            if (padding[index]) return NO;
+    }
     if (weight.type.shape[0].unsignedIntValue != candidate.shape.output.channels)
         return NO;
     if (!candidate.shape.input.channels ||
@@ -816,7 +832,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             userInfo:@{NSLocalizedDescriptionKey: message}];
         return NO;
     }
-    if (![schedule isEqualToString:@"per-op"] &&
+    const BOOL linkedSchedule = h14 && [schedule isEqualToString:@"linked"];
+    if (linkedSchedule && hwx)
+        return reject(diagnostics, @"H14 linked programs currently require ANEC", nil, @"h14.linked-outside-envelope");
+    if (![schedule isEqualToString:@"per-op"] && !linkedSchedule &&
         (!h14 || ![schedule isEqualToString:@"chain"]))
         return reject(diagnostics, h14
             ? @"H14 schedule must be 'per-op' or 'chain'"
@@ -846,6 +865,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     for (ANEGraphOperation *candidate in function.operations)
         if (![candidate.operationName isEqualToString:@"const"])
             [sourceOperations addObject:candidate];
+    NSArray<ANEGraphValue *> *nativeReturns = function.returnValues;
+    if (h14) sourceOperations = ane::layers::fuseHardSwish(sourceOperations, &nativeReturns);
+    function = [[ANEGraphFunction alloc] initWithName:function.name opset:function.opset
+        inputs:function.inputs operations:sourceOperations returnValues:nativeReturns];
     if (!sourceOperations.count)
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires at least one operation", target.name], nil, unsupported);
@@ -865,8 +888,8 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         [inputNames addObject:input.name];
         BOOL used = NO;
         for (ANEGraphOperation *candidate in sourceOperations)
-            for (ANEGraphArgument *operand in candidate.operands.allValues)
-                used = used || operand.value == input;
+            for (ANEGraphArgument *operand in candidate.arguments.allValues)
+                used = used || ane::layers::uses(operand, input);
         if (!used)
             return reject(diagnostics, [NSString stringWithFormat:
                 @"%@ function inputs must all be used", target.name],
@@ -878,13 +901,37 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         for (NSUInteger consumer = index + 1; consumer < sourceOperations.count;
              ++consumer)
             for (ANEGraphArgument *operand in
-                    sourceOperations[consumer].operands.allValues)
-                used = used || operand.value == value;
+                    sourceOperations[consumer].arguments.allValues)
+                used = used || ane::layers::uses(operand, value);
         if (!used)
             return reject(diagnostics, [NSString stringWithFormat:
                 @"%@ operation results not returned must be consumed later",
                 target.name],
                 sourceOperations[index], code(target, @"unsupported-chain"));
+    }
+    BOOL linkedGraph=NO;
+    if (linkedSchedule) {
+        BOOL hasConcat=NO;
+        for (ANEGraphOperation *op in sourceOperations) hasConcat=hasConcat || [op.operationName isEqualToString:@"concat"];
+        if (!function.inputs.count || function.inputs.count > 2 || function.returnValues.count != 1 || sourceOperations.count < 2)
+            return reject(diagnostics, @"H14 linked needs one input, one result and at least two native layers", nil, @"h14.linked-outside-envelope");
+        ANEGraphValue *current = function.inputs[0];
+        for (ANEGraphOperation *candidate in sourceOperations) {
+            ane::layers::Plan layer{};
+            H14ConvPlan conv{};
+            const BOOL native = ane::layers::plan(candidate, true, &layer);
+            const BOOL firstConcat = candidate == sourceOperations.firstObject && native &&
+                layer.operation == ane::layers::Operation::Concat && layer.inputs.count == function.inputs.count &&
+                [layer.inputs isEqualToArray:function.inputs];
+            if (!native && !convParityPlan(candidate,&conv))
+                return reject(diagnostics,@"H14 linked requires qualified native layers and convolutions",candidate,@"h14.linked-outside-envelope");
+            if (!firstConcat && (candidate.operands[@"x"].value!=current || (native && layer.inputs.count!=1))) linkedGraph=YES;
+            current = candidate.results[0];
+        }
+        if (linkedGraph && !hasConcat)
+            return reject(diagnostics,@"H14 branching linked graphs require a native concat",nil,@"h14.linked-outside-envelope");
+        if (current != function.returnValues[0])
+            return reject(diagnostics, @"H14 linked result must end the native chain", nil, @"h14.linked-outside-envelope");
     }
     std::uint32_t expChainChannels = 0;
     const BOOL expChain = h14 && expScaledChainPlan(function, sourceOperations,
@@ -1012,6 +1059,8 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         NSData *convWeights = nil;
         NSData *convBias = nil;
         H14ConvPlan convolution{};
+        ane::layers::Plan nativePlan{};
+        const BOOL nativeLayer = h14 && ane::layers::plan(operation, true, &nativePlan);
         BOOL normalization = NO;
         if (!h14 && (matvec || [name isEqualToString:@"conv"] ||
                      normEncoding(name, &normOperation)))
@@ -1019,7 +1068,9 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
                 @"%@ has decoded templates only for elementwise, unary, and scalar-constant operations, not '%@'",
                 target.name, name], operation,
                 code(target, @"outside-parity-envelope"));
-        if (matvec) {
+        if (nativeLayer) {
+            // Native whole-layer program selected from decoded field facts.
+        } else if (matvec) {
             if (!matvecPlan(operation, modelRoot, diagnostics, &matvecShape,
                             &matvecWeights)) return NO;
         } else if (convParityPlan(operation, &convolution)) {
@@ -1055,11 +1106,11 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         }
 
         const BOOL convolutionProgram = convWeights != nil;
-        NSUInteger inputCount = matvec || normalization || convolutionProgram ||
-            plan.unary || plan.scalarConstant ? 1 : 2;
+        NSUInteger inputCount = nativeLayer ? nativePlan.inputs.count :
+            (matvec || normalization || convolutionProgram || plan.unary || plan.scalarConstant ? 1 : 2);
         ane::h14::Program program;
         try {
-            program = convolutionProgram
+            program = nativeLayer ? ane::layers::encodeH14(nativePlan.operation, nativePlan.shape) : convolutionProgram
                 ? ane::h14::encodeConvParity(convolution.shape,
                     static_cast<const std::uint8_t *>(convWeights.bytes),
                     convWeights.length,
@@ -1090,9 +1141,12 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         try {
             if (hwx) {
                 NSMutableArray<NSString *> *names = [NSMutableArray array];
-                [names addObject:operation.operands[@"x"].value.name];
-                if (inputCount == 2)
-                    [names addObject:operation.operands[@"y"].value.name];
+                if (nativeLayer) {
+                    for (ANEGraphValue *value in nativePlan.inputs) [names addObject:value.name];
+                } else {
+                    [names addObject:operation.operands[@"x"].value.name];
+                    if (inputCount == 2) [names addObject:operation.operands[@"y"].value.name];
+                }
                 [names addObject:operation.results[0].name];
                 payload = encodeHWX(program, target.architecture, names, error);
                 if (!payload) return NO;
@@ -1107,9 +1161,11 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         }
 
         NSMutableArray<ANEGraphValue *> *inputValues = [NSMutableArray array];
-        [inputValues addObject:operation.operands[@"x"].value];
-        if (inputCount == 2)
-            [inputValues addObject:operation.operands[@"y"].value];
+        if (nativeLayer) [inputValues addObjectsFromArray:nativePlan.inputs];
+        else {
+            [inputValues addObject:operation.operands[@"x"].value];
+            if (inputCount == 2) [inputValues addObject:operation.operands[@"y"].value];
+        }
         NSMutableArray<NSDictionary *> *inputRecords = [NSMutableArray array];
         for (NSUInteger index = 0; index < inputCount; ++index) {
             ANEGraphValue *value = inputValues[index];
@@ -1134,7 +1190,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             @"file": [NSString stringWithFormat:@"program-%lu.%@",
                 (unsigned long)programIndex, format],
             @"bytes": @(payload.length), @"taskDescriptors": @(program.taskCount),
-            @"encoder": convolutionProgram ? @"apple-parity-conv"
+            @"encoder": nativeLayer ? @"h14-native-layer" : convolutionProgram ? @"apple-parity-conv"
                 : (matvec ? @"apple-parity-matvec"
                 : (normalization ? @"apple-parity-norm"
                 : [target.prefix stringByAppendingString:@"-oracle-parity"])),
@@ -1147,7 +1203,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         [programRecords addObject:record];
         [payloads addObject:payload];
         [dispatchPlan addObject:@(programIndex)];
-        if (chainSchedule) {
+        if (chainSchedule || linkedSchedule) {
             chainPrograms.push_back(std::move(program));
             [chainOpRecords addObject:@{
                 @"result": operation.results[0].name,
@@ -1161,6 +1217,80 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
 
     NSMutableArray<NSDictionary *> *taskRecords = nil;
     NSDictionary *scratch = nil;
+    if (linkedSchedule) {
+        ane::h14::Program combined;
+        std::vector<ane::h13::LinkedLayer> layout;
+        ane::layers::GraphPlan graphPlacement;
+        std::vector<ane::layers::Connection> connections;
+        std::vector<std::string> boundaries;
+        if (linkedGraph) {
+            for (ANEGraphValue *input in function.inputs) boundaries.emplace_back(input.name.UTF8String);
+            for (NSDictionary *record in programRecords) {
+                ane::layers::Connection c;
+                c.output=std::string([[record[@"outputs"] firstObject][@"name"] UTF8String]);
+                c.concat=[record[@"operation"] isEqualToString:@"concat"];
+                for (NSDictionary *input in record[@"inputs"]) c.inputs.emplace_back([input[@"name"] UTF8String]);
+                connections.push_back(std::move(c));
+            }
+        }
+        NSData *payload = nil;
+        try {
+            combined = linkedGraph ? ane::layers::linkH14Graph(chainPrograms,connections,boundaries,
+                function.returnValues[0].name.UTF8String,&graphPlacement,&layout)
+                : ane::layers::linkH14(chainPrograms,&layout);
+            const auto bytes = ane::h14::encodeANEC(combined);
+            payload = [NSData dataWithBytes:bytes.data() length:bytes.size()];
+        } catch (const std::exception &exception) {
+            return reject(diagnostics, [NSString stringWithUTF8String:exception.what()],
+                lastOperation, @"h14.linked-outside-envelope");
+        }
+        taskRecords = [NSMutableArray array];
+        NSMutableArray *layerRecords = [NSMutableArray array];
+        NSMutableDictionary *regions = [NSMutableDictionary dictionary];
+        for (std::size_t i = 0; i != layout.size(); ++i) {
+            NSDictionary *record = programRecords[i];
+            NSString *result = record[@"outputs"][0][@"name"];
+            NSMutableDictionary *layerRecord=[@{@"result":result,@"operation":record[@"operation"],
+                @"firstTask":@(layout[i].firstTask),@"taskDescriptors":@(layout[i].taskCount)} mutableCopy];
+            if (linkedGraph) {
+                layerRecord[@"zeroCopy"]=@(static_cast<bool>(graphPlacement.zeroCopy[i]));
+                layerRecord[@"surfaceOwner"]=programRecords[graphPlacement.outputs[i].owner][@"outputs"][0][@"name"];
+                layerRecord[@"writeOffset"]=@(graphPlacement.outputs[i].offset);
+                if (![result isEqualToString:function.returnValues[0].name]) {
+                    [tensors removeObjectForKey:result];[intermediates removeObject:result];
+                }
+            }
+            [layerRecords addObject:layerRecord];
+            for (unsigned j = 0; j != layout[i].taskCount; ++j)
+                [taskRecords addObject:@{@"index":@(layout[i].firstTask+j), @"layer":@(i), @"operation":record[@"operation"]}];
+            if (layout[i].writesScratch) {
+                regions[result] = @{@"offset":@(layout[i].writeOffset),
+                    @"bytes":record[@"outputs"][0][@"allocationBytes"], @"nchw":record[@"outputs"][0][@"nchw"]};
+                if (linkedGraph && graphPlacement.outputs[i].owner!=i) {
+                    NSMutableDictionary *view=[regions[result] mutableCopy];
+                    view[@"aliasOf"]=programRecords[graphPlacement.outputs[i].owner][@"outputs"][0][@"name"];
+                    regions[result]=view;
+                }
+                [tensors removeObjectForKey:result];
+                [intermediates removeObject:result];
+            }
+        }
+        scratch = @{@"bytes":@(combined.scratchAllocationBytes), @"barSlot":@7,
+                    @"bufferId":@0x40, @"regions":regions};
+        NSMutableDictionary *output = [programRecords.lastObject[@"outputs"][0] mutableCopy];
+        output[@"allocationBytes"] = @(combined.output.allocationBytes);
+        NSMutableArray *graphInputs=[NSMutableArray array];
+        if (linkedGraph) for (NSUInteger i=0;i<function.inputs.count;++i)
+            [graphInputs addObject:binding(function.inputs[i],combined.inputs[i])];
+        NSDictionary *record = @{@"file":@"program-0.anec", @"bytes":@(payload.length),
+            @"taskDescriptors":@(combined.taskCount), @"encoder":linkedGraph?@"h14-linked-native-graph":@"h14-linked-native", @"operation":@"linked",
+            @"inputs":linkedGraph?graphInputs:programRecords.firstObject[@"inputs"], @"outputs":@[output], @"constantInputs":@{},
+            @"constantOffset":@(combined.constantOffsetBytes), @"constantBytes":@(combined.constants.size()),
+            @"firstTaskBytes":@(combined.firstTaskBytes), @"layers":layerRecords};
+        [programRecords removeAllObjects]; [programRecords addObject:record];
+        [payloads removeAllObjects]; [payloads addObject:payload];
+        [dispatchPlan removeAllObjects]; [dispatchPlan addObject:@0];
+    }
     if (chainSchedule) {
         NSDictionary *firstRecord = programRecords.firstObject;
         NSArray *boundaryInputs = firstRecord[@"inputs"];
@@ -1260,8 +1390,8 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         @"programs": programRecords, @"dispatchPlan": dispatchPlan,
         @"intermediates": intermediates, @"tensors": tensors,
     } mutableCopy];
-    if (chainSchedule)
-        [manifest addEntriesFromDictionary:@{@"schedule": @"chain",
+    if (chainSchedule || linkedSchedule)
+        [manifest addEntriesFromDictionary:@{@"schedule": linkedSchedule ? @"linked" : @"chain",
             @"tasks": taskRecords, @"scratch": scratch}];
     if (programRecords.count == 1)
         [manifest addEntriesFromDictionary:programRecords[0]];

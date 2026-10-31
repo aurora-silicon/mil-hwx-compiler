@@ -164,7 +164,7 @@ PARITY = [
     (512, 16, 16, 512, 1, 1, 1, False), (1024, 16, 16, 512, 1, 1, 1, False),
     (64, 32, 32, 64, 1, 1, 1, False), (64, 64, 64, 64, 1, 1, 1, True),
     (64, 8, 8, 64, 3, 1, 1, False), (64, 16, 16, 256, 3, 1, 1, True),
-    (256, 16, 16, 128, 3, 1, 1, False), (64, 32, 32, 64, 3, 1, 1, True),
+    (256, 16, 16, 128, 3, 1, 1, False), (512, 16, 16, 64, 3, 1, 1, False), (64, 32, 32, 64, 3, 1, 1, True),
     (64, 64, 64, 64, 3, 1, 1, False),
     (64, 16, 16, 64, 3, 1, 64, False), (512, 16, 16, 512, 3, 1, 512, True),
     (1024, 16, 16, 1024, 1, 1, 1024, True),
@@ -190,6 +190,9 @@ COVERAGE = [
     ((1024, 7, 7, 1024, 3, 1, 1024, True), 1),
     ((512, 7, 7, 1024, 1, 1, 1, True), 2),
     ((1024, 7, 7, 1024, 1, 1, 1, True), 4),
+    # A 3x3 512-input layer fits 113 outputs in 1 MiB. A 112-output slice
+    # mixes 4+2+1 lanes; two uniform 64-output tasks are representable.
+    ((512, 16, 16, 128, 3, 1, 1, True), 2),
     # Stride 2 above 128 outputs: 128-channel tasks of the proven 8-lane form
     # (M1 Pro, 31/10/2026: all three MobileNet shapes, wedged 0).
     ((128, 56, 56, 256, 1, 2, 1, True), 2),
@@ -231,7 +234,8 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-h13-generic-") as tmp:
         assert sum(sizes) == program["constantBytes"], row
 
     for index, (row, tasks) in enumerate(COVERAGE):
-        manifest, out = compile_case(root, f"c{index}", spec_of(row))
+        manifest, out = compile_case(root, f"c{index}", spec_of(row),
+                                     generic=row==(512,16,16,128,3,1,1,True))
         assert len(manifest["programs"]) == 1, row
         program = manifest["programs"][0]
         assert program["encoder"] == "h13-generic-conv", (row, program["encoder"])
@@ -251,7 +255,11 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-h13-generic-") as tmp:
                 assert bool(header[2] & 0x22) == last, (row, position)
                 assert bool(header[8] & (1 << 23)) == (not last), (row, position)
                 assert register(anec, offset, size, 0x17804) == covered * plane, row
-                covered += register(anec, offset, size, 0x10)
+                part_channels = register(anec, offset, size, 0x10)
+                if row == (512,16,16,128,3,1,1,True):
+                    assert part_channels == 64
+                    assert (register(anec,offset,size,0x1c)>>10)&7 == 2
+                covered += part_channels
             assert covered == cout, row
 
     # conv -> relu is one program whose NE MAC word carries the clamp.
