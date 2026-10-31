@@ -644,33 +644,46 @@ def _conv_padding(extent, kernel, stride, pad_type):
 
 def _conv(value, weight, bias, strides, dilations, pad, pad_type, groups,
           result_type):
-    """`conv` over a [1, Cin, H, W] fp16 input with a [Cout, Cin/groups, kh, kw]
+    """`conv` over an [N, Cin, H, W] fp16 input with a [Cout, Cin/groups, kh, kw]
     weight, accumulating each output in fp32 exactly as `_matmul` does."""
     value = _tensor(value)
     weight = _tensor(weight)
     if value.dtype != "fp16" or weight.dtype != "fp16":
         raise ValueError("conv requires fp16 tensors")
-    if len(value.shape) != 4 or value.shape[0] != 1:
-        raise ValueError("conv requires a [1, Cin, H, W] input")
+    if len(value.shape) != 4 or value.shape[0] < 1:
+        raise ValueError("conv requires an [N, Cin, H, W] input with positive N")
     if len(weight.shape) != 4:
         raise ValueError("conv requires a [Cout, Cin/groups, kh, kw] weight")
     if any(dilation != 1 for dilation in dilations):
         raise ValueError("conv reference covers unit dilations")
     if any(amount != 0 for amount in pad):
         raise ValueError("conv reference covers zero explicit padding")
-    _, channels, height, width = value.shape
+    batch, channels, height, width = value.shape
     outputs, group_channels, kernel_height, kernel_width = weight.shape
     if groups < 1 or channels % groups or outputs % groups or \
             group_channels != channels // groups:
         raise ValueError("conv groups must divide both channel counts")
     top, out_height = _conv_padding(height, kernel_height, strides[0], pad_type)
     left, out_width = _conv_padding(width, kernel_width, strides[1], pad_type)
-    expected = (1, outputs, out_height, out_width)
+    expected = (batch, outputs, out_height, out_width)
     if tuple(result_type.shape) != expected:
         raise ValueError("conv result shape differs from its declaration")
     biases = _tensor(bias).values if bias is not None else None
     if biases is not None and len(biases) != outputs:
         raise ValueError("conv bias must hold one value per output channel")
+    if batch > 1:
+        # Keep the established single-image accumulation order unchanged.
+        # Each batch item is an independent convolution with shared weights.
+        span = channels * height * width
+        results = []
+        for index in range(batch):
+            image = Tensor("fp16", (1, channels, height, width),
+                           value.values[index * span:(index + 1) * span])
+            result = _conv(image, weight, bias, strides, dilations, pad,
+                           pad_type, groups,
+                           MILType("fp16", (1, outputs, out_height, out_width)))
+            results.extend(result.values)
+        return Tensor("fp16", expected, tuple(results))
     per_group = outputs // groups
     results = []
     for channel in range(outputs):

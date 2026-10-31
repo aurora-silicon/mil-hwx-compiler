@@ -21,6 +21,16 @@ def run(source, **inputs):
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_batch8_conv_reference(self):
+        values = tuple((i - 16) * .125 for i in range(32))
+        result = ref._conv(ref.Tensor('fp16', (8, 1, 2, 2), values),
+                           ref.Tensor('fp16', (1, 1, 1, 1), (2.,)),
+                           ref.Tensor('fp16', (1,), (-1.,)),
+                           (1, 1), (1, 1), (0, 0, 0, 0), 'valid', 1,
+                           ref.MILType('fp16', (8, 1, 2, 2)))
+        self.assertEqual(result.shape, (8, 1, 2, 2))
+        self.assertEqual(result.values, tuple(2 * v - 1 for v in values))
+
     def test_concat_outer_inner_and_negative_axis(self):
         source = mil('tensor<fp16, [2, 1, 2]> a, tensor<fp16, [2, 2, 2]> b',
             'tensor<fp16, [2, 3, 2]> y = concat(values = (a, b), axis = int32(-2));')
