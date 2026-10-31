@@ -24,6 +24,7 @@ PARITY_BROADCAST = 'apple-parity-broadcast'
 TILE_BYTES = 0x4000
 PARITY_ORACLE = 'h13-oracle-parity'
 CHAIN_ENCODER = 'composed-chain'
+CONV_ENCODERS = ('apple-parity-conv', 'h13-generic-conv')
 
 
 def h13_task_registers(task):
@@ -322,7 +323,7 @@ def validate_program(directory, program, tensors):
                           'matmul', 'abs', 'exp', 'gelu', 'leaky_relu', 'relu',
                           'rsqrt', 'sigmoid', 'silu', 'sqrt', 'tanh',
                           'softmax', 'layer_norm', 'reduce_sum', 'reduce_max',
-                          'reduce_mean', 'conv',
+                          'reduce_mean', 'conv', 'conv+relu',
                           'less', 'floor', 'select', 'floor_div',
                           'tile'),
             'unsupported operation')
@@ -332,6 +333,7 @@ def validate_program(directory, program, tensors):
     constant_inputs = program.get('constantInputs')
     require(isinstance(constant_inputs, dict), 'constantInputs must be an object')
     matmul = operation == 'matmul'
+    convolution = operation in ('conv', 'conv+relu')
     require((not inputs and operation in ('floor',)) or
             1 <= len(inputs) <= (3 if operation == 'select' else 2),
             'incorrect input/output count')
@@ -394,6 +396,20 @@ def validate_program(directory, program, tensors):
     for index, item in enumerate(inputs, start=5):
         check_binding(item, index, tiles, layouts, tensors)
     check_binding(outputs[0], outputs[0]['index'], tiles, layouts, tensors)
+    if convolution:
+        # Convolution changes channel/spatial extents. Its bindings still pass
+        # the ANEC-header, task, layout, allocation and span checks above; it
+        # must not be tested as a pointwise broadcast below.
+        require(encoder in CONV_ENCODERS and len(inputs) == 1 and constants > 0,
+                'convolution needs a known encoder, one input and constant weights')
+        require(all(item['dtype'] == 'float16' and not item.get('binding')
+                    for item in inputs + outputs),
+                'convolution binds runtime fp16 surfaces')
+        ranks = {len(item['shape']) for item in inputs + outputs}
+        require(ranks in ({3}, {4}), 'convolution surfaces must share rank 3 or 4')
+        if ranks == {4}:
+            require(inputs[0]['shape'][0] == outputs[0]['shape'][0] == 1,
+                    'convolution surfaces require batch one')
     if matmul and encoder not in (PARITY_MATVEC, PARITY_MATMUL,
                                   PARITY_BATCHED_MATMUL, PARITY_BATCHED_MATVEC):
         # The chunked encoder pads every surface to its 256- or 512-lane tile.
@@ -417,13 +433,13 @@ def validate_program(directory, program, tensors):
         require(math.prod(outputs[0]['shape']) >= math.prod(inputs[0]['shape']) and
                 math.prod(outputs[0]['shape']) % math.prod(inputs[0]['shape']) == 0,
                 'a tile output replicates its input')
-    if operation not in ('matmul', 'chain', 'tile') and not inputs:
+    if operation not in ('matmul', 'chain', 'tile', 'conv', 'conv+relu') and not inputs:
         # Only the blob-x floor twin folds its whole operand: the operand
         # rides the constant section, so there is no runtime shape to check.
         require(operation == 'floor' and encoder == PARITY_BOOLEAN and
                 program.get('constantBytes', 0) > 0,
                 'a program with no inputs must be the blob-x floor twin')
-    if operation not in ('matmul', 'chain', 'tile') and inputs:
+    if operation not in ('matmul', 'chain', 'tile', 'conv', 'conv+relu') and inputs:
         output_is_returned_alias = any(
             tensor.get('aliasOf') == outputs[0]['name'] and
             tensor['role'] == 'output' and tensor['shape'] == outputs[0]['shape']

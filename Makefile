@@ -260,6 +260,7 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	python3 tests/test_h13_conv_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_generic_conv_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_linked_cli.py $(BUILD)/mil-hwxc
+	python3 tests/test_h13_conv_package_reader.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_select_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_chain_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_transpose_cli.py $(BUILD)/mil-hwxc
