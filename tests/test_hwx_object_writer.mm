@@ -612,8 +612,8 @@ static void testBindingCanSeparateSemanticShapeFromPhysicalStorage(void) {
                 @[@1,@32,@8,@8], @[@1,@1,@8,@8]]],
            @"physical padding does not alter the semantic tensor shape");
     expect(layouts.count == 2 &&
-           [layouts[1] isEqualToArray:@[@64,@512,@512,@0x5000]],
-           @"tensor metadata carries explicit row, plane, batch, and storage bytes");
+           [layouts[1] isEqualToArray:@[@64,@512,@512,@512]],
+           @"H16 tensor span equals one batch stride independently of allocation padding");
     expect(surfaceSizes.count == 2 && surfaceSizes[1].unsignedLongLongValue == 0x8000,
            @"padded storage participates in independent surface allocation");
 }
@@ -803,6 +803,69 @@ static NSData *smallRelocatableObject(void) {
         kernelRelocationOffsets:@[@0x40] programInfo:info error:nil];
 }
 
+static void testH16BindingWidthsAndIdentities(void) {
+    NSData *td = [NSMutableData dataWithLength:0x100];
+    HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
+        initWithTaskCount:1 recordCount:16 formatCode:0 scratchByteLength:0
+        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    HWXObjectBinding *out = [[HWXObjectBinding alloc]
+        initWithSymbol:@"y@output" shortName:@"y"
+        role:HWXObjectBindingRoleOutput elementType:ANEElementTypeFP16
+        shape:@[@3,@1,@8,@8]];
+    HWXObjectBinding *input = [[HWXObjectBinding alloc]
+        initWithSymbol:@"camera_frame" shortName:@"camera_frame"
+        role:HWXObjectBindingRoleInput elementType:ANEElementTypeFP16
+        shape:@[@3,@1,@8,@8]];
+    NSError *error = nil;
+    NSData *image = [HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:@[input, out]
+        kernelRelocationOffsets:@[] programInfo:info error:&error];
+    expect(image != nil && error == nil,
+           @"H16 accepts long semantic identifiers and batched allocations");
+    if (image) {
+        const uint8_t *bytes = (const uint8_t *)image.bytes;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)bytes;
+        NSUInteger pos = sizeof(*header);
+        BOOL shortReference = NO;
+        for (uint32_t i = 0; i < header->ncmds; ++i) {
+            const struct load_command *c = (const struct load_command *)(bytes + pos);
+            if (c->cmd == 0x40 && !shortReference) {
+                expect(memcmp(bytes + pos + 0x18, "_io0\0\0\0\0", 8) == 0,
+                       @"long names get a NUL-terminated local reference without truncation");
+                shortReference = YES;
+            }
+            pos += c->cmdsize;
+        }
+        NSArray *layouts = tensorPhysicalLayouts(image);
+        expect(layouts.count == 2 && [layouts[0] isEqualToArray:@[@16,@128,@128,@128]],
+               @"H16 descriptor records one batch while allocation covers three");
+        expect([tensorSymbols(image)[0] isEqualToString:@"camera_frame"],
+               @"short references preserve the semantic symbol");
+    }
+    for (HWXObjectBinding *bad in @[
+        [[HWXObjectBinding alloc] initWithSymbol:@"y@output" shortName:@"x"
+            role:HWXObjectBindingRoleInput elementType:ANEElementTypeFP16 shape:@[@1]],
+        [[HWXObjectBinding alloc] initWithSymbol:@"x" shortName:@"y"
+            role:HWXObjectBindingRoleInput elementType:ANEElementTypeFP16 shape:@[@1]],
+        [[HWXObjectBinding alloc] initWithSymbol:@"x" shortName:@"x"
+            role:HWXObjectBindingRoleInput elementType:ANEElementTypeFP16
+            shape:@[@1,@1,@1,@0x100000000ULL] rowStrideBytes:0x200000000ULL
+            planeStrideBytes:0x200000000ULL batchStrideBytes:0x200000000ULL
+            storageByteLength:0x200000000ULL],
+    ]) {
+        error = nil;
+        expect([HWXObjectWriter buildObjectWithTaskDescriptor:td
+            constantRegion:[NSData data] bindings:@[bad, out]
+            kernelRelocationOffsets:@[] programInfo:info error:&error] == nil && error != nil,
+               @"H16 rejects duplicate identities and dimensions that truncate to u32");
+    }
+    error = nil;
+    expect([HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSMutableData dataWithLength:16] bindings:bindings()
+        kernelRelocationOffsets:@[@0x40, @0x40] programInfo:info error:&error] == nil && error != nil,
+           @"H16 rejects duplicate relocation patch sites");
+}
+
 static void testParserRejectsInvalidSymbolAndRelocationTables(void) {
     NSData *valid = smallRelocatableObject();
     NSError *error = nil;
@@ -864,6 +927,7 @@ int main(void) {
         testFourSurfaceScratchProgramUsesMeasuredResourceLayout();
         testWriterRejectsUnrepresentableResourcesAndRelocations();
         testParserRejectsInvalidSymbolAndRelocationTables();
+        testH16BindingWidthsAndIdentities();
         printf("HWX object writer: %s\n", failures == 0 ? "PASS" : "FAIL");
     }
     return failures == 0 ? 0 : 1;
