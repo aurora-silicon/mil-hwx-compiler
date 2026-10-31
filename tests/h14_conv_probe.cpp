@@ -19,9 +19,10 @@ int main(int argc, char **argv) {
         ane::h14::ConvShape s{n(6),n(7),n(8),n(9),bool(n(10)),
                               {n(2),n(4),n(5)},{n(3),n(11),n(12)}};
         const auto w = read(argv[13]), b = read(argv[14]);
-        const auto p = std::string(argv[1]) == "parity"
+        auto p = std::string(argv[1]) == "parity"
             ? ane::h14::encodeConvParity(s,w.data(),w.size(),s.bias?b.data():nullptr,b.size())
             : ane::h14::encodeConvGeneric(s,w.data(),w.size(),s.bias?b.data():nullptr,b.size());
+        if (std::string(argv[1]) == "generic-relu") ane::h14::fuseConvRelu(p);
         const auto a = ane::h14::encodeANEC(p);
         std::ofstream out(argv[15], std::ios::binary);
         out.write(reinterpret_cast<const char *>(a.data()), static_cast<std::streamsize>(a.size()));

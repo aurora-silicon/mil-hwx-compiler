@@ -43,7 +43,8 @@ def probe_one(r, root, mode='generic'):
     (root / 'raw-bias.bin').write_bytes(b or b'')
     out = root / mode
     out.mkdir()
-    args = [COMPILER, mode, str(p['input_shape'][1]), str(p['output_shape'][1]),
+    selected_mode = 'generic-relu' if mode == 'generic' and p.get('relu') else mode
+    args = [COMPILER, selected_mode, str(p['input_shape'][1]), str(p['output_shape'][1]),
             *map(str, p['input_shape'][2:]), *map(str, p['weight_shape'][2:]),
             str(p['stride']), str(p['groups']), str(int(p['bias'])),
             *map(str, p['output_shape'][2:]), str(root / 'raw-weight.bin'),
@@ -111,6 +112,7 @@ def main():
             if r.get('error') is None and r.get('parameters', {}).get('weight_shape'):
                 r['_original'] = directory == 'h14'
                 records.append(r)
+    assert sum(not r['_original'] for r in records) == 64
     counts = collections.Counter()
     with tempfile.TemporaryDirectory(prefix='h14-conv-formula-') as tmp:
         root = Path(tmp)
