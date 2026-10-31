@@ -4400,7 +4400,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     [taskRecords addObject:@{
                         @"index": @(layout[index].firstTask + task),
                         @"layer": @(index), @"operation": record[@"operation"]}];
-                NSArray *edgeNames = @[@"dram", @"l2-alias", @"l2-dependent"];
+                NSArray *edgeNames = @[@"dram", @"l2-alias", @"l2-chained-alias", @"l2-dependent", @"l2-dependent-wide"];
                 NSMutableDictionary *layerRecord = [@{
                     @"result": result, @"operation": record[@"operation"],
                     @"firstTask": @(layout[index].firstTask),

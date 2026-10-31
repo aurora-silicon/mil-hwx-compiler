@@ -2910,15 +2910,27 @@ namespace {
 /// granularity, so every L2 byte a task touches sits below 2 MiB.
 constexpr std::uint64_t kL2Bytes = 0x200000;
 
-enum class EdgeMode { Dram, Alias, Dependent };
+/// The inter-layer edge forms Apple's compiler emits (t-3891, t-4020):
+///   AliasInit    producer ResultCfg 0x500170 -> consumer SourceCfg 0x160
+///   AliasChained producer ResultCfg 0x140    -> consumer SourceCfg 0x144
+///   Dep104       producer ResultCfg 0x140    -> consumer SourceCfg 0x104
+///   Dep120       producer ResultCfg 0x140    -> consumer SourceCfg 0x120
+/// The alias forms carry the DPC/SPC handoff, the channel-3 selectors and the
+/// populated-but-disabled DMA geometry; the dependent forms carry none of it.
+enum class EdgeMode { Dram, AliasInit, AliasChained, Dep104, Dep120 };
 
-/// What one single-task layer occupies in L2, read back from its words.
+bool isAlias(EdgeMode m) { return m == EdgeMode::AliasInit || m == EdgeMode::AliasChained; }
+bool isDependent(EdgeMode m) { return m == EdgeMode::Dep104 || m == EdgeMode::Dep120; }
+
+/// What one layer occupies in L2, read back from its first task's words.
 struct LayerGeometry {
     bool depthwise;
-    std::uint32_t inHeight, inWidth, outHeight, outWidth, outChannels, tileHeight, kernel;
+    std::uint32_t tasks;
+    std::uint32_t inHeight, inWidth, outHeight, outWidth, outChannels, sliceChannels, tileHeight, kernel;
     std::uint32_t sourceRow, sourceChannel, sourceDepth;   // 0x4810 / 0x480c / 0x4814
     std::uint64_t stagedInput;   // rows the input DMA stages * source row
-    std::uint64_t staging;       // the DRAM-output staging region
+    std::uint64_t staging;       // the DRAM-output staging region of one task
+    std::uint32_t outRowL2;
 };
 
 LayerGeometry layerGeometry(const Program &layer) {
@@ -2927,37 +2939,52 @@ LayerGeometry layerGeometry(const Program &layer) {
     auto reg = [&](std::uint32_t a) { return loadLE32(t, h13RegisterOffset(t, 0, bytes, a)); };
     LayerGeometry g{};
     g.depthwise = layer.depthwiseConv;
+    g.tasks = layer.taskCount;
     g.kernel = reg(0x1c) & 0x1f;
     g.inHeight = reg(0x0) >> 16; g.inWidth = reg(0x0) & 0xffff;
     g.outHeight = reg(0x14) >> 16; g.outWidth = reg(0x14) & 0xffff;
-    g.outChannels = reg(0x10);
+    g.sliceChannels = reg(0x10);
+    g.outChannels = layer.output.nchw[1];
     g.tileHeight = reg(0x28);
     g.sourceRow = reg(0x4810); g.sourceChannel = reg(0x480c); g.sourceDepth = reg(0x4814);
     g.stagedInput = reg(0x4834);
-    const std::uint64_t outRow = std::max<std::uint64_t>(16, (2ull * g.outWidth + 15) / 16 * 16);
-    g.staging = static_cast<std::uint64_t>(g.tileHeight) * g.outChannels * outRow;
+    g.outRowL2 = static_cast<std::uint32_t>(std::max<std::uint64_t>(16, (2ull * g.outWidth + 15) / 16 * 16));
+    g.staging = static_cast<std::uint64_t>(g.tileHeight) * g.sliceChannels * g.outRowL2;
     return g;
 }
 
 std::uint64_t align16(std::uint64_t v) { return (v + 15) & ~15ull; }
 
-/// Chooses which edges stay in L2 and places every L2 region, following the
-/// two edge forms Apple's compiler emits (t-3891): the alias edge after a
-/// dense producer and the dependent edge from a depthwise producer into a
-/// 1x1 consumer at spatial 8..64. Only single-task layers whose whole output
-/// is one tile qualify, and an edge is taken only when every region the two
-/// tasks touch fits in 2 MiB without overlap; everything else stays in DRAM.
-/// Placement is Apple's: a producer that stages its input from DRAM leaves
-/// its result at 0 and stages the input above it; a task whose input is
-/// resident puts its own result (or output staging) right above that input,
-/// or at 0 when that does not fit and the input starts high enough.
+/// Two ranges on the 2 MiB L2 ring overlap.
+bool ringOverlap(std::uint64_t a, std::uint64_t an, std::uint64_t b, std::uint64_t bn) {
+    if (an + bn > kL2Bytes) return true;
+    for (std::uint64_t ka : {a % kL2Bytes, a % kL2Bytes + kL2Bytes})
+        for (std::uint64_t kb : {b % kL2Bytes, b % kL2Bytes + kL2Bytes})
+            if (ka < kb + bn && kb < ka + an) return true;
+    return false;
+}
+
+/// Edge choice and placement (t-4020 "minimal planner rules"):
+/// - a resident run starts with an initial alias edge out of a producer that
+///   reads DRAM, then alternates a dependent and a chained-alias phase;
+/// - a dependent edge out of a single-task producer uses SourceCfg 0x104 up
+///   to the largest edge Apple was seen to give it (0x80800 bytes) and
+///   spills above that;
+/// - a split (multi-task) producer can only feed the dependent phase, as one
+///   aggregate result read with 0x120 by a depthwise consumer;
+/// - every edge spans the consumer's full input (rows * its source row),
+///   addresses advance around the 2 MiB ring right after the live input, and
+///   a task's live input never overlaps its outgoing result or staging;
+/// - anything else, or anything that does not fit, stays in DRAM.
 struct L2Plan {
     std::vector<EdgeMode> edge;              // edge[i]: layer i -> i + 1
-    std::vector<std::uint64_t> resultBase;   // where layer i's L2 result sits
+    std::vector<std::uint64_t> resultBase;   // aggregate base of layer i's L2 result
     std::vector<std::uint64_t> resultBytes;
     std::vector<std::uint64_t> sourceBase;   // layer i's Source1Base
     std::vector<std::uint64_t> stagingBase;  // layer i's DRAM-output staging base
 };
+
+constexpr std::uint64_t kDep104MaxEdge = 0x80800;
 
 L2Plan planL2(const std::vector<Program> &layers) {
     const std::size_t n = layers.size();
@@ -2968,57 +2995,68 @@ L2Plan planL2(const std::vector<Program> &layers) {
     std::vector<LayerGeometry> g;
     for (const auto &layer : layers) g.push_back(layerGeometry(layer));
     for (std::size_t i = 0; i < n; ++i) plan.stagingBase[i] = g[i].stagedInput;
-    // Only the task forms Apple's compiler is observed to emit (t-3891):
-    //   dense (DRAM in) -alias-> depthwise -dependent-> dense 1x1 (DRAM out)
-    //   dense (DRAM in) -alias-> dense (DRAM out)
-    // at spatial 8..64, every layer one task with its whole output in one
-    // tile. A task that both reads and writes L2 is only ever the depthwise
-    // middle of the first form. Everything else stays in DRAM.
-    auto single = [&](std::size_t k) {
-        return layers[k].taskCount == 1 && g[k].tileHeight == g[k].outHeight &&
-               g[k].outHeight >= 8 && g[k].outHeight <= 64 &&
-               g[k].outWidth >= 8 && g[k].outWidth <= 64 &&
-               g[k].inHeight == g[k].outHeight && g[k].inWidth == g[k].outWidth;
-    };
-    auto edgeBytes = [&](std::size_t consumer) {
-        return static_cast<std::uint64_t>(g[consumer].inHeight) * g[consumer].sourceRow;
-    };
-    std::size_t i = 0;
-    while (i + 1 < n) {
-        const bool producerOk = single(i) && !g[i].depthwise &&
-            (i == 0 || plan.edge[i - 1] == EdgeMode::Dram);
-        const bool triple = producerOk && i + 2 < n && single(i + 1) && single(i + 2) &&
-            g[i + 1].depthwise && !g[i + 2].depthwise && g[i + 2].kernel == 1;
-        const bool pair = producerOk && !triple && single(i + 1) && !g[i + 1].depthwise;
-        if (!triple && !pair) { ++i; continue; }
-        // Producer: result at 0, its DRAM-staged input above it.
-        const std::uint64_t e1 = edgeBytes(i + 1);
-        const std::uint64_t src0 = align16(e1);
-        bool ok = src0 + g[i].stagedInput <= kL2Bytes;
-        // Middle (or final) consumer: input at 0, its result/staging above.
-        const std::uint64_t at1 = align16(e1);
-        std::uint64_t e2 = 0, at2 = 0;
-        if (triple) {
-            e2 = edgeBytes(i + 2);
-            at2 = align16(at1 + e2);
-            ok = ok && at1 + e2 <= kL2Bytes && at2 + g[i + 2].staging <= kL2Bytes;
-        } else {
-            ok = ok && at1 + g[i + 1].staging <= kL2Bytes;
+    bool inL2 = false;            // layer i's input is resident
+    bool nextIsDependent = false; // phase of the next edge in a resident run
+    std::uint64_t inBase = 0, inBytes = 0;
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        const auto &p = g[i];
+        const auto &c = g[i + 1];
+        const std::uint64_t edge = static_cast<std::uint64_t>(c.inHeight) * c.sourceRow;
+        EdgeMode mode = EdgeMode::Dram;
+        // Every L2 task computes its whole output in one tile here: tiled
+        // tasks next to a resident edge differ in Apple's result config
+        // (0x142), which has not been mapped.
+        const bool tilesOk = p.tileHeight == p.outHeight && c.tileHeight == c.outHeight &&
+            c.inHeight == p.outHeight && c.sourceRow && c.sourceRow % 16 == 0;
+        if (tilesOk) {
+            if (!inL2) {
+                if (p.tasks == 1) mode = EdgeMode::AliasInit;
+            } else if (nextIsDependent) {
+                // A single-task producer's wide (0x120) edge only appears at
+                // 56x56 with a result config (0x142) and result strides on
+                // the final task that are not mapped yet, so it spills.
+                if (p.tasks == 1 && edge <= kDep104MaxEdge) mode = EdgeMode::Dep104;
+                else if (p.tasks > 1 && c.depthwise &&
+                         p.sliceChannels * p.tasks == p.outChannels)
+                    mode = EdgeMode::Dep120;
+            } else {
+                if (p.tasks == 1) mode = EdgeMode::AliasChained;
+            }
         }
-        if (!ok) { ++i; continue; }
-        plan.edge[i] = EdgeMode::Alias;
-        plan.resultBase[i] = 0; plan.resultBytes[i] = e1; plan.sourceBase[i] = src0;
-        plan.sourceBase[i + 1] = 0;
-        if (triple) {
-            plan.edge[i + 1] = EdgeMode::Dependent;
-            plan.resultBase[i + 1] = at1; plan.resultBytes[i + 1] = e2;
-            plan.sourceBase[i + 2] = at1;
-            plan.stagingBase[i + 2] = at2;
-            i += 3;
-        } else {
-            plan.stagingBase[i + 1] = at1;
-            i += 2;
+        std::uint64_t result = 0, source = plan.sourceBase[i];
+        if (mode != EdgeMode::Dram) {
+            if (!inL2) {
+                // Apple's first producer: result at 0, staged input above it.
+                result = 0;
+                source = align16(edge);
+                if (source + p.stagedInput > kL2Bytes ||
+                    ringOverlap(result, edge, source, p.stagedInput)) mode = EdgeMode::Dram;
+            } else {
+                result = align16(inBase + inBytes) % kL2Bytes;
+                if (ringOverlap(result, edge, inBase, inBytes)) mode = EdgeMode::Dram;
+            }
         }
+        if (mode != EdgeMode::Dram) {
+            // The consumer's own outgoing region (DRAM staging; a later
+            // resident edge re-checks itself) goes right after its input.
+            const std::uint64_t after = align16(result + edge) % kL2Bytes;
+            if (ringOverlap(after, c.staging, result, edge)) mode = EdgeMode::Dram;
+        }
+        if (mode == EdgeMode::Dram) {
+            inL2 = false;
+            nextIsDependent = false;
+            continue;
+        }
+        plan.edge[i] = mode;
+        plan.resultBase[i] = result;
+        plan.resultBytes[i] = edge;
+        plan.sourceBase[i] = source;
+        plan.sourceBase[i + 1] = result;
+        plan.stagingBase[i + 1] = align16(result + edge) % kL2Bytes;
+        inL2 = true;
+        nextIsDependent = isAlias(mode);
+        inBase = result;
+        inBytes = edge;
     }
     return plan;
 }
@@ -3155,17 +3193,22 @@ Program linkConvChain(const std::vector<Program> &layers,
             // the producer's output DMA: the M1 Pro read stale scratch on a
             // cold run (dw 3x3 512 @14x14, prefix 16 of MobileNetV1).
             const bool layerEnd = &span == &spans[index].back();
-            // L2 edges (t-3891): SrcLoc/DstLoc only for DRAM ends; SPL unless
-            // the input arrives over a dependent edge; SPC on an alias
-            // consumer, DPC on an alias producer; TSE+TSR closes every layer
-            // except a dependent producer.
+            // L2 edges (t-3891, t-4020). The incoming handoff belongs to a
+            // layer's first task only: later output-channel slices reread the
+            // same resident input as a plain L2 read with no handoff bits.
+            // SrcLoc/DstLoc mark DRAM ends; SPL unless the input arrives over
+            // a dependent edge (or is a reread); SPC on an alias consumer, DPC
+            // on an alias producer; TSE+TSR closes a layer unless it feeds a
+            // dependent edge.
+            const bool firstSlice = &span == &spans[index].front();
+            const bool reread = inL2 && !firstSlice;
             std::uint32_t control = 0;
             if (!inL2) control |= 0x10000000u;
             if (!outL2) control |= 0x20000000u;
-            if (inEdge != EdgeMode::Dependent) control |= 0x800u;
-            if (inEdge == EdgeMode::Alias) control |= 0x2000u;
-            if (outEdge == EdgeMode::Alias) control |= 0x4000u;
-            if (layerEnd && (outEdge != EdgeMode::Dependent || last)) control |= 0x9000u;
+            if (!reread && !isDependent(inEdge)) control |= 0x800u;
+            if (!reread && isAlias(inEdge)) control |= 0x2000u;
+            if (isAlias(outEdge)) control |= 0x4000u;
+            if (layerEnd && (!isDependent(outEdge) || last)) control |= 0x9000u;
             storeLE32(task, offset + 24, control);
             storeLE32(task, offset + 28, static_cast<std::uint32_t>(nextOffset));
             std::uint32_t selectors = loadLE32(task, offset + 32);
@@ -3175,11 +3218,15 @@ Program linkConvChain(const std::vector<Program> &layers,
                     "h13.linked-outside-envelope: layer task does not read "
                     "channel 4 and write channel 5");
             if (inL2) {
-                // Resident input: L2Read source at the producer's result base,
-                // input DMA disabled. Alias form keeps the DMA geometry and
-                // RBase0=3/RBE; dependent form zeroes both (t-3891).
-                const bool alias = inEdge == EdgeMode::Alias;
-                putRegister(task, offset, bytes, 0x04804, alias ? 0x160u : 0x104u);
+                // Resident input at the producer's (aggregate) result base,
+                // input DMA disabled. The first slice takes the edge's own
+                // form; later slices are plain L2 rereads (SourceCfg 0x100).
+                const bool alias = !reread && isAlias(inEdge);
+                const std::uint32_t sourceCfg = reread ? 0x100u
+                    : inEdge == EdgeMode::AliasInit ? 0x160u
+                    : inEdge == EdgeMode::AliasChained ? 0x144u
+                    : inEdge == EdgeMode::Dep104 ? 0x104u : 0x120u;
+                putRegister(task, offset, bytes, 0x04804, sourceCfg);
                 putRegister(task, offset, bytes, 0x04808,
                             static_cast<std::uint32_t>(l2.sourceBase[index]));
                 putRegister(task, offset, bytes, 0x04818, 0);
@@ -3203,29 +3250,46 @@ Program linkConvChain(const std::vector<Program> &layers,
                             static_cast<std::uint32_t>(l2.sourceBase[index]));
             }
             if (outL2) {
-                // Resident result in the consumer's source layout.
-                const bool alias = outEdge == EdgeMode::Alias;
+                // Resident result in the consumer's source layout. A split
+                // producer writes one aggregate, each slice with the full
+                // aggregate strides (t-4020). Slice j (output channels
+                // j * sliceChannels onward) sits at base + j * sliceChannels *
+                // rowL2. Apple's decoded slices descend instead, which matches
+                // only if its tasks run the channel slices in reverse order;
+                // the descending form was wrong on the M1 Pro for this
+                // encoder's ascending slices (cold rel. L2 1.15), the
+                // ascending form exact.
                 const auto &next = layers[index + 1];
                 auto nextReg = [&](std::uint32_t a) {
                     return loadLE32(next.task, h13RegisterOffset(next.task, 0, next.firstTaskBytes, a));
                 };
-                putRegister(task, offset, bytes, 0x04830, alias ? 0x500170u : 0x140u);
-                putRegister(task, offset, bytes, 0x04834, static_cast<std::uint32_t>(l2.resultBase[index]));
+                const auto g = layerGeometry(layer);
+                const std::size_t slice = static_cast<std::size_t>(&span - &spans[index].front());
+                const std::uint64_t sliceBase = l2.resultBase[index] +
+                    static_cast<std::uint64_t>(slice) * g.sliceChannels * nextReg(0x0480c);
+                putRegister(task, offset, bytes, 0x04830,
+                            outEdge == EdgeMode::AliasInit ? 0x500170u : 0x140u);
+                putRegister(task, offset, bytes, 0x04834,
+                            static_cast<std::uint32_t>(sliceBase % kL2Bytes));
                 putRegister(task, offset, bytes, 0x04838, nextReg(0x0480c));
                 putRegister(task, offset, bytes, 0x0483c, nextReg(0x04810));
                 putRegister(task, offset, bytes, 0x04840, nextReg(0x04814));
                 putRegister(task, offset, bytes, 0x04844, 0);
                 putRegister(task, offset, bytes, 0x17800, 0xc0);
-                if (alias) {
+                if (isAlias(outEdge)) {
                     selectors = (selectors & ~(31u << 12)) | (3u << 12);
                 } else {
                     selectors &= ~((31u << 12) | (1u << 17));
                     for (std::uint32_t a : {0x17804u, 0x17808u, 0x1780cu, 0x17810u, 0x17814u})
                         putRegister(task, offset, bytes, a, 0);
                     putRegister(task, offset, bytes, 0x17818, 0x01000000u);
-                    const auto c24 = loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x00024));
-                    putRegister(task, offset, bytes, 0x00024, c24 | 0x4000u);
                 }
+            }
+            // Common 0x24 bit 14 tracks a depthwise task next to a resident
+            // edge in every decoded chain (t-4020: it is not an edge mode).
+            if (layer.depthwiseConv && (inL2 || outL2)) {
+                const auto c24 = loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x00024));
+                putRegister(task, offset, bytes, 0x00024, c24 | 0x4000u);
             }
             if (readsScratch) {
                 const std::uint64_t depth = loadLE32(task,

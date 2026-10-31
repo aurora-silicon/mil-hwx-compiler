@@ -378,7 +378,7 @@ struct LinkedLayer {
     std::uint64_t readOffset;
     bool writesScratch;
     std::uint64_t writeOffset;
-    /// L2-resident edges (`l2Resident`): 0 DRAM, 1 alias, 2 dependent.
+    /// L2-resident edges (`l2Resident`): 0 DRAM, 1 initial alias, 2 chained alias, 3 dependent (0x104), 4 dependent wide (0x120).
     int inputEdge = 0;
     int outputEdge = 0;
     std::uint64_t l2Source = 0;
