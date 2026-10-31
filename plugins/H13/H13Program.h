@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace ane::h13 {
@@ -124,6 +125,12 @@ struct Program {
     std::size_t outputBindingIndex = static_cast<std::size_t>(-1);
     /// Descriptor channels in output, input0, input1 order, before ANEC rebinding.
     std::array<std::uint32_t, 4> taskSurfaceChannels{4, 5, 6, 7};
+    /// Built by `encodeConvGeneric` from the per-register formulas rather
+    /// than replayed from a decoded template.
+    bool formulaBuilt = false;
+    /// A formula-built depthwise convolution (the linker picks the L2 edge
+    /// form from it; the task words alone do not say it).
+    bool depthwiseConv = false;
 };
 
 Program encodeBinary(BinaryOperation operation);
@@ -304,6 +311,26 @@ std::vector<std::uint8_t> packConvWeights(ConvShape shape,
                                           std::size_t weightBytes,
                                           const std::uint8_t *bias = nullptr,
                                           std::size_t biasBytes = 0);
+/// Why a convolution has no generic (formula-built) encoding, or empty when
+/// `encodeConvGeneric` accepts it. The generic encoder covers dense (groups
+/// 1) and depthwise convolutions with a square 1x1 or 3x3 kernel, unit
+/// dilation, `same` or `valid` padding, stride 1 (and stride 2 for 1x1),
+/// channel counts that are multiples of 16, and any spatial extent whose
+/// rows fit the L2 tiling budget.
+std::string convGenericRefusal(ConvShape shape);
+/// Builds a convolution task stream from the decoded per-register formulas
+/// (see docs/ane/fused-conv.md) instead of a captured template: the closest
+/// decoded template of the same family supplies the invariant words and every
+/// shape-dependent register -- surfaces, L2 strides and result base, tile
+/// height, channel counts, kernel-DMA chunk table -- is recomputed. Weights
+/// over the per-task kernel budget split into independent output-channel
+/// tasks in one program.
+Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
+                          std::size_t weightBytes,
+                          const std::uint8_t *bias = nullptr,
+                          std::size_t biasBytes = 0);
+/// The constant-section size the decoded template for this geometry records.
+std::size_t convParitySectionBytes(ConvShape shape);
 /// Encodes Apple's own convolution task stream for the geometry.
 Program encodeConvParity(ConvShape shape, const std::uint8_t *weights,
                          std::size_t weightBytes,
@@ -320,6 +347,14 @@ enum class PostOperation : std::uint8_t { Relu };
 /// Throws unless the program is exactly the decoded no-post-op form.
 void fuseMatmulPostOperation(Program &program, PostOperation operation);
 
+/// Fuses a relu into a convolution program's NE epilogue. The NE MAC
+/// configuration word `0x0c804` carries the same clamp bit `0x00010000`
+/// the decoded `chain_pair_mm_relu` matmul epilogue sets; every conv task
+/// writes that register, so a multi-task convolution gets the bit in each
+/// task. Throws unless every task is a decoded no-post-op form
+/// (`0x00101c00`, or `0x00101c10` with a per-channel bias).
+void fuseConvPostOperation(Program &program, PostOperation operation);
+
 /// Fuses a relu into a one-task Apple elementwise program. Verified byte-exact
 /// against `chain_add_relu_c512` on both targets: the PE word `0x08800`
 /// (H14 `0x900`) carries the clamp bit `0x20` and no other word moves.
@@ -333,6 +368,37 @@ void fuseElementwisePostOperation(Program &program, PostOperation operation);
 /// provides no task-DMA addressing for declared intermediate surfaces (reads
 /// are wired to the input channels, writes to the output channel or L2), so
 /// any multi-program relink would emit tasks that never exchange data.
+/// Where one layer of a linked convolution program reads and writes. A
+/// boundary surface is the program input (channel 5) or output (channel 4);
+/// an intermediate lives in the channel-3 scratch arena at `scratchOffset`.
+struct LinkedLayer {
+    std::uint32_t firstTask;
+    std::uint32_t taskCount;
+    bool readsScratch;
+    std::uint64_t readOffset;
+    bool writesScratch;
+    std::uint64_t writeOffset;
+    /// L2-resident edges (`l2Resident`): 0 DRAM, 1 alias, 2 dependent.
+    int inputEdge = 0;
+    int outputEdge = 0;
+    std::uint64_t l2Source = 0;
+    std::uint64_t l2Result = 0;
+    std::uint64_t l2ResultBytes = 0;
+};
+
+/// Links the per-layer programs of a straight-line convolution chain into
+/// one task stream, so the whole chain is one submit. Every layer must be a
+/// formula-built convolution (`encodeConvGeneric`, optionally relu-fused)
+/// whose input is the previous layer's output surface. Intermediates are
+/// DRAM-resident in the scratch channel (3): each gets its own
+/// non-overlapping, tile-aligned region, so no task ever writes a region an
+/// earlier task still reads. Kernel-DMA offsets move by each layer's place
+/// in the shared constant section. `layout`, when given, receives each
+/// layer's task span and scratch routing.
+Program linkConvChain(const std::vector<Program> &layers,
+                      std::vector<LinkedLayer> *layout = nullptr,
+                      bool l2Resident = false);
+
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);
 
