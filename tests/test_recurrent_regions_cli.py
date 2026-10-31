@@ -10,6 +10,7 @@ import tempfile
 from timeouts import scaled_timeout
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'build/mil-hwxc').resolve()
 T = 'tensor<fp16, [1,512]>'
 
@@ -104,6 +105,19 @@ def main():
                 assert len(sigmoid['programs']) == 2 and not sigmoid['regions']
             compile_at(root, target + '-exposed-chain', text, target, 'chain',
                        error=target.lower() + ('.unsupported-chain' if target == 'H14' else '.chain-unrepresentable-edge'))
+        # H13 removes view operations but retains alias metadata. An identity
+        # view feeding ReLU must not lose its backing tensor during fusion.
+        view_text = source([('sum', 'add', 'x = a, y = b'),
+                            ('view', 'reshape', 'x = sum, shape = same_shape'),
+                            ('activated', 'relu', 'x = view')], ['activated'])
+        view_text = view_text.replace('    ' + T + ' sum =',
+            '    tensor<int32, [2]> same_shape = const()[name = string("same_shape"), '
+            'val = tensor<int32, [2]>([1,512])];\n    ' + T + ' sum =')
+        view, view_dir = compile_at(root, 'h13-view-region', view_text, 'H13', 'regions')
+        assert len(view['programs']) == 2 and not view['regions']
+        assert view['tensors']['view']['aliasOf'] == 'sum'
+        from research import inspect_anec
+        inspect_anec.load_package(view_dir)
         compile_at(root, 'h14-passthrough', source(ops, ['h_next', 'a']), 'H14',
                    error='h14.unsupported-logical-result-storage')
         compile_at(root, 'h14-dead-tail', source(ops, ['c_next']), 'H14',

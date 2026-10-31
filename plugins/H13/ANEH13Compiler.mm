@@ -4121,6 +4121,12 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     ((matvecParity && !runtimeWeight) || (parity && !operationPlan.unary))) {
                     ANEGraphOperation *candidate = ANEReluRegionConsumer(
                         operations, operation, returnedStorageNameSet);
+                    // Lowered views can share this storage without a second
+                    // operation operand. Retain their backing producer rather
+                    // than leave an alias pointing at an erased tensor.
+                    for (NSDictionary *alias in aliases.allValues)
+                        if ([alias[@"aliasOf"] isEqualToString:operation.results[0].name])
+                            candidate = nil;
                     if (candidate) {
                         auto fused = program;
                         try {
