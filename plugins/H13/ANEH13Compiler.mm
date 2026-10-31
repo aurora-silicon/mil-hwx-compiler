@@ -2845,6 +2845,22 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
               schedule:(NSString *)schedule
            diagnostics:(ANEDiagnosticEngine *)diagnostics
                  error:(NSError **)error {
+    return [self compileMILData:milData modelRoot:modelRoot format:format
+        outputDirectory:directory schedule:schedule maxPrograms:65536
+        diagnostics:diagnostics error:error];
+}
+
++ (BOOL)compileMILData:(NSData *)milData
+             modelRoot:(NSURL *)modelRoot
+                format:(NSString *)format
+       outputDirectory:(NSURL *)directory
+              schedule:(NSString *)schedule
+           maxPrograms:(NSUInteger)maxPrograms
+           diagnostics:(ANEDiagnosticEngine *)diagnostics
+                 error:(NSError **)error {
+    if (!maxPrograms)
+        return reject(diagnostics, @"H13 program budget must be positive",
+                      nil, @"h13.program-budget");
     BOOL hwx = [format isEqualToString:@"hwx"];
     if (!hwx && ![format isEqualToString:@"anec"]) {
         reject(diagnostics, @"H13 artifact format must be 'anec' or 'hwx'",
@@ -3593,6 +3609,14 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             }
 
             if (linear && bias && rows > 1) {
+                // Each row needs at least a matmul and a bias add. Refuse
+                // before allocating the row operations when even that lower
+                // bound exceeds the caller's materialization budget.
+                if (rows > maxPrograms / 2)
+                    return reject(diagnostics, [NSString stringWithFormat:
+                        @"H13 linear needs at least %lu rows of matmul and bias programs; materialization budget is %lu",
+                        (unsigned long)rows, (unsigned long)maxPrograms],
+                        candidate, @"h13.program-budget");
                 NSData *biasData = linearBiasData(bias, columns, modelRoot,
                     diagnostics, resolvedConstants);
                 if (!biasData) return NO;
@@ -3860,6 +3884,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         @[@"add", @"mul", @"maximum", @"minimum", @"sub", @"real_div"];
     ANEGraphOperation *operation = nil;
     try {
+        // Count the complete lowered schedule before encoding any payload.
+        // The same slice planner drives both passes, so constants, matrix
+        // tiling and whole-tensor parity paths cannot disagree on the cost.
+        NSUInteger plannedPrograms = 0;
+        for (NSUInteger pass = 0; pass < 2; ++pass) {
         for (operation in operations) {
             NSUInteger sliceCount = 1, inputSliceElements = 0,
                 inputPhysicalElements = 0, outputSliceElements = 0,
@@ -4060,6 +4089,17 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 }
             }
 
+            if (pass == 0) {
+                if (sliceCount > maxPrograms - plannedPrograms)
+                    return reject(diagnostics, [NSString stringWithFormat:
+                        @"H13 materialized program count exceeds budget %lu before payload encoding (already planned %lu, next operation needs %lu); use a qualified fused path or explicitly raise --max-programs",
+                        (unsigned long)maxPrograms,
+                        (unsigned long)plannedPrograms,
+                        (unsigned long)sliceCount], operation,
+                        @"h13.program-budget");
+                plannedPrograms += sliceCount;
+                continue;
+            }
             for (NSUInteger sliceIndex = 0; sliceIndex < sliceCount; ++sliceIndex) {
                 NSUInteger inputOffset = 0, outputOffset = 0;
                 if (matmul && !batched) {
@@ -4225,6 +4265,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 if (chainSchedule)
                     chainPrograms.push_back(std::move(program));
             }
+        }
         }
         if (chainSchedule) {
             if (chainPrograms.size() != programRecords.count ||

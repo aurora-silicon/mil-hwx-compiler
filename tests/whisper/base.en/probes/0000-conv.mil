@@ -1,0 +1,14 @@
+program(1.3)
+[buildInfo = dict<string, string>({})]
+{
+  func main<ios18>(tensor<fp16, [1, 80, 3000]> mel) {
+    tensor<fp16, [512, 80, 3]> v6 = const()[name = string("v6"), val = tensor<fp16, [512, 80, 3]>(BLOBFILE(path = string("@model_path/weights.bin"), offset = uint64(128)))];
+    tensor<fp16, [512]> v7 = const()[name = string("v7"), val = tensor<fp16, [512]>(BLOBFILE(path = string("@model_path/weights.bin"), offset = uint64(245952)))];
+    tensor<int32, [1]> v3 = const()[name = string("v3"), val = tensor<int32, [1]>([1])];
+    string v1 = const()[name = string("v1"), val = string("custom")];
+    tensor<int32, [2]> v2 = const()[name = string("v2"), val = tensor<int32, [2]>([1, 1])];
+    tensor<int32, [1]> v4 = const()[name = string("v4"), val = tensor<int32, [1]>([1])];
+    int32 v5 = const()[name = string("v5"), val = int32(1)];
+    tensor<fp16, [1, 512, 3000]> v8 = conv(x = mel, weight = v6, bias = v7, strides = v3, pad_type = v1, pad = v2, dilations = v4, groups = v5)[name = string("v8")];
+  } -> (v8);
+}

@@ -1,0 +1,8 @@
+program(1.3)
+[buildInfo = dict<string, string>({})]
+{
+  func main<ios18>(tensor<fp16, [1, 768, 1500]> v18) {
+    string v19 = const()[name = string("v19"), val = string("EXACT")];
+    tensor<fp16, [1, 768, 1500]> v20 = gelu(x = v18, mode = v19)[name = string("v20")];
+  } -> (v20);
+}

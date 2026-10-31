@@ -1,0 +1,4860 @@
+{
+  "schema": "whisper-ane-compiler-coverage-v1",
+  "compiler_repo": "https://github.com/aurora-silicon/mil-hwx-compiler",
+  "compiler_revision": "c28fe541697d37d7ec88886bb6b81cef8329dc44",
+  "probe_timeout_s": 60,
+  "mil_opset": "ios18",
+  "models": {
+    "tiny.en": {
+      "license": "MIT",
+      "weights_source": "https://github.com/openai/whisper",
+      "checkpoint_sha256": "d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03",
+      "ggml_sha256": "4baf807ea95de42a7f9df96e24a36fe835ac8fb5b6ca20d7539ef521c42e6a2b",
+      "coremltools": "8.3.0",
+      "torch": "2.5.0+cpu",
+      "mil_opset": "ios18",
+      "input": {
+        "name": "mel",
+        "shape": [
+          1,
+          80,
+          3000
+        ]
+      },
+      "output": {
+        "name": "encoder",
+        "shape": [
+          1,
+          1500,
+          384
+        ]
+      },
+      "files": {
+        "model.mil": "fd982df960bd07c039648e674ff324448ecff415b52705ee38fb0461ac6fc2ae",
+        "weights.bin": "68acdfe9b93e81426ca73f29ec0484733ba53f57d215cc6316520860f66e8455"
+      },
+      "targets": {
+        "H13": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0357,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "27:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has a 'add' consumer with no such flag\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  384,
+                  80,
+                  3
+                ],
+                "v7": [
+                  384
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                384,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0167,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  384,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                384,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0117,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  384,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  384,
+                  384,
+                  3
+                ],
+                "v17": [
+                  384
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                384,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0165,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  384,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                384,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0161,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  384,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0102,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has several consumers or a returned value needing a materialized surface the decoded corpus cannot produce\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0164,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  384
+                ],
+                "v28": [
+                  384
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0164,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h13.norm-outside-envelope]: H13 'layer_norm' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": 10500,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v31": [
+                  384,
+                  384
+                ],
+                "v32": [
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 0,
+              "outcome": "compiled",
+              "seconds": 21.9925,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  6,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0101,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0103,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0101,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0188,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=6, rows=1500, reduction=64, columns=1500, tx=0, ty=1, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  6,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.019,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.norm-outside-envelope]: H13 'softmax' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  6,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0178,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=6, rows=1500, reduction=1500, columns=64, tx=0, ty=0, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.019,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.019,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": 9000,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  384
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 0,
+              "outcome": "compiled",
+              "seconds": 3.0256,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v75": [
+                  1536,
+                  384
+                ],
+                "v76": [
+                  1536
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                1536
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.2514,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  1536
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                1536
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.016,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  1536
+                ]
+              },
+              "constants": {
+                "v80": [
+                  384,
+                  1536
+                ],
+                "v81": [
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.2181,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            }
+          ]
+        },
+        "H14": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0223,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  384,
+                  80,
+                  3
+                ],
+                "v7": [
+                  384
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                384,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.012,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  384,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                384,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.012,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  384,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  384,
+                  384,
+                  3
+                ],
+                "v17": [
+                  384
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                384,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0121,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  384,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                384,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0163,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  384,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0099,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0161,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  384
+                ],
+                "v28": [
+                  384
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0164,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h14.norm-outside-envelope]: H14 'layer_norm' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v31": [
+                  384,
+                  384
+                ],
+                "v32": [
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0108,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  6,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0122,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0097,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0099,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.01,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  6,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0106,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.norm-outside-envelope]: H14 'softmax' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  6,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                6,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0135,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  6,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                6,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0133,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  6,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0158,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  384
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0171,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "5:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  384
+                ]
+              },
+              "constants": {
+                "v75": [
+                  1536,
+                  384
+                ],
+                "v76": [
+                  1536
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                1536
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0123,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  1536
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                1536
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0099,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  1536
+                ]
+              },
+              "constants": {
+                "v80": [
+                  384,
+                  1536
+                ],
+                "v81": [
+                  384
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                384
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0105,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            }
+          ]
+        }
+      }
+    },
+    "base.en": {
+      "license": "MIT",
+      "weights_source": "https://github.com/openai/whisper",
+      "checkpoint_sha256": "25a8566e1d0c1e2231d1c762132cd20e0f96a85d16145c3a00adf5d1ac670ead",
+      "ggml_sha256": "1c9731bc1cf2b64e0f6c27a507576991d494969cb5954a042e1183547850ca02",
+      "coremltools": "8.3.0",
+      "torch": "2.5.0+cpu",
+      "mil_opset": "ios18",
+      "input": {
+        "name": "mel",
+        "shape": [
+          1,
+          80,
+          3000
+        ]
+      },
+      "output": {
+        "name": "encoder",
+        "shape": [
+          1,
+          1500,
+          512
+        ]
+      },
+      "files": {
+        "model.mil": "5b1ee9c08f068ee90d3c5a485af08d85228a3b1ecf5dab6671af5dfde35844f4",
+        "weights.bin": "ccdb656505916d6883a3dd13043ed31f7fe83fc46bcedda3be51749d07935d37"
+      },
+      "targets": {
+        "H13": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0339,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "27:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has a 'add' consumer with no such flag\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  512,
+                  80,
+                  3
+                ],
+                "v7": [
+                  512
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                512,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0135,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  512,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                512,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0156,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  512,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  512,
+                  512,
+                  3
+                ],
+                "v17": [
+                  512
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                512,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0161,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  512,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                512,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0154,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  512,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0101,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has several consumers or a returned value needing a materialized surface the decoded corpus cannot produce\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0154,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  512
+                ],
+                "v28": [
+                  512
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0138,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h13.norm-outside-envelope]: H13 'layer_norm' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": 3000,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v31": [
+                  512,
+                  512
+                ],
+                "v32": [
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 0,
+              "outcome": "compiled",
+              "seconds": 2.6929,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  8,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.016,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0159,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0129,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.016,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=8, rows=1500, reduction=64, columns=1500, tx=0, ty=1, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  8,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0095,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.norm-outside-envelope]: H13 'softmax' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  8,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0156,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=8, rows=1500, reduction=1500, columns=64, tx=0, ty=0, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0114,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0156,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": 12000,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  512
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 0,
+              "outcome": "compiled",
+              "seconds": 4.601,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v75": [
+                  2048,
+                  512
+                ],
+                "v76": [
+                  2048
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                2048
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.3378,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  2048
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                2048
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0109,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  2048
+                ]
+              },
+              "constants": {
+                "v80": [
+                  512,
+                  2048
+                ],
+                "v81": [
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.212,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            }
+          ]
+        },
+        "H14": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0286,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  512,
+                  80,
+                  3
+                ],
+                "v7": [
+                  512
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                512,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0165,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  512,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                512,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0152,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  512,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  512,
+                  512,
+                  3
+                ],
+                "v17": [
+                  512
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                512,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0132,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  512,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                512,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0109,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  512,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0132,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0149,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  512
+                ],
+                "v28": [
+                  512
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0129,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h14.norm-outside-envelope]: H14 'layer_norm' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v31": [
+                  512,
+                  512
+                ],
+                "v32": [
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0143,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  8,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0095,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0121,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0092,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0114,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  8,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0153,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.norm-outside-envelope]: H14 'softmax' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  8,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                8,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0107,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  8,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                8,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0092,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  8,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0089,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  512
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0097,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "5:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  512
+                ]
+              },
+              "constants": {
+                "v75": [
+                  2048,
+                  512
+                ],
+                "v76": [
+                  2048
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                2048
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0093,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  2048
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                2048
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0099,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  2048
+                ]
+              },
+              "constants": {
+                "v80": [
+                  512,
+                  2048
+                ],
+                "v81": [
+                  512
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                512
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0155,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            }
+          ]
+        }
+      }
+    },
+    "small.en": {
+      "license": "MIT",
+      "weights_source": "https://github.com/openai/whisper",
+      "checkpoint_sha256": "f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872",
+      "ggml_sha256": "ee15d70145037f2c59b8ea2ed24a7144d9089c6056e53c67c220b9db568eadd9",
+      "coremltools": "8.3.0",
+      "torch": "2.5.0+cpu",
+      "mil_opset": "ios18",
+      "input": {
+        "name": "mel",
+        "shape": [
+          1,
+          80,
+          3000
+        ]
+      },
+      "output": {
+        "name": "encoder",
+        "shape": [
+          1,
+          1500,
+          768
+        ]
+      },
+      "files": {
+        "model.mil": "9c4baa69fd31f125206931a9468bbfb565f0d7d4d17ed2ff6e2d17f58b229d11",
+        "weights.bin": "cb682fabc181898ffbde38ce7485bad3856c8522731c54f49140e09625d9b107"
+      },
+      "targets": {
+        "H13": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0484,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "27:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has a 'add' consumer with no such flag\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  768,
+                  80,
+                  3
+                ],
+                "v7": [
+                  768
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                768,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0117,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  768,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                768,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0125,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  768,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  768,
+                  768,
+                  3
+                ],
+                "v17": [
+                  768
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                768,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0097,
+              "diagnostic_codes": [
+                "h13.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h13.conv-outside-envelope]: H13 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one (or the encoder's rank-3 spell, which lowers only through the W-major surface it binds as), a constant [Cout, Cin/groups, kh, kw] weight, unit dilations, and a kernel, stride, group count and surface pair inside the oracle parity envelope. Padding lowers as decoded: pad_type 'same' or 'valid' with zero pads, the rank-3 custom spell whose pads equal one of those two, and the rank-4 custom spell whose declared pads reproduce the declared output where a template row covers the surface pair (the W-padded rel-pos padconv k1x1 g8, pad [0,0,1,0], lowers as its own two-task capture). Refused on named gaps: rank-3 spellings with no W-major row (the checked-in n2048 capture is H-major, whose surface the rank-3 tensor does not bind as), custom pads with no covering row, and the stride-2 multi-tap forms whose sections carry transformed halfwords (see receipts/2026-09-17-encoder-padconv-respell and receipts/2026-09-17-encoder-conv-lowering)\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  768,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                768,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0157,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  768,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0152,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 a tail-swap transpose moves the storage-fastest axis, so its view reads rows whose elements sit a non-unit storage stride apart: the NCHW descriptor carries contiguous rows and no surface interpretation expresses the permutation at any size; a consuming matmul's transpose flag is the only decoded mechanism that absorbs one, and this view has several consumers or a returned value needing a materialized surface the decoded corpus cannot produce\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0161,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  768
+                ],
+                "v28": [
+                  768
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0142,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h13.norm-outside-envelope]: H13 'layer_norm' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v31": [
+                  768,
+                  768
+                ],
+                "v32": [
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.2294,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  12,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0098,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0171,
+              "diagnostic_codes": [
+                "h13.invalid-constant-input"
+              ],
+              "diagnostic": "5:5: error [h13.invalid-constant-input]: H13 constants must be a matching fp16 tensor; only add, mul, and runtime-minus-constant sub accept an inline fp16 scalar broadcast\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.01,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0174,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=12, rows=1500, reduction=64, columns=1500, tx=0, ty=1, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  12,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.017,
+              "diagnostic_codes": [
+                "h13.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.norm-outside-envelope]: H13 'softmax' needs a decoded geometry: fp16 static shapes, constant axes, no gamma or beta, epsilon 1e-5, and an input and output surface inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  12,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0176,
+              "diagnostic_codes": [
+                "h13.matmul-outside-envelope"
+              ],
+              "diagnostic": "7:5: error [h13.matmul-outside-envelope]: H13 batched matmul (B=12, rows=1500, reduction=1500, columns=64, tx=0, ty=0, runtime y) is outside the decoded batched envelope, which covers B in {2,4,8,16} at the attention geometries (375,128,749), (375,375,128), and (375,128,375) with their captured flag forms, plus the B=8 head projection (375,1024,128) at transpose_y with identity packing\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0165,
+              "diagnostic_codes": [
+                "h13.nonfoldable-transpose"
+              ],
+              "diagnostic": "6:5: error [h13.nonfoldable-transpose]: H13 transpose with several consumers or a returned value needs a materialized transposed surface, and the decoded corpus holds no data-movement encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0176,
+              "diagnostic_codes": [
+                "h13.returned-input-alias"
+              ],
+              "diagnostic": "6:5: error [h13.returned-input-alias]: H13 cannot return an alias of a function input because no program produces it\n"
+            },
+            {
+              "program_count": 18000,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  768
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 0,
+              "outcome": "compiled",
+              "seconds": 4.7329,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v75": [
+                  3072,
+                  768
+                ],
+                "v76": [
+                  3072
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                3072
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.3881,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  3072
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                3072
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0108,
+              "diagnostic_codes": [
+                "h13.unary-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h13.unary-outside-envelope]: H13 gelu is outside the decoded unary envelope: the captured geometries are silu, sigmoid, exp, gelu, leaky_relu, relu, rsqrt, sqrt, and tanh at CHW (64,1,1)/(512,1,1), and abs at (64,1,1)/(128,1,1)/(256,1,1)/(512,1,1)/(1024,1,1)/(2048,1,1)/(4096,1,1) \u2014 LUT unaries have no 64-lane split\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  3072
+                ]
+              },
+              "constants": {
+                "v80": [
+                  768,
+                  3072
+                ],
+                "v81": [
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 124,
+              "outcome": "error",
+              "seconds": 60.5709,
+              "diagnostic_codes": [],
+              "diagnostic": ""
+            }
+          ]
+        },
+        "H14": {
+          "compiler_sha256": "4033b6c3e0c36dcdda9239b4f0c73f764f667145b5aac59043fcac0929094673",
+          "records": [
+            {
+              "program_count": null,
+              "name": "full-model",
+              "mil": "model.mil",
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0548,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0000-conv",
+              "op": "conv",
+              "mil": "probes/0000-conv.mil",
+              "inputs": {
+                "mel": [
+                  1,
+                  80,
+                  3000
+                ]
+              },
+              "constants": {
+                "v6": [
+                  768,
+                  80,
+                  3
+                ],
+                "v7": [
+                  768
+                ],
+                "v3": [
+                  1
+                ],
+                "v1": [],
+                "v2": [
+                  2
+                ],
+                "v4": [
+                  1
+                ],
+                "v5": []
+              },
+              "output": [
+                1,
+                768,
+                3000
+              ],
+              "attributes": {
+                "strides": [
+                  1
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.017,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0001-gelu",
+              "op": "gelu",
+              "mil": "probes/0001-gelu.mil",
+              "inputs": {
+                "v8": [
+                  1,
+                  768,
+                  3000
+                ]
+              },
+              "constants": {
+                "v9": []
+              },
+              "output": [
+                1,
+                768,
+                3000
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0165,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0002-conv",
+              "op": "conv",
+              "mil": "probes/0002-conv.mil",
+              "inputs": {
+                "v10": [
+                  1,
+                  768,
+                  3000
+                ]
+              },
+              "constants": {
+                "v16": [
+                  768,
+                  768,
+                  3
+                ],
+                "v17": [
+                  768
+                ],
+                "v13": [
+                  1
+                ],
+                "v11": [],
+                "v12": [
+                  2
+                ],
+                "v14": [
+                  1
+                ],
+                "v15": []
+              },
+              "output": [
+                1,
+                768,
+                1500
+              ],
+              "attributes": {
+                "strides": [
+                  2
+                ],
+                "pad_type": "custom",
+                "pad": [
+                  1,
+                  1
+                ],
+                "dilations": [
+                  1
+                ],
+                "groups": 1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0168,
+              "diagnostic_codes": [
+                "h14.conv-outside-envelope"
+              ],
+              "diagnostic": "12:5: error [h14.conv-outside-envelope]: H14 conv needs a decoded geometry: an fp16 rank-4 input and result with a batch of one, a constant weight, unit dilations, zero explicit padding, supported padding, and a shape inside the oracle parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0003-gelu",
+              "op": "gelu",
+              "mil": "probes/0003-gelu.mil",
+              "inputs": {
+                "v18": [
+                  1,
+                  768,
+                  1500
+                ]
+              },
+              "constants": {
+                "v19": []
+              },
+              "output": [
+                1,
+                768,
+                1500
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0105,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0004-transpose",
+              "op": "transpose",
+              "mil": "probes/0004-transpose.mil",
+              "inputs": {
+                "v20": [
+                  1,
+                  768,
+                  1500
+                ]
+              },
+              "constants": {
+                "v21": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0093,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0005-add",
+              "op": "add",
+              "mil": "probes/0005-add.mil",
+              "inputs": {
+                "v23": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v22": [
+                  1500,
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0106,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0006-layer_norm",
+              "op": "layer_norm",
+              "mil": "probes/0006-layer_norm.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v26": [
+                  1
+                ],
+                "v27": [
+                  768
+                ],
+                "v28": [
+                  768
+                ],
+                "v29": []
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "axes": [
+                  -1
+                ],
+                "epsilon": 1.0013580322265625e-05
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0096,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "9:5: error [h14.norm-outside-envelope]: H14 'layer_norm' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0007-linear",
+              "op": "linear",
+              "mil": "probes/0007-linear.mil",
+              "inputs": {
+                "v30": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v31": [
+                  768,
+                  768
+                ],
+                "v32": [
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0097,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0010-reshape",
+              "op": "reshape",
+              "mil": "probes/0010-reshape.mil",
+              "inputs": {
+                "v33": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v40": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  12,
+                  -1
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.016,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0013-mul",
+              "op": "mul",
+              "mil": "probes/0013-mul.mil",
+              "inputs": {
+                "v41": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v47": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "y": [
+                  [
+                    [
+                      [
+                        0.353515625
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0147,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0015-transpose",
+              "op": "transpose",
+              "mil": "probes/0015-transpose.mil",
+              "inputs": {
+                "v50": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v54": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0092,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0017-matmul",
+              "op": "matmul",
+              "mil": "probes/0017-matmul.mil",
+              "inputs": {
+                "v56": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ],
+                "v55": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v51": [],
+                "v52": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": true
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0112,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0018-softmax",
+              "op": "softmax",
+              "mil": "probes/0018-softmax.mil",
+              "inputs": {
+                "v57": [
+                  1,
+                  12,
+                  1500,
+                  1500
+                ]
+              },
+              "constants": {
+                "v25": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                1500
+              ],
+              "attributes": {
+                "axis": -1
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0108,
+              "diagnostic_codes": [
+                "h14.norm-outside-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.norm-outside-envelope]: H14 'softmax' needs a decoded geometry inside the normalization parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0020-matmul",
+              "op": "matmul",
+              "mil": "probes/0020-matmul.mil",
+              "inputs": {
+                "v58": [
+                  1,
+                  12,
+                  1500,
+                  1500
+                ],
+                "v61": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v59": [],
+                "v60": []
+              },
+              "output": [
+                1,
+                12,
+                1500,
+                64
+              ],
+              "attributes": {
+                "transpose_x": false,
+                "transpose_y": false
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0162,
+              "diagnostic_codes": [
+                "h14.unsupported-program"
+              ],
+              "diagnostic": "7:5: error [h14.unsupported-program]: H14 matmul requires a runtime fp16 x, a constant rank-2 weight matching its transpose flag, and a matching output shape\n"
+            },
+            {
+              "program_count": null,
+              "name": "0021-transpose",
+              "op": "transpose",
+              "mil": "probes/0021-transpose.mil",
+              "inputs": {
+                "v62": [
+                  1,
+                  12,
+                  1500,
+                  64
+                ]
+              },
+              "constants": {
+                "v63": [
+                  4
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                12,
+                64
+              ],
+              "attributes": {
+                "perm": [
+                  0,
+                  2,
+                  1,
+                  3
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0131,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0022-reshape",
+              "op": "reshape",
+              "mil": "probes/0022-reshape.mil",
+              "inputs": {
+                "v65": [
+                  1,
+                  1500,
+                  12,
+                  64
+                ]
+              },
+              "constants": {
+                "v64": [
+                  3
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {
+                "shape": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0166,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0024-add",
+              "op": "add",
+              "mil": "probes/0024-add.mil",
+              "inputs": {
+                "v24": [
+                  1,
+                  1500,
+                  768
+                ],
+                "v69": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {},
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0163,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "5:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0026-linear",
+              "op": "linear",
+              "mil": "probes/0026-linear.mil",
+              "inputs": {
+                "v74": [
+                  1,
+                  1500,
+                  768
+                ]
+              },
+              "constants": {
+                "v75": [
+                  3072,
+                  768
+                ],
+                "v76": [
+                  3072
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                3072
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0166,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            },
+            {
+              "program_count": null,
+              "name": "0027-gelu",
+              "op": "gelu",
+              "mil": "probes/0027-gelu.mil",
+              "inputs": {
+                "v77": [
+                  1,
+                  1500,
+                  3072
+                ]
+              },
+              "constants": {
+                "v78": []
+              },
+              "output": [
+                1,
+                1500,
+                3072
+              ],
+              "attributes": {
+                "mode": "EXACT"
+              },
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.0165,
+              "diagnostic_codes": [
+                "h14.outside-parity-envelope"
+              ],
+              "diagnostic": "6:5: error [h14.outside-parity-envelope]: H14 supports only the decoded fp16 elementwise, scalar-constant, and unary parity envelope\n"
+            },
+            {
+              "program_count": null,
+              "name": "0028-linear",
+              "op": "linear",
+              "mil": "probes/0028-linear.mil",
+              "inputs": {
+                "v79": [
+                  1,
+                  1500,
+                  3072
+                ]
+              },
+              "constants": {
+                "v80": [
+                  768,
+                  3072
+                ],
+                "v81": [
+                  768
+                ]
+              },
+              "output": [
+                1,
+                1500,
+                768
+              ],
+              "attributes": {},
+              "rc": 65,
+              "outcome": "refused",
+              "seconds": 0.016,
+              "diagnostic_codes": [
+                "h14.linear-bias-unsupported"
+              ],
+              "diagnostic": "7:5: error [h14.linear-bias-unsupported]: H14 emits one program per artifact, so a linear bias has no encoder\n"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

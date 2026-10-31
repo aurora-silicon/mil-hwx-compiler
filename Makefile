@@ -267,6 +267,12 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 test-h13-reference: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_reference.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_deadline.py
+.PHONY: test-whisper-coverage
+test-whisper-coverage: $(BUILD)/mil-hwxc
+	python3 tools/whisper_coverage.py --check
+	python3 tests/test_whisper_reference.py --exact-movement
+	python3 tests/test_h13_program_budget.py $(BUILD)/mil-hwxc
+	python3 tests/test_whisper_composed_cli.py $(BUILD)/mil-hwxc
 .PHONY: test-h13-simulation
 test-h13-simulation: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_package_simulation.py
@@ -319,7 +325,7 @@ test-h16g-validation: $(BUILD)/prepare_alu
 test-spatial-reference:
 	python3 tests/test_spatial_reference.py
 
-test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
+test: test-whisper-coverage test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
 
 .PHONY: test-h13-hardware
 test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec

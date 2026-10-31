@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased: exact Whisper qualification
+
+- Pin the t-3655 receipt and sixty public MIL probes; replay 126 H13/H14 cases
+  with model/probe hashes and distinct refusal, timeout and budget outcomes.
+- Add CPU reference semantics for batched runtime matmul, rank-3 padded Conv1d,
+  materialized transpose, inferred views, affine layer norm and exact GELU.
+- Bound H13 materialized programs before payload encoding with `--max-programs`;
+  keep qualified encodings and fusion gates unchanged. Add exact layout,
+  composed-view, FFN refusal and program-boundary regression checks.
+
+
 One entry per day the compiler changes. Newest first. Releases are tagged on GitHub.
 
 ## Unreleased

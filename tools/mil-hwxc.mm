@@ -7,12 +7,14 @@
 #import "ANEH14Compiler.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
 
 static void printUsage(const char *program) {
     fprintf(stderr,
         "usage: %s --mil FILE --model-root DIR "
         "--output DIR [--target H16G|H13|H14|H17|H18] [--format anec|hwx] "
-        "[--schedule per-op|chain]\n", program);
+        "[--schedule per-op|chain] [--max-programs N (H13, default 65536)]\n", program);
 }
 
 static NSString *severityName(ANEDiagnosticSeverity severity) {
@@ -63,7 +65,7 @@ int main(int argc, const char *argv[]) {
         NSString *schedule = arguments[@"--schedule"] ?: @"per-op";
         NSSet<NSString *> *accepted = [NSSet setWithArray:@[
             @"--mil", @"--model-root", @"--output", @"--target", @"--format",
-            @"--schedule",
+            @"--schedule", @"--max-programs",
         ]];
         for (NSString *key in arguments) {
             if (![accepted containsObject:key]) {
@@ -76,6 +78,20 @@ int main(int argc, const char *argv[]) {
             ![target isEqualToString:@"H13"] && ![target isEqualToString:@"H14"]) {
             fprintf(stderr, "--schedule requires target H13 or H14\n");
             return 64;
+        }
+        NSUInteger maxPrograms = 65536;
+        if (arguments[@"--max-programs"]) {
+            const char *text = arguments[@"--max-programs"].UTF8String;
+            char *end = nullptr;
+            errno = 0;
+            unsigned long long value = strtoull(text, &end, 10);
+            if (![target isEqualToString:@"H13"] || !text[0] ||
+                text[0] < '0' || text[0] > '9' || !end || *end || errno ||
+                !value || value > NSUIntegerMax) {
+                fprintf(stderr, "--max-programs requires target H13 and a positive integer within NSUInteger\n");
+                return 64;
+            }
+            maxPrograms = (NSUInteger)value;
         }
         if (!milPath || !modelRoot || !output) {
             printUsage(argv[0]);
@@ -100,6 +116,7 @@ int main(int argc, const char *argv[]) {
                     schedule:schedule diagnostics:diagnostics error:&error]
                 : [ANEH13Compiler compileMILData:milData modelRoot:root
                     format:format outputDirectory:outputURL schedule:schedule
+                    maxPrograms:maxPrograms
                     diagnostics:diagnostics error:&error];
             printDiagnostics(diagnostics);
             if (!success) {

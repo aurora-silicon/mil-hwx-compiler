@@ -1,0 +1,7 @@
+program(1.3)
+[buildInfo = dict<string, string>({})]
+{
+  func main<ios18>(tensor<fp16, [1, 1500, 384]> v24, tensor<fp16, [1, 1500, 384]> v69) {
+    tensor<fp16, [1, 1500, 384]> v70 = add(x = v24, y = v69)[name = string("v70")];
+  } -> (v70);
+}

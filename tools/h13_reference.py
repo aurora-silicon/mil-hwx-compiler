@@ -434,49 +434,127 @@ def _binary(name, left, right, result_type):
 
 
 def _matmul(left, right, transpose_x, transpose_y, result_type):
-    left = _tensor(left)
-    right = _tensor(right)
+    """CPU MIL matmul with trailing matrix axes and broadcast batch axes.
+
+    This is a mathematical reference, not an expansion of a target envelope.
+    Products and sums round to fp32; each result rounds once to fp16.
+    """
+    left, right = _tensor(left), _tensor(right)
     if left.dtype != "fp16" or right.dtype != "fp16" or len(right.shape) < 2:
         raise ValueError("matmul requires fp16 tensors and a rank-2 or higher y")
-    if len(right.shape) > 2:
-        # A runtime second operand carries x's leading axes; Apple accepts
-        # only a leading batch of 1, which is the same matrix either way.
-        if math.prod(right.shape[:-2]) != 1:
-            raise ValueError("matmul y supports a leading batch of 1")
-        right = Tensor(right.dtype, right.shape[-2:], right.values)
-    if len(left.shape) == 1:
-        if transpose_x:
-            raise ValueError("transpose_x is invalid for rank-one x")
-        leading, matrix_rows, reduction = (), 1, left.shape[0]
-        expected_shape = (right.shape[0] if transpose_y else right.shape[1],)
-    elif transpose_x:
-        leading = left.shape[:-2]
-        matrix_rows, reduction = left.shape[-1], left.shape[-2]
-        expected_shape = leading + (matrix_rows, right.shape[0] if transpose_y else right.shape[1])
-    else:
-        leading, matrix_rows, reduction = left.shape[:-1], 1, left.shape[-1]
-        expected_shape = leading + (right.shape[0] if transpose_y else right.shape[1],)
-    columns = right.shape[0] if transpose_y else right.shape[1]
-    weight_reduction = right.shape[1] if transpose_y else right.shape[0]
-    if reduction != weight_reduction or result_type.shape != expected_shape:
+    vector = len(left.shape) == 1
+    if not left.shape or (vector and transpose_x):
+        raise ValueError("transpose_x is invalid for rank-one x")
+    lshape = (1, left.shape[0]) if vector else left.shape
+    rows, reduction = lshape[-2:][::-1] if transpose_x else lshape[-2:]
+    rk, columns = right.shape[-2:][::-1] if transpose_y else right.shape[-2:]
+    batches = _broadcast_shape(lshape[:-2], right.shape[:-2])
+    expected = batches + ((columns,) if vector else (rows, columns))
+    if reduction != rk or result_type.dtype != "fp16" or result_type.shape != expected:
         raise ValueError("matmul shapes differ from its declaration")
-    row_count = math.prod(leading) * matrix_rows
+    batch_count = math.prod(batches)
+    # Broadcast indices instead of copying either runtime tensor.
+    lindices = _broadcast_values(Tensor("int32", lshape[:-2],
+        tuple(range(math.prod(lshape[:-2])))), batches)
+    rindices = _broadcast_values(Tensor("int32", right.shape[:-2],
+        tuple(range(math.prod(right.shape[:-2])))), batches)
     result = []
-    for row in range(row_count):
-        if transpose_x:
-            batch, local_row = divmod(row, matrix_rows)
-            base = batch * reduction * matrix_rows
-            lhs = tuple(left.values[base + index * matrix_rows + local_row]
-                        for index in range(reduction))
-        else:
-            lhs = left.values[row * reduction:(row + 1) * reduction]
-        for column in range(columns):
-            if transpose_y:
-                rhs = right.values[column * reduction:(column + 1) * reduction]
-            else:
-                rhs = tuple(right.values[index * columns + column] for index in range(reduction))
-            result.append(dot_fp32(lhs, rhs))
-    return Tensor("fp16", result_type.shape, tuple(result))
+    for batch in range(batch_count):
+        lb = lindices[batch] * rows * reduction
+        rb = rindices[batch] * reduction * columns
+        for row in range(rows):
+            lhs = tuple(left.values[lb + (k * rows + row if transpose_x else row * reduction + k)]
+                        for k in range(reduction))
+            for column in range(columns):
+                rhs = tuple(right.values[rb + (column * reduction + k if transpose_y else k * columns + column)]
+                            for k in range(reduction))
+                result.append(dot_fp32(lhs, rhs))
+    return Tensor("fp16", expected, tuple(result))
+
+
+def _transpose(value, perm, result_type):
+    value = _tensor(value)
+    rank = len(value.shape)
+    if len(perm) != rank or any(type(n) is not int or not -rank <= n < rank for n in perm):
+        raise ValueError("transpose permutation must cover each input axis")
+    perm = tuple(n % rank for n in perm)
+    if len(set(perm)) != rank:
+        raise ValueError("transpose permutation has duplicate axes")
+    shape = tuple(value.shape[n] for n in perm)
+    if result_type.dtype != value.dtype or result_type.shape != shape:
+        raise ValueError("transpose result shape differs from its declaration")
+    strides = tuple(math.prod(value.shape[n + 1:]) for n in range(rank))
+    result = []
+    for flat in range(math.prod(shape)):
+        source, remainder = 0, flat
+        for n, axis in enumerate(perm):
+            coordinate, remainder = divmod(remainder, math.prod(shape[n + 1:]))
+            source += coordinate * strides[axis]
+        result.append(value.values[source])
+    return Tensor(value.dtype, shape, tuple(result))
+
+
+def _conv1d_evaluator(value, weight, bias, strides, dilations, pad, pad_type, groups, result_type):
+    """Validate rank-3 convolution and return a per-output CPU evaluator."""
+    value, weight = _tensor(value), _tensor(weight)
+    if value.dtype != "fp16" or weight.dtype != "fp16" or len(value.shape) != 3 or len(weight.shape) != 3:
+        raise ValueError("conv1d requires rank-3 fp16 tensors")
+    if len(strides) != 1 or strides[0] <= 0 or dilations != (1,):
+        raise ValueError("conv1d reference requires a positive stride and unit dilation")
+    batches, channels, length = value.shape
+    outputs, group_channels, kernel = weight.shape
+    if groups <= 0 or channels % groups or outputs % groups or group_channels != channels // groups:
+        raise ValueError("conv1d groups must divide both channel counts")
+    if pad_type == "custom":
+        if len(pad) != 2 or any(n < 0 for n in pad):
+            raise ValueError("conv1d custom pad must be two nonnegative values")
+        left = pad[0]
+        out_length = (length + sum(pad) - kernel) // strides[0] + 1
+    else:
+        left, out_length = _conv_padding(length, kernel, strides[0], pad_type)
+    shape = (batches, outputs, out_length)
+    if out_length <= 0 or result_type != MILType("fp16", shape):
+        raise ValueError("conv1d result shape differs from its declaration")
+    if bias is not None and (_tensor(bias).dtype != "fp16" or bias.shape != (outputs,)):
+        raise ValueError("conv1d bias must hold one value per output channel")
+    def evaluate_at(flat):
+        batch_channel, column = divmod(flat, out_length)
+        batch, channel = divmod(batch_channel, outputs)
+        base_channel = (channel // (outputs // groups)) * group_channels
+        total = 0.0
+        for offset in range(group_channels):
+            for tap in range(kernel):
+                source = column * strides[0] + tap - left
+                if 0 <= source < length:
+                    sample = value.values[(batch * channels + base_channel + offset) * length + source]
+                    w = weight.values[(channel * group_channels + offset) * kernel + tap]
+                    total = fp32(total + fp32(float(sample) * float(w)))
+        if bias is not None:
+            total = fp32(total + float(bias.values[channel]))
+        return fp16(total)
+    return shape, evaluate_at
+
+
+def _conv1d(value, weight, bias, strides, dilations, pad, pad_type, groups, result_type):
+    """Dense CPU rank-3 convolution; includes the Whisper custom-pad spell."""
+    shape, evaluate_at = _conv1d_evaluator(value, weight, bias, strides, dilations, pad,
+                                         pad_type, groups, result_type)
+    return Tensor("fp16", shape, tuple(evaluate_at(i) for i in range(math.prod(shape))))
+
+
+def conv1d_samples(value, weight, bias, strides, dilations, pad, pad_type, groups,
+                   result_type, output_indices):
+    """Evaluate selected flat outputs at the original full convolution geometry.
+
+    The result is a mapping, deliberately not a dense Tensor. This bounds CPU
+    qualification work without cropping the input or changing border geometry.
+    """
+    shape, evaluate_at = _conv1d_evaluator(value, weight, bias, strides, dilations, pad,
+                                         pad_type, groups, result_type)
+    indices = tuple(output_indices)
+    if len(set(indices)) != len(indices) or any(type(i) is not int or not 0 <= i < math.prod(shape) for i in indices):
+        raise ValueError("conv1d sample indices must be distinct and within the full output")
+    return {i: evaluate_at(i) for i in indices}
 
 
 def _shape_op(name, value, parameter, result_type):
@@ -485,6 +563,14 @@ def _shape_op(name, value, parameter, result_type):
                  if name == "squeeze" and parameter is None else
                  tuple(int(item) for item in _tensor(parameter).values))
     if name == "reshape":
+        if requested.count(-1) > 1 or any(n == 0 or n < -1 for n in requested):
+            raise ValueError("reshape requires positive dimensions and at most one -1")
+        if -1 in requested:
+            known = math.prod(n for n in requested if n != -1)
+            count = math.prod(value.shape)
+            if count % known:
+                raise ValueError("reshape inferred dimension is not integral")
+            requested = tuple(count // known if n == -1 else n for n in requested)
         if requested != result_type.shape:
             raise ValueError("reshape shape differs from its declaration")
     elif name == "squeeze":
@@ -596,18 +682,27 @@ def _softmax(value, axis, result_type):
     return Tensor("fp16", result_type.shape, tuple(results))
 
 
-def _layer_norm(value, axes, epsilon, result_type):
+def _layer_norm(value, axes, epsilon, result_type, gamma=None, beta=None):
     """Zero-mean unit-variance normalization with float32 statistics.
 
-    H13's decoded programs carry no gamma or beta: Apple's compiler rejects
-    every affine layer_norm form in this harness, so the reference rejects one
-    too rather than computing a result no encoder can emit.
+    Optional affine parameters are applied in fp32 before the final fp16
+    rounding. Reference support does not authorize hardware normalization.
     """
     value = _tensor(value)
     if value.dtype != "fp16":
         raise ValueError("layer_norm requires an fp16 tensor")
     if result_type.shape != value.shape:
         raise ValueError("layer_norm result shape differs from its declaration")
+    if not math.isfinite(epsilon) or epsilon <= 0:
+        raise ValueError("layer_norm epsilon must be finite and positive")
+    if not value.shape:
+        raise ValueError("layer_norm requires a positive-rank tensor")
+    resolved = tuple(axis % len(value.shape) for axis in axes)
+    affine_shape = tuple(value.shape[axis] for axis in sorted(resolved))
+    for parameter in (gamma, beta):
+        if parameter is not None and (_tensor(parameter).dtype != "fp16" or
+                                      parameter.shape != affine_shape):
+            raise ValueError("layer_norm affine shape differs from reduced axes")
     _, groups = _reduction_groups(value.shape, axes)
     results = [0.0] * len(value.values)
     for group in groups:
@@ -616,8 +711,13 @@ def _layer_norm(value, axes, epsilon, result_type):
         variance = fp32(_sum_fp32([fp32((element - mean) ** 2)
                                    for element in elements]) / len(elements))
         scale = fp32(1.0 / math.sqrt(fp32(variance + epsilon)))
-        for index, element in zip(group, elements):
-            results[index] = fp16(fp32(fp32(element - mean) * scale))
+        for offset, (index, element) in enumerate(zip(group, elements)):
+            normalized = fp32(fp32(element - mean) * scale)
+            if gamma is not None:
+                normalized = fp32(normalized * gamma.values[offset])
+            if beta is not None:
+                normalized = fp32(normalized + beta.values[offset])
+            results[index] = fp16(normalized)
     return Tensor("fp16", result_type.shape, tuple(results))
 
 
@@ -880,13 +980,30 @@ def _execute(operation, environment, model_root):
         return _softmax(arguments["x"], int(arguments["axis"]),
                         operation.result_type)
     if name == "layer_norm":
-        if "gamma" in arguments or "beta" in arguments:
-            raise ValueError("H13 layer_norm carries no gamma or beta")
         axes = _tensor(arguments["axes"]).values
         return _layer_norm(arguments["x"], axes,
                            fp32(arguments.get("epsilon", 1e-5)),
-                           operation.result_type)
+                           operation.result_type, arguments.get("gamma"),
+                           arguments.get("beta"))
+    if name == "transpose":
+        return _transpose(arguments["x"], _tensor(arguments["perm"]).values,
+                          operation.result_type)
+    if name == "gelu":
+        if arguments.get("mode", "EXACT") != "EXACT":
+            raise ValueError("reference.gelu-mode-outside-envelope")
+        value = _tensor(arguments["x"])
+        if value.dtype != "fp16" or operation.result_type != MILType("fp16", value.shape):
+            raise ValueError("gelu result shape differs from its declaration")
+        return Tensor("fp16", value.shape, tuple(fp16(fp32(
+            0.5 * float(x) * (1.0 + math.erf(float(x) / math.sqrt(2.0)))))
+            for x in value.values))
     if name == "conv":
+        if len(_tensor(arguments["x"]).shape) == 3:
+            return _conv1d(arguments["x"], arguments["weight"], arguments.get("bias"),
+                tuple(_tensor(arguments["strides"]).values),
+                tuple(_tensor(arguments["dilations"]).values),
+                tuple(_tensor(arguments["pad"]).values), str(arguments["pad_type"]),
+                int(arguments["groups"]), operation.result_type)
         return _conv(arguments["x"], arguments["weight"],
                      arguments.get("bias"),
                      tuple(_tensor(arguments["strides"]).values),
