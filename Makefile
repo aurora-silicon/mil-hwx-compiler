@@ -206,7 +206,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
-$(BUILD)/mil-hwxc: tools/mil-hwxc.mm $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+$(BUILD)/mil-hwxc: lib/Planning/ANEReluRegions.h tools/mil-hwxc.mm $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
@@ -329,3 +329,15 @@ test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec
 
 clean:
 	rm -rf $(BUILD)
+
+.PHONY: test-recurrent-regions
+test-recurrent-regions: $(BUILD)/mil-hwxc
+	python3 tests/test_recurrent_regions_cli.py $(BUILD)/mil-hwxc
+	python3 tests/test_graph_budget.py
+
+# Optional ONNX/NumPy references: install tools/coverage-requirements.txt first.
+.PHONY: test-recurrent-reference
+test-recurrent-reference: $(BUILD)/mil-hwxc
+	python3 tests/test_recurrent_lowering.py
+	python3 tests/test_recurrent_compilation.py $(BUILD)/mil-hwxc
+	python3 tests/test_dfn3_coverage.py

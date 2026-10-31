@@ -2,6 +2,7 @@
 
 #import "ANEBlobResolver.h"
 #import "ANEGraphVerifier.h"
+#import "ANEReluRegions.h"
 #import "MILLexer.h"
 #import "MILGraphImporter.h"
 #import "MILParser.h"
@@ -2857,9 +2858,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
                                          diagnostics:diagnostics];
     if (![schedule isEqualToString:@"per-op"] &&
-        ![schedule isEqualToString:@"chain"])
+        ![schedule isEqualToString:@"chain"] &&
+        ![schedule isEqualToString:@"regions"])
         return reject(diagnostics,
-            @"H13 schedule must be 'per-op' or 'chain'", nil,
+            @"H13 schedule must be 'per-op', 'chain', or 'regions'", nil,
             @"h13.unsupported-schedule");
     NSArray<MILToken *> *tokens = lexer.lexAllTokens;
     if (diagnostics.errorCount) return NO;
@@ -3858,9 +3860,12 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         recordTensor(tensors, input, input.type.shape, @"input");
     NSArray<NSString *> *binaryNames =
         @[@"add", @"mul", @"maximum", @"minimum", @"sub", @"real_div"];
+    NSMutableSet<NSString *> *regionConsumers = [NSMutableSet set];
+    NSMutableArray<NSDictionary *> *regions = [NSMutableArray array];
     ANEGraphOperation *operation = nil;
     try {
         for (operation in operations) {
+            if ([regionConsumers containsObject:operation.results[0].name]) continue;
             NSUInteger sliceCount = 1, inputSliceElements = 0,
                 inputPhysicalElements = 0, outputSliceElements = 0,
                 outputPhysicalElements = 0, outputChunks = 1;
@@ -4109,6 +4114,31 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                                     program, &inputs, &constantInput, &constantData,
                                     &manifestOperation))
                     return NO;
+                ANEGraphValue *outputValue = operation.results[0];
+                ANEGraphOperation *reluConsumer = nil;
+                if ([schedule isEqualToString:@"regions"] && sliceCount == 1 &&
+                    outputOffset == 0 && ![outputBaseOffsets objectForKey:operation] &&
+                    ((matvecParity && !runtimeWeight) || (parity && !operationPlan.unary))) {
+                    ANEGraphOperation *candidate = ANEReluRegionConsumer(
+                        operations, operation, returnedStorageNameSet);
+                    if (candidate) {
+                        auto fused = program;
+                        try {
+                            if (matvecParity)
+                                ane::h13::fuseMatmulPostOperation(fused, ane::h13::PostOperation::Relu);
+                            else
+                                ane::h13::fuseElementwisePostOperation(fused, ane::h13::PostOperation::Relu);
+                            program = std::move(fused);
+                            reluConsumer = candidate;
+                            outputValue = candidate.results[0];
+                            [regionConsumers addObject:outputValue.name];
+                            [intermediateNames removeObject:operation.results[0].name];
+                            [intermediateStorageNames removeObject:operation.results[0].name];
+                        } catch (const std::invalid_argument &) {
+                            // This legal standalone encoding has no decoded epilogue.
+                        }
+                    }
+                }
                 std::vector<std::uint8_t> anec = ane::h13::encodeANEC(program);
                 NSMutableArray *inputRecords =
                     [NSMutableArray arrayWithCapacity:inputs.count];
@@ -4159,11 +4189,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     [inputRecords addObject:record];
                 }
                 BOOL intermediateOutput =
-                    [intermediateStorageNames containsObject:operation.results[0].name];
+                    [intermediateStorageNames containsObject:outputValue.name];
                 NSString *outputRole = intermediateOutput ? @"intermediate" : @"output";
-                NSArray<NSNumber *> *fullOutputShape = outputShapes[operation.results[0].name]
-                    ?: operation.results[0].type.shape;
-                recordTensor(tensors, operation.results[0], fullOutputShape, outputRole);
+                NSArray<NSNumber *> *fullOutputShape = outputShapes[outputValue.name]
+                    ?: outputValue.type.shape;
+                recordTensor(tensors, outputValue, fullOutputShape, outputRole);
                 NSUInteger fullOutputElements = 1;
                 for (NSNumber *dimension in fullOutputShape)
                     fullOutputElements *= dimension.unsignedIntegerValue;
@@ -4171,10 +4201,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     outputOffset == 0 && outputSliceElements == fullOutputElements
                         ? fullOutputShape : @[@(outputSliceElements)];
                 NSMutableDictionary *outputRecord =
-                    [binding(operation.results[0], outputShape, program.output) mutableCopy];
+                    [binding(outputValue, outputShape, program.output) mutableCopy];
                 if (outputOffset || outputSliceElements != fullOutputElements ||
                     outputPhysicalElements != outputSliceElements)
-                    addSlice(outputRecord, operation.results[0], outputOffset,
+                    addSlice(outputRecord, outputValue, outputOffset,
                              outputSliceElements, outputPhysicalElements);
                 if (intermediateOutput) outputRecord[@"role"] = @"intermediate";
                 NSUInteger programIndex = programRecords.count;
@@ -4219,6 +4249,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     @"constantBytes": @(program.constants.size()),
                     @"scratchBytes": @(program.scratchAllocationBytes),
                 };
+                if (reluConsumer)
+                    [regions addObject:@{@"program": @(programIndex),
+                        @"operations": @[operation.results[0].name, outputValue.name],
+                        @"postOperation": @"relu"}];
                 [programRecords addObject:record];
                 [dispatchPlan addObject:@(programIndex)];
                 [payloads addObject:payload];
@@ -4453,6 +4487,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         @"intermediates": intermediateNames, @"tensors": tensors,
         @"physicalOutputs": physicalOutputs, @"logicalResults": logicalResults,
     } mutableCopy];
+    if ([schedule isEqualToString:@"regions"]) {
+        manifest[@"schedule"] = @"regions";
+        manifest[@"regions"] = regions;
+    }
     if (chainSchedule)
         [manifest addEntriesFromDictionary:@{@"schedule": @"chain",
             @"tasks": taskRecords, @"scratch": scratch}];

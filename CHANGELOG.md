@@ -4,6 +4,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H14: retain multiple ordered package results, including recurrent cell
+  states consumed by later operations, using the H13 v2 result mapping.
+- H13/H14: opt-in `regions` scheduling reuses decoded ReLU epilogues inside
+  larger graphs, preserving returned values and fan-out. General recurrent
+  task routing remains unproved; no 10 ms native denoiser claim is made.
+- Add explicit-state recurrent lowering, an every-node DFN3 coverage audit,
+  and a dispatch budget lower-bound tool. CPU references cover custom
+  convolution padding. See `docs/recurrent-coverage.md`.
+
 - H16G: emit separate ordinary-buffer and custom-BAR resource metadata in
   each bundle artifact. Validate its aperture/class/index mapping and the
   `0x30`/`0x18` wire layouts, including full-width DVA/span arithmetic. The
