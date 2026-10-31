@@ -3038,13 +3038,17 @@ Program linkConvChain(const std::vector<Program> &layers,
                 // Apple's first scratch read after a TSE/TSR producer uses 7
                 // (chain_ffn_d1024_s375 task 17), the later reads of the same
                 // region 3 again. Bit 2 is the wait on the producer's release.
-                if (&span == &spans[index].front()) {
+                // Cache hints too: every decoded task that reads scratch uses
+                // CacheHintReuse = CacheHintNoReuse = 0xb (0x3bb81 on 1076
+                // tasks); none uses the program-input value 0x33881.
+                {
                     const auto word = h13RegisterOffset(task, offset, bytes, 0x13800);
                     const auto cfg = loadLE32(task, word);
-                    if (((cfg >> 16) & 0xf) != 3)
+                    if (cfg != 0x00033881u)
                         throw std::invalid_argument(
-                            "h13.linked-outside-envelope: unexpected input DMA dependency mode");
-                    storeLE32(task, word, (cfg & ~0x000f0000u) | 0x00070000u);
+                            "h13.linked-outside-envelope: unexpected input DMA config");
+                    storeLE32(task, word, &span == &spans[index].front()
+                                              ? 0x0007bb81u : 0x0003bb81u);
                 }
             }
             if (writesScratch) {
@@ -3057,6 +3061,13 @@ Program linkConvChain(const std::vector<Program> &layers,
                     throw std::invalid_argument(
                         "h13.linked-outside-envelope: a task writes past its scratch region");
                 storeLE32(task, word, static_cast<std::uint32_t>(first + regions[index]));
+                // Every decoded task that writes scratch sets bits 9:8 of its
+                // output DMA config (0x40003c1); program outputs use 0x40000c1.
+                const auto dst = h13RegisterOffset(task, offset, bytes, 0x17800);
+                if (loadLE32(task, dst) != 0x040000c1u)
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: unexpected output DMA config");
+                storeLE32(task, dst, 0x040003c1u);
             }
             selectors = (selectors & ~(1u << 23)) | (last ? 0u : 1u << 23);
             storeLE32(task, offset + 32, selectors);

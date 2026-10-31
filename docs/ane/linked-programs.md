@@ -39,6 +39,15 @@ tasks into one stream:
   of this branch had neither. Warm runs looked bit-exact, but a cold single run
   read stale scratch (rel. L2 0.22 to 0.43, first wrong at layer 16, dw 3x3 512
   @14x14), and it converged only after about 20 passes on the same input.
+- **Scratch DMA hints (host-matched, device retest pending).** Apple's
+  scratch traffic never uses the program-I/O DMA configs. Tasks that write
+  scratch set bits 9:8 of the output DMA config (`0x17800` = 0x40003c1, all
+  decoded scratch writers). Tasks that read scratch use CacheHintReuse =
+  CacheHintNoReuse = 0xb (`0x13800` = 0x3bb81 on 1076 decoded tasks, 0x7bb81
+  on the first read after a TSE/TSR producer). The linker now emits the same
+  values. They went in after the M1 Pro still showed a recoverable task
+  error at pass 68 of a 5000-pass boost-on soak with the dependency bits
+  alone, and they have not run on the device yet.
 - **A simple allocator.** Each intermediate gets its own tile-aligned region
   and no region is reused, so no task ever writes a region that an earlier
   task still reads. The only ordering the stream relies on is producer before

@@ -205,8 +205,14 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-h13-linked-") as tmp:
             firsts.add(task_index); ends.add(task_index + n - 1); task_index += n
         for index, (offset, size, h, regs) in enumerate(tasks):
             assert (h[6] & 0x9000 == 0x9000) == (index in ends), (name, index, hex(h[6]))
-            dep = (regs[0x13800] >> 16) & 0xF
-            assert dep == (7 if index in firsts and index else 3), (name, index, dep)
+            li = sum(1 for f in sorted(firsts) if f <= index) - 1
+            if li == 0:
+                assert regs[0x13800] == 0x33881, (name, index, hex(regs[0x13800]))
+            else:
+                want = 0x7BB81 if index in firsts else 0x3BB81
+                assert regs[0x13800] == want, (name, index, hex(regs[0x13800]))
+            last_layer = li == len(per_layer) - 1
+            assert regs[0x17800] == (0x40000C1 if last_layer else 0x40003C1), (name, index, hex(regs[0x17800]))
         # 2. routing through the scratch channel
         regions = manifest["scratch"]["regions"]
         assert manifest["scratch"]["channel"] == 3, name
