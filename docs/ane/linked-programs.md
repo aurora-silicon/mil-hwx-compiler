@@ -39,7 +39,7 @@ tasks into one stream:
   of this branch had neither. Warm runs looked bit-exact, but a cold single run
   read stale scratch (rel. L2 0.22 to 0.43, first wrong at layer 16, dw 3x3 512
   @14x14), and it converged only after about 20 passes on the same input.
-- **Scratch DMA hints (host-matched, device retest pending).** Apple's
+- **Scratch DMA hints.** Apple's
   scratch traffic never uses the program-I/O DMA configs. Tasks that write
   scratch set bits 9:8 of the output DMA config (`0x17800` = 0x40003c1, all
   decoded scratch writers). Tasks that read scratch use CacheHintReuse =
@@ -47,7 +47,8 @@ tasks into one stream:
   on the first read after a TSE/TSR producer). The linker now emits the same
   values. They went in after the M1 Pro still showed a recoverable task
   error at pass 68 of a 5000-pass boost-on soak with the dependency bits
-  alone, and they have not run on the device yet.
+  alone (and another agent loading the CPU). With them, on a quiet machine,
+  10,000 boost-on passes ran with no task error (01/11/2026, ane692 kernel).
 - **A simple allocator.** Each intermediate gets its own tile-aligned region
   and no region is reused, so no task ever writes a region that an earlier
   task still reads. The only ordering the stream relies on is producer before
@@ -135,11 +136,17 @@ patterns and smooth noise, not photos, and they land in 10 different classes.
 2.30 ms and p99 2.32 ms with I/O (434 inf/s); exec only p50 2.25 ms, p99
 2.26 ms (445 inf/s); engine busy 2.24 ms. The barrier costs about nothing.
 
+With the scratch DMA configs as well (01/11/2026, quiet machine): 5000
+passes with I/O p50 2.27 ms, p99 2.30 ms (441 inf/s); 5000 exec only p50
+2.25 ms, p99 2.26 ms (445 inf/s); busy 2.23 ms; no task errors; cold runs
+still equal to per-layer; top-1 16/16.
+
 **Open hazard.** With the driver's CPU boost off (`boost_idle_ms=0`, slower
 fabric) the linked program raised a task error (-5) at pass 455 and the
-engine wedged. It did not happen in 1000 passes with boost on. It is not
-known yet whether the per-layer programs fail the same way at boost 0; until
-that is bisected, treat linked programs at low fabric clocks as unproven. Linking halves the wall time: it removes
+engine wedged. It did not happen in 1000 passes with boost on. The 28 per-layer programs ran 5000 passes clean at boost 0, and so did
+the linked 8-layer prefix, so the fault is in the longer linked stream. Boost
+0 has not been retested since the scratch DMA configs went in; until it is,
+treat linked programs at low fabric clocks as unproven. Linking halves the wall time: it removes
 27 submits (about 25 us each), the host copies, and about 0.7 ms of engine
 time per inference.
 
