@@ -118,6 +118,8 @@ class SpatialTests(unittest.TestCase):
     def test_halo_regular_depthwise_stride_and_batch(self):
         for case,(batch,ci,co,h,w,k,stride,groups,padding) in enumerate((
             (1,3,2,17,19,3,1,1,'same'),
+            (1,3,2,65,67,3,1,1,'same'),
+            (1,3,2,65,67,3,2,1,'same'),
             (8,3,4,9,11,3,2,1,'same'),
             (1,3,3,31,33,3,1,3,'same'),
             (1,3,3,30,32,3,2,3,'same'),
