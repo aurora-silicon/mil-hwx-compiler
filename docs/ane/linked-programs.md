@@ -255,6 +255,43 @@ channels at 14x14. The 512-channel triplet takes 0.188 ms busy against
 two L2 triplets is exact cold, top-1 16/16, and 2.190 ms p50 exec against
 2.243 ms (-2.4 %) over 2000 passes.
 
+## L2 residency, round 2 (t-4020 rules)
+
+`linked-l2` now plans long resident runs, as Apple's compiler does:
+
+- **Edge phases.** A run starts with an initial alias edge (ResultCfg 0x500170
+  to SourceCfg 0x160) out of a producer that reads DRAM. It then alternates a
+  dependent edge (0x140 to 0x104) and a chained alias edge (0x140 to 0x144,
+  with DPC/SPC, channel-3 selectors and the disabled DMA geometry kept).
+- **Split consumers.** Only the first output-channel task takes the incoming
+  handoff. Later tasks reread the same resident input with SourceCfg 0x100,
+  input DMA 0x8880 with zero geometry and no handoff bits.
+- **Split producers.** In the dependent phase, a multi-task producer writes
+  one aggregate result (slice j of n at base + (n-1-j) * slice channels *
+  rowL2, full strides). The depthwise consumer reads it with SourceCfg 0x120.
+- **Ring placement.** Each edge spans the consumer's full input and starts
+  right after the live input, modulo 2 MiB. A task's live input never
+  overlaps its result or staging.
+- Common 0x24 bit 14 is set on depthwise tasks next to a resident edge. It
+  is not an edge mode.
+- **Spills to DRAM:** a dependent edge above 0x80800 bytes out of a single
+  task (Apple's 0x120 form there pairs with an unmapped 0x142 result config);
+  a tiled task next to an edge; a chained alias out of a split producer; and
+  anything that does not fit.
+
+Field parity (`make test-h13`) against Apple's decoded chains: the six-layer
+tails at 28x28/c256 (including the ring wrap) and 14x14/c512, the two-task
+aggregate producer, the 7x7 triplet and the round-1 8x8 pair and triplet.
+Cases where the open compiler splits layers differently from Apple (128-output
+stride-2 slices, the 1 MiB kernel budget) are not compared field by field.
+
+MobileNetV1 under these rules keeps 23 of 27 edges in L2, a continuous run
+from layer 8 to layer 27, and scratch drops from 17.9 MB to 6.9 MB. Some of
+the forms in that run are inferred rather than seen at the same shape: a
+chained alias into a split consumer, stride-2 split consumers reading L2, and
+a depthwise task after a 0x120 edge emitting a chained alias. They still
+need the device ladder.
+
 ## Remaining gap to macOS and next steps
 
 macOS runs MobileNetV1 224 on the M4 Pro (H16) in 0.30 ms (measured). For
