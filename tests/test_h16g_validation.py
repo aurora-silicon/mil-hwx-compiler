@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from h16g_validate import ValidationError, task_stream, validate
+from h16g_validate import (ValidationError, task_stream, validate, validate_resources,
+                           validate_custom_bars, validate_execute)
 
 
 def put(data, offset, value, width=4):
@@ -33,7 +34,7 @@ def fixture(*, mixed=False, kernel=False, batch=1):
     vm = base + (0x4000 if mixed else 0)
     textvm = vm + 0x8000
     kernvm = textvm + 0x8000
-    task = struct.pack('<16I', 0, 0, 0, 0, 11 << 16 | 1,
+    task = struct.pack('<16I', 1, 0, 0, 0, 11 << 16 | 1,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     commands = []
     if mixed:
@@ -116,16 +117,28 @@ def command(data, offsets, cmd, kind=None):
                 (kind is None or struct.unpack_from('<I', data, off + 8)[0] == kind))
 
 
+def sample_bar():
+    return dict(configuration=7, valueType=9, bar=3, bitOffset=0, bitWidth=32,
+                flags=0, value=0x123456789abcdef0)
+
+
 class ValidationTests(unittest.TestCase):
-    def test_public_prefix_is_not_driver_compatible(self):
+    def test_corrected_prologue(self):
         raw, _ = fixture()
-        raw[0x4000] = 1
-        self.assertFalse(validate(raw, task_policy='public')['driver_task_gate'])
-        with self.assertRaisesRegex(ValidationError, 'task-envelope'):
-            validate(raw)
-        raw[0x4001] = 1
-        with self.assertRaisesRegex(ValidationError, 'task-envelope'):
-            validate(raw, task_policy='public')
+        for policy in ('driver', 'public'):
+            self.assertTrue(validate(raw, task_policy=policy)['driver_task_gate'])
+            for offset, value in [(0, 0), (0, 2), (0, 0x01000000)] + [
+                    (i, 1) for i in range(4, 16)]:
+                data = bytearray(raw)
+                if offset == 0:
+                    put(data, 0x4000, value)
+                else:
+                    data[0x4000 + offset] = value
+                with self.subTest(policy=policy, offset=offset, value=value), \
+                        self.assertRaisesRegex(ValidationError, 'task-envelope'):
+                    validate(data, task_policy=policy)
+        with self.assertRaisesRegex(ValidationError, 'unknown-task-policy'):
+            task_stream(bytes(16), 1, 'unknown')
 
     def test_positive_forms(self):
         for mixed in (False, True):
@@ -166,7 +179,7 @@ class ValidationTests(unittest.TestCase):
             'relocation-type': (0x3004, 0x05000005),
             'relocation-ordinal': (0x3004, 0x07000001),
             'relocation-unaligned': (0x3000, 55), 'relocation-outside': (0x3000, 64),
-            'relocation-addend': (0x4000 + 56, 16), 'task-prefix': (0x4000, 1),
+            'relocation-addend': (0x4000 + 56, 16), 'task-prefix': (0x4000, 0),
             'task-size': (0x4010, 2047 << 16), 'task-register': (0x4034, 0x7fff),
             'task-padding': (0x403c, 1), 'symbol-ordinal': (0x3014, 0xff000f),
             'symbol-string': (0x3010, 5), 'symbol-interior': (0x3018, 0x30000004),
@@ -182,6 +195,138 @@ class ValidationTests(unittest.TestCase):
                 validate(raw[:length])
         with self.assertRaisesRegex(ValidationError, 'owner-fixture-identity'):
             validate(raw, owner=True)
+
+    def test_emitted_resource_mapping(self):
+        import copy
+        for mixed in (False, True):
+            for kernel in (False, True):
+                raw, _ = fixture(mixed=mixed, kernel=kernel, batch=3)
+                plan = validate(raw)['execute_resources']
+                self.assertEqual(plan['bufferStride'], 0x30)
+                self.assertEqual(plan['customBarStride'], 0x18)
+                self.assertEqual(plan['commandBytes'], 0xca8)
+                self.assertEqual(plan['customBars'], [])
+                self.assertEqual([(b['apertureSlot'], b['index'], b['class'], b['sizeBytes'])
+                                  for b in plan['buffers']],
+                                 [(0, 0, 0, 0x4000), (1, 0, 1, 0x4000)])
+                validate_resources(copy.deepcopy(plan), plan)
+                for key, value in [('bufferStride', 0x18), ('customBarStride', 0x30),
+                                   ('commandBytes', 0xcc0), ('version', True),
+                                   ('customBars', [sample_bar()])]:
+                    changed = copy.deepcopy(plan)
+                    changed[key] = value
+                    with self.subTest(key=key), self.assertRaises(ValidationError):
+                        validate_resources(changed, plan)
+                for key, value in [('apertureSlot', 1), ('index', 1), ('class', 2),
+                                   ('offsetBytes', 4), ('sizeBytes', 12),
+                                   ('mappingBytes', 0x8000)]:
+                    changed = copy.deepcopy(plan)
+                    changed['buffers'][0][key] = value
+                    with self.subTest(key=key), self.assertRaises(ValidationError):
+                        validate_resources(changed, plan)
+
+    def test_execute_layout(self):
+        import copy
+        plan = validate(fixture()[0])['execute_resources']
+        # Independent known-offset packet. DVA high bits must survive unchanged.
+        command = bytearray(0xca8)
+        put(command, 4, 0x20c)
+        for off, value in [(8, 11), (12, 12), (16, 13), (0x18, 5), (0x28, 2)]:
+            put(command, off, value)
+        put(command, 0x20, 0x123456789abcdef0, 8)
+        for off, index, cls, dva in [(0x60, 0, 0, 0x100000000),
+                                     (0x90, 0, 1, 0x200000000)]:
+            for delta, value in [(0, 1), (4, index), (8, cls), (0x10, 3)]:
+                put(command, off + delta, value)
+            put(command, off + 0x18, dva, 8)
+            put(command, off + 0x20, 0x4000, 8)
+        mappings = [dict(dva=0x100000000, size=0x4000), dict(dva=0x200000000, size=0x4000)]
+        key = dict(uuid=0x123456789abcdef0, program=11, process=12, procedure=13)
+        validate_execute(command, plan, mappings, **key)
+        # All reserved bytes and unused ordinary slots are checked too.
+        for off in (0, 6, 0x14, 0x1c, 0x2c, 0x30, 0x34, 0x6c, 0x74,
+                    0x88, 0xc0, 0xc60, 0xca0, 0xca4):
+            changed = bytearray(command)
+            changed[off] = 1
+            with self.subTest(off=off), self.assertRaises(ValidationError):
+                validate_execute(changed, plan, mappings, **key)
+        for count in (1, 2):
+            # Geometry-only synthetic plans, not authorized by any emitted HWX.
+            bars = [sample_bar()]
+            if count == 2:
+                bars.append(dict(sample_bar(), bitOffset=32))
+            extended = copy.deepcopy(plan)
+            extended['customBars'] = bars
+            extended['commandBytes'] = 0xca8 + count * 0x18
+            packet = bytearray(command) + bytes(count * 0x18)
+            put(packet, 0xca0, count)
+            for i in range(count):
+                start = 0xca8 + i * 0x18
+                put(packet, start, 7)
+                put(packet, start + 4, 9)
+                put(packet, start + 8, 3)
+                packet[start + 12] = 32 * i
+                packet[start + 13] = 32
+                put(packet, start + 16, 0x123456789abcdef0, 8)
+            validate_execute(packet, extended, mappings, **key)
+            with self.assertRaises(ValidationError):
+                validate_execute(packet, plan, mappings, **key)
+            for off in (0xca0, 0xca8, 0xcac, 0xcb0, 0xcb4, 0xcb5, 0xcb6, 0xcb8):
+                changed = bytearray(packet)
+                changed[off] ^= 1
+                with self.subTest(count=count, off=off), self.assertRaises(ValidationError):
+                    validate_execute(changed, extended, mappings, **key)
+            with self.assertRaises(ValidationError):
+                validate_execute(packet[:-1], extended, mappings, **key)
+        for bad in [dict(dva=(1 << 64) - 8, size=0x4000),
+                    dict(dva=0, size=0x3fff), dict(dva=-1, size=0x4000)]:
+            with self.assertRaises(ValidationError):
+                validate_execute(command, plan, [bad, mappings[1]], **key)
+        # Span and applied offset are independent u64 values, not u32 lengths.
+        wide = copy.deepcopy(plan)
+        wide['buffers'][0].update(sizeBytes=0x100004000, mappingBytes=0x100008000,
+                                  offsetBytes=0x4000)
+        packet = bytearray(command)
+        put(packet, 0x78, 0x100004000, 8)
+        put(packet, 0x80, 0x100004000, 8)
+        validate_execute(packet, wide, [dict(dva=0x100000000, size=0x100008000), mappings[1]], **key)
+
+    def test_execute_buffer_counts(self):
+        import copy
+        plan = validate(fixture()[0])['execute_resources']
+        key = dict(uuid=1, program=2, process=3, procedure=4)
+        for count in range(1, 65):
+            extended = copy.deepcopy(plan)
+            extended['buffers'] = [dict(plan['buffers'][0], index=i) for i in range(count)]
+            packet = bytearray(0xca8)
+            put(packet, 4, 0x20c)
+            for off, value in [(8, 2), (12, 3), (16, 4), (0x18, 5), (0x28, count)]:
+                put(packet, off, value)
+            put(packet, 0x20, 1, 8)
+            for i in range(count):
+                off = 0x60 + i * 0x30
+                for delta, value in [(0, 1), (4, i), (0x10, 3)]:
+                    put(packet, off + delta, value)
+                put(packet, off + 0x18, 0x100000000, 8)
+                put(packet, off + 0x20, 0x4000, 8)
+            mappings = [dict(dva=0x100000000, size=0x4000)] * count
+            validate_execute(packet, extended, mappings, **key)
+        for count in (0, 65):
+            extended['buffers'] = [plan['buffers'][0]] * count
+            with self.assertRaisesRegex(ValidationError, 'execute-buffer-count'):
+                validate_execute(packet, extended, mappings, **key)
+
+    def test_custom_bar_geometry(self):
+        validate_custom_bars([])
+        validate_custom_bars([sample_bar(), dict(sample_bar(), bitOffset=32)])
+        for changes in [dict(bitWidth=0), dict(bitOffset=33), dict(bitWidth=65),
+                        dict(flags=0x10000), dict(value=1 << 64), dict(bar=-1),
+                        dict(configuration=1 << 32), dict(valueType=True)]:
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                validate_custom_bars([dict(sample_bar(), **changes)])
+        for bars in [[sample_bar()] * 2, [sample_bar()] * 3]:
+            with self.assertRaises(ValidationError):
+                validate_custom_bars(bars)
 
     def test_mixed_scratch(self):
         raw, offsets = fixture(mixed=True)

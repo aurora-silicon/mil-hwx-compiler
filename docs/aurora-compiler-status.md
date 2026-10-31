@@ -55,23 +55,26 @@ The owner regression rebuilds the fixture and checks its complete hash and
 the three CPU fp16 buffer hashes. Synthetic tests mutate descriptors,
 apertures, permissions, tables, arithmetic, task records and relocations.
 
-## Consumer disagreement that remains
+## H16 prologue and execute resources
 
-The public compiler owner fixture starts `__text` with u32 1 followed by
-twelve zero bytes. This agrees with the early H15/H16 branch's observations.
-The integration driver's current task gate requires sixteen zero bytes.
-Those requirements cannot both pass without changing one side.
+The H16 task prologue is little-endian u32 1 followed by twelve zero bytes.
+The fixed ALU stream at public revision
+[`927013f`](https://github.com/joshuaswarren/mil-hwx-compiler/blob/927013f5480768b07c8e62a866e1514c41aba778/plugins/H16G/Encoding/H16GALUEncoder.mm)
+uses that value, as does the unchanged owner fixture. The driver predicate
+requiring sixteen zero bytes needs correction. The validator now requires the
+exact H16 prologue by default; `--task-policy public` remains an equivalent
+alias. `driver_task_gate: true` describes this corrected contract and does not
+claim that the installed kernel has the correction.
 
-The validator defaults to the current driver policy and refuses this fixture
-with `h16g.task-envelope`. `--task-policy public` is diagnostic: it accepts
-the pinned public prologue, applies the remaining checks and returns
-`driver_task_gate: false`. It does not authorize execution. The compiler
-does not rewrite the fixture to disguise this disagreement.
+H16 bundle artifacts now carry `h16Execute` resource metadata. Its ordinary
+buffer geometry matches the `0x30` descriptor array, while its separate
+`customBars` array uses the `0x18` tail stride. The validator independently
+checks the metadata against the immutable container. See
+[the resource contract](h16-execute-resources.md) for field mappings and limits.
 
 ```sh
 make test-h16g-validation
-python3 tools/h16g_validate.py program-0.hwx
-python3 tools/h16g_validate.py program-0.hwx --owner --task-policy public
+python3 tools/h16g_validate.py program-0.hwx --owner --manifest manifest.json
 ```
 
 Structural validation does not replace firmware/preload authentication,

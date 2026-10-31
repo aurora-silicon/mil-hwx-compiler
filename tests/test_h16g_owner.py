@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reproduce the owner identity from source, never from checked-in HWX bytes."""
 import hashlib
+import json
 import struct
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from h16g_validate import OWNER_SHA256, ValidationError, validate
+from h16g_validate import OWNER_SHA256, validate, validate_resources
 from timeouts import scaled_timeout
 
 
@@ -22,15 +23,18 @@ def main():
         data = (Path(folder) / 'bundle/program-0.hwx').read_bytes()
         assert len(data) == 49152
         assert hashlib.sha256(data).hexdigest() == OWNER_SHA256
-        result = validate(data, owner=True, task_policy='public')
+        result = validate(data, owner=True)
         assert result['tasks'] == 1 and result['tensors'] == 3 and result['owner_fixture']
-        assert not result['driver_task_gate']
-        try:
-            validate(data, owner=True)
-        except ValidationError as error:
-            assert str(error) == 'h16g.task-envelope', error
-        else:
-            raise AssertionError('owner fixture must expose current driver prefix disagreement')
+        assert result['driver_task_gate']
+        manifest = json.loads((Path(folder) / 'bundle/manifest.json').read_text())
+        metadata = manifest['artifacts'][0]['h16Execute']
+        validate_resources(metadata, result['execute_resources'])
+        assert [(b['index'], b['class']) for b in metadata['buffers']] == [(0, 0), (0, 1), (1, 0)]
+        assert metadata['customBars'] == [] and metadata['commandBytes'] == 0xca8
+        # Exercise the supported CLI path on the actual emitted pair.
+        subprocess.run([sys.executable, str(ROOT / 'tools/h16g_validate.py'),
+                        str(Path(folder) / 'bundle/program-0.hwx'), '--owner',
+                        '--manifest', str(Path(folder) / 'bundle/manifest.json')], check=True)
     # CPU fp16 reference inputs are exact binary fractions. No target access.
     a = [(i % 17 - 8) * .125 for i in range(16384)]
     b = [(i % 11 - 5) * .25 for i in range(16384)]
@@ -41,7 +45,7 @@ def main():
         (expected, 'd113d9ae6734b7a7e233458229f64f382da99a3f93868eef3abb06a29f7f4ce8'),
     ):
         assert hashlib.sha256(struct.pack('<16384e', *items)).hexdigest() == digest
-    print('H16G owner identity and fp16 reference: PASS; driver prefix disagreement reproduced')
+    print('H16G owner identity and fp16 reference: PASS; corrected prologue and resource metadata verified')
 
 
 if __name__ == '__main__':
