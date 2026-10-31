@@ -78,6 +78,13 @@ def linked_checks(root):
                               '--output', str(case / 'out')], capture_output=True, text=True,
                              timeout=scaled_timeout(120))
         assert run.returncode == 0, (path.name, run.stderr)
+        if not checked:
+            refused = subprocess.run([COMPILER, '--target', 'H14', '--schedule', 'linked',
+                '--format', 'hwx', '--mil', str(case / 'model.mil'), '--model-root', str(case),
+                '--output', str(case / 'unresolved-hwx')], capture_output=True, text=True,
+                timeout=scaled_timeout(120))
+            assert refused.returncode != 0 and 'descriptor cost fields' in refused.stderr
+            assert not (case / 'unresolved-hwx').exists()
         m = json.loads((case / 'out/manifest.json').read_text())
         assert len(m['programs']) == 1 and m['dispatchPlan'] == [0]
         assert len(m['scratch']['regions']) == r['parameters']['layers'] - 1

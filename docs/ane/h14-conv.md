@@ -104,7 +104,8 @@ The generic planner uses conservative budgets (1 MiB kernel bytes and
 single tasks, input reuse or a different width class. Therefore generic task
 bytes and task counts are not claimed to equal every Apple schedule. The
 strict parity suite still checks all 722 original cases byte for byte; the
-new corpus audit checks supported convolution geometry and packed constants,
+new corpus audit visits all 610 old/new convolution records (403 generic
+geometry cases and 207 explicit refusals), checks supported packed constants,
 and requires explicit refusal for unsupported families. No host test proves
 execution accuracy for a new schedule.
 
@@ -114,7 +115,9 @@ lane chunks remain refused. Spatial dimensions and scratch/constant/task
 limits are checked before publishing a package.
 
 ```sh
-make test-h13 test-h13-parity test-h14-parity test-h14-conv
+make test-h13 test-h13-parity test-h14-parity
+# Portable encoding checks on Linux, without Foundation/GNUstep:
+make CXX=clang++ test-h14-conv-portable
 PYTHON=python3 tools/h14-mobilenet/package.sh build/mobilenet-h14
 ```
 
