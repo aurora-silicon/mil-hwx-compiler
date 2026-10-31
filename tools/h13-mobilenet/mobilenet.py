@@ -144,7 +144,7 @@ if __name__ == '__main__':
     save_params(os.path.join(a.out, 'params.npz'), layers, params, (16, 112, 112))
     np.savez(os.path.join(a.out, 'tfweights.npz'), **{f'w{i}': P['w'] for i, P in enumerate(tfw)},
              **{f'b{i}': P['b'] for i, P in enumerate(tfw)})
-    m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), 'linked')
+    m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), os.environ.get('LINKED_SCHEDULE', 'linked'))
     msg = (f"{a.out}: {len(layers)} layers, linked {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
     if not a.no_perop:

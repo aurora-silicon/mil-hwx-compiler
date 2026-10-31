@@ -2932,14 +2932,18 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                                          diagnostics:diagnostics];
     if (![schedule isEqualToString:@"per-op"] &&
         ![schedule isEqualToString:@"chain"] &&
-        ![schedule isEqualToString:@"linked"])
+        ![schedule isEqualToString:@"linked"] &&
+        ![schedule isEqualToString:@"linked-l2"])
         return reject(diagnostics,
-            @"H13 schedule must be 'per-op', 'chain' or 'linked'", nil,
+            @"H13 schedule must be 'per-op', 'chain', 'linked' or 'linked-l2'", nil,
             @"h13.unsupported-schedule");
     // `linked` compiles a straight-line convolution chain (each conv
     // optionally followed by its relu) into one program of linked tasks:
     // one submit for the whole chain, intermediates in the scratch channel.
-    const BOOL linkedSchedule = [schedule isEqualToString:@"linked"];
+    // `linked-l2` also keeps the qualifying intermediates resident in L2
+    // (docs/ane/linked-programs.md); it has not run on the device yet.
+    const BOOL linkedL2 = [schedule isEqualToString:@"linked-l2"];
+    const BOOL linkedSchedule = linkedL2 || [schedule isEqualToString:@"linked"];
     struct LinkedGenericScope {
         BOOL previous;
         explicit LinkedGenericScope(BOOL on)
@@ -4376,7 +4380,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
             std::vector<ane::h13::LinkedLayer> layout;
             ane::h13::Program combined =
-                ane::h13::linkConvChain(chainPrograms, &layout);
+                ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
             std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
@@ -4396,10 +4400,23 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     [taskRecords addObject:@{
                         @"index": @(layout[index].firstTask + task),
                         @"layer": @(index), @"operation": record[@"operation"]}];
-                [layers addObject:@{
+                NSArray *edgeNames = @[@"dram", @"l2-alias", @"l2-dependent"];
+                NSMutableDictionary *layerRecord = [@{
                     @"result": result, @"operation": record[@"operation"],
                     @"firstTask": @(layout[index].firstTask),
-                    @"taskDescriptors": @(layout[index].taskCount)}];
+                    @"taskDescriptors": @(layout[index].taskCount),
+                    @"inputEdge": edgeNames[layout[index].inputEdge],
+                    @"outputEdge": edgeNames[layout[index].outputEdge]} mutableCopy];
+                if (layout[index].inputEdge)
+                    layerRecord[@"l2Source"] = @(layout[index].l2Source);
+                if (layout[index].outputEdge) {
+                    layerRecord[@"l2Result"] = @(layout[index].l2Result);
+                    layerRecord[@"l2ResultBytes"] = @(layout[index].l2ResultBytes);
+                    [tensors removeObjectForKey:result];
+                    [intermediateNames removeObject:result];
+                    [intermediateStorageNames removeObject:result];
+                }
+                [layers addObject:layerRecord];
                 if (layout[index].writesScratch) {
                     regions[result] = @{
                         @"offset": @(layout[index].writeOffset),
@@ -4663,7 +4680,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     } mutableCopy];
     if (chainSchedule || linkedSchedule)
         [manifest addEntriesFromDictionary:@{
-            @"schedule": linkedSchedule ? @"linked" : @"chain",
+            @"schedule": linkedL2 ? @"linked-l2" : (linkedSchedule ? @"linked" : @"chain"),
             @"tasks": taskRecords, @"scratch": scratch}];
     if (programRecords.count == 1)
         [manifest addEntriesFromDictionary:programRecords[0]];

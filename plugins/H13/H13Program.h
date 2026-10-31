@@ -128,6 +128,9 @@ struct Program {
     /// Built by `encodeConvGeneric` from the per-register formulas rather
     /// than replayed from a decoded template.
     bool formulaBuilt = false;
+    /// A formula-built depthwise convolution (the linker picks the L2 edge
+    /// form from it; the task words alone do not say it).
+    bool depthwiseConv = false;
 };
 
 Program encodeBinary(BinaryOperation operation);
@@ -375,6 +378,12 @@ struct LinkedLayer {
     std::uint64_t readOffset;
     bool writesScratch;
     std::uint64_t writeOffset;
+    /// L2-resident edges (`l2Resident`): 0 DRAM, 1 alias, 2 dependent.
+    int inputEdge = 0;
+    int outputEdge = 0;
+    std::uint64_t l2Source = 0;
+    std::uint64_t l2Result = 0;
+    std::uint64_t l2ResultBytes = 0;
 };
 
 /// Links the per-layer programs of a straight-line convolution chain into
@@ -387,7 +396,8 @@ struct LinkedLayer {
 /// in the shared constant section. `layout`, when given, receives each
 /// layer's task span and scratch routing.
 Program linkConvChain(const std::vector<Program> &layers,
-                      std::vector<LinkedLayer> *layout = nullptr);
+                      std::vector<LinkedLayer> *layout = nullptr,
+                      bool l2Resident = false);
 
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);

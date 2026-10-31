@@ -170,18 +170,67 @@ whole image down to 2 rows changes nothing (measured on the 1x1 128 @56 and
 32->64 @112 layers). The DRAM surfaces also pad rows to 64 bytes, which costs
 2.3x at 14x14 and 4.6x at 7x7. The weights add 8.4 MB per inference.
 
-## L2-resident intermediates: not working yet
+## Dependency and DMA fields per task (the spec for other targets)
 
-The next step is to keep an intermediate in L2 instead of DRAM. A first try
-used the decoded routing from t-3752 and the decoded load-then-reuse probes
-(producer: result config type 0 with the consumer's strides, Common `0x24`
-bit 14, no output DMA; consumer: source config `0x100`, input DMA off). The
-smallest case, two 64->64 1x1 layers at 8x8, timed out on the M1 Pro twice.
-The first time the driver recovered; the second time the engine wedged and
-needs a module reload or a reboot. That code is not in this branch. What is
-still missing is probably an inter-task dependency or a producer-side field
-that the decoded chains carry and the conv template does not; it needs a
-Daybreak answer before another device try.
+Every field below is set by `linkConvChain`; the H14/H16G/H17 ports should
+carry the same roles. `0x13800` and `0x17800` are the TileDMA source and
+destination DMAConfig words. In the public H13 register map, source bits 19:16
+are DependencyMode, 15:12 CacheHintNoReuse, 11:8 CacheHintReuse, 7:4 CacheHint
+and 0 the enable.
+
+| Task role | `header[6]` | `0x13800` | `0x17800` | selectors (`header[8]`) |
+| --- | --- | --- | --- | --- |
+| layer 0, reads the program input | SrcLoc+DstLoc+SPL (0x30000800) | 0x33881 (mode 3) | as below | RBase0 = input |
+| first task of a layer reading DRAM scratch | same | 0x7bb81 (mode 7: waits on the producer) | | RBase0 = 3 |
+| later tasks of that layer | same | 0x3bb81 (mode 3) | | RBase0 = 3 |
+| writes DRAM scratch | | | 0x40003c1 | WBase = 3 |
+| writes the program output | | | 0x40000c1 | WBase = output |
+| last task of every layer | adds TSE+TSR (0x9000) | | | |
+| every task but the last | | | | TBE (bit 23) |
+
+DependencyMode values in Apple's decoded H13 programs: 3 on program inputs and
+on later reads of a scratch region; 7 on the first scratch read after a
+TSE+TSR producer (chain_ffn_d1024_s375 task 17); 5 on encoder_conv_c1024_n2048
+task 5; 4 on L2 alias consumers (0x48880); 1 on some batched-matmul reads.
+Read as bits, mode 7, 5 and 4 share bit 18, which is what a "bits 19:18 = 1"
+decode calls the wait.
+
+## L2-resident intermediates (`--schedule linked-l2`, host parity only)
+
+The first attempt hung the M1 Pro: it mixed two of Apple's edge forms and
+dropped every handoff signal. Daybreak t-3891 decoded both forms from fresh
+Apple chains, and `linked-l2` now emits them:
+
+- **Alias edge** (dense producer, dense or depthwise consumer). Producer:
+  ResultCfg 0x500170, result strides = the consumer's source strides,
+  output DMA disabled (0xc0) with its geometry kept, `header[6]` adds TSE+DPC+TSR,
+  WBase=3 kept. Consumer: SourceCfg 0x160, input DMA 0x48880 with geometry kept,
+  `header[6]` SPC+SPL, RBase0=3 kept.
+- **Dependent edge** (depthwise producer, 1x1 consumer, spatial 8 to 64).
+  Producer: ResultCfg 0x140, Common 0x24 bit 14, output DMA 0xc0 with zero
+  geometry, no write selector. Consumer: SourceCfg 0x104 (Dependent=1), input
+  DMA 0x8880 with zero geometry, no read selector, no SPL.
+- **Placement** is Apple's: the first producer leaves its result at 0 and
+  stages its DRAM input above it; every later task puts its result or output
+  staging right above its resident input. Bases are 16-byte aligned and
+  everything stays below 2 MiB.
+
+Only the task forms Apple is observed to emit are used: dense, then alias,
+then depthwise, then dependent, then a 1x1 that writes DRAM; or dense, then
+alias, then dense. Every layer is a single task with its whole output in one
+tile, at spatial 8 to 64. `research/h13_l2_edge_parity.py` rebuilds Apple's
+decoded pw-pw and conv-dw-pw chains at 8x8 and matches every header,
+Common, L2 and TileDMA word (`make test-h13`). At 16x16 the only difference is
+Common 0x34 on the depthwise task, which is not an edge field. At 32x32 and
+64x64 Apple uses different L2 row skews for resident edges; ours stay
+self-consistent.
+
+In MobileNetV1 these rules take two triplets at 14x14 (layers 15 to 17 and 19
+to 21). The 56x56 triplet does not fit in 2 MiB, and the others meet a
+multi-task or stride-2 layer. None of this has run on the device yet. The
+plan is one geometry at a time: pw-pw 8x8, conv-dw-pw 8x8, 16x16, with relu
+and bias, 512 channels at 14x14, then the whole net, checking `wedged` after
+each.
 
 ## Remaining gap to macOS and next steps
 
@@ -191,9 +240,10 @@ H13 the macOS figure is about 1 ms, scaled from that, not measured. We are at
 on M1, 1.45x on M1 Max) would put us near 1.6 to 1.8 ms once linux #684 is in
 the kernel; that is an estimate.
 
-1. L2-resident intermediates for the 28x28, 14x14 and 7x7 layers. Those
-   layers take 1.46 ms of the 2.21 ms, and they are bound by activation and
-   weight DMA. Needs the missing dependency field first.
+1. L2-resident intermediates: run `linked-l2` on the device, then widen
+   the edge rules (multi-task consumers, 7x7, chains longer than three) one
+   measured step at a time. The 28x28 and smaller layers take 1.46 ms of the
+   2.21 ms and are DMA bound.
 2. Fewer kernel tasks: the 1 MiB per-task budget splits the 1024-wide layers
    into 4 tasks; Apple keeps up to 1.18 MB in one task. With L2 input reuse
    (the decoded two-task c1024 form) the extra tasks would also stop

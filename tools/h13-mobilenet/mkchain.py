@@ -18,7 +18,7 @@ milc = os.environ.get('MILC', 'build/mil-hwxc')
 shutil.rmtree(out, ignore_errors=True)
 mil, params, outshape = conv_mil(layers, inshape, os.path.join(out, 'src'), seed=seed)
 save_params(os.path.join(out, 'params.npz'), layers, params, inshape)
-m = compile_chain(milc, mil, os.path.join(out, 'src'), os.path.join(out, 'linked'), 'linked')
+m = compile_chain(milc, mil, os.path.join(out, 'src'), os.path.join(out, 'linked'), os.environ.get('LINKED_SCHEDULE', 'linked'))
 p = compile_chain(milc, mil, os.path.join(out, 'src'), os.path.join(out, 'perop'), None)
 print(f"{out}: linked {m['programs'][0]['taskDescriptors']} tasks, "
       f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}; "
