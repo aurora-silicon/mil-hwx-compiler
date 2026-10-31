@@ -325,7 +325,7 @@ test-h16g-validation: $(BUILD)/prepare_alu
 test-spatial-reference:
 	python3 tests/test_spatial_reference.py
 
-test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
+test: test-whisper-coverage test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
 
 .PHONY: test-h13-hardware
 test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec
