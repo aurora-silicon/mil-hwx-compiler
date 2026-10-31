@@ -5,6 +5,7 @@
 #import "ANEExecutableBundle.h"
 #import "ANEH13Compiler.h"
 #import "ANEH14Compiler.h"
+#import "ANESpatialCompiler.h"
 
 #include <stdio.h>
 
@@ -12,7 +13,7 @@ static void printUsage(const char *program) {
     fprintf(stderr,
         "usage: %s --mil FILE --model-root DIR "
         "--output DIR [--target H16G|H13|H14|H17|H18] [--format anec|hwx] "
-        "[--schedule per-op|chain]\n", program);
+        "[--schedule per-op|chain|spatial]\n", program);
 }
 
 static NSString *severityName(ANEDiagnosticSeverity severity) {
@@ -94,7 +95,11 @@ int main(int argc, const char *argv[]) {
             NSError *error = nil;
             NSURL *root = [NSURL fileURLWithPath:modelRoot isDirectory:YES];
             NSURL *outputURL = [NSURL fileURLWithPath:output isDirectory:YES];
-            BOOL success = parityTarget
+            BOOL success = [schedule isEqualToString:@"spatial"]
+                ? [ANESpatialCompiler compileMILData:milData modelRoot:root
+                    target:target format:format outputDirectory:outputURL
+                    diagnostics:diagnostics error:&error]
+                : parityTarget
                 ? [ANEH14Compiler compileMILData:milData modelRoot:root
                     target:target format:format outputDirectory:outputURL
                     schedule:schedule diagnostics:diagnostics error:&error]

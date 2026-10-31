@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H13/H14: add the explicit spatial schedule, using existing copy, convolution
+  and matrix kernels for halo dispatch, nearest/bilinear resize and concat.
+  Support the MobileNetV1 convolution/head geometries at batch 1/8, including
+  H14 biased linear. Add a versioned reusable-kernel dispatch contract,
+  structure checks and a software executor with CPU reference comparisons.
+  Existing per-op/chain packages retain their behavior. See
+  `docs/spatial-dispatch.md` for arithmetic and execution limits.
+
 - Aurora: reuse the existing H16G backend and descriptor writer. Add an
   independent SPEC-r3 fp16 container validator and source-generated owner
   identity regression. Preserve the add-128 hash and expose the consumer's

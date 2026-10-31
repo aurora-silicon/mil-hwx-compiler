@@ -80,6 +80,13 @@ or device numerical tests. No Linux H16 inference claim follows from it.
 
 ## Spatial prerequisites and limits
 
+The initial references described below now feed an explicit H13/H14
+[`--schedule spatial` implementation](spatial-dispatch.md). It adds ANE
+copy/matrix dispatch for halo patches, resize and concat, and the exact
+MobileNetV1 convolution/head geometries, including batch 8 and H14 bias.
+The original per-op/chain contracts and H16G envelopes remain unchanged.
+The spatial dispatch document defines the new schedule and its software checks.
+
 `tools/spatial_tiles.py` adds CPU overlap-save geometry for unit-stride SAME
 k1/k3 convolution. Tests cover fixed 64-pixel patches for 1920x1080 and
 1280x720, partial edge tiles and unique output ownership. Dense-versus-tiled
@@ -93,22 +100,24 @@ Unsupported sampling modes, fractional nearest scales and interleaving
 concat refuse by name. Coordinate rules follow the
 [Core ML MIL definitions](https://github.com/apple/coremltools/blob/9d9de1aebd4f082fb9e7076c9799a1b5f29ba5e4/coremltools/converters/mil/mil/ops/defs/iOS15/image_resizing.py).
 
-These are CPU references and planning geometry. They do not add a decoded
-ANE copy/resize instruction, a new package gather/scatter ABI or full-frame
-convolution emission. Existing matrix tiling is retained. Existing hardware
-refusals remain until the missing movement contract is proved or an explicit
-host-step package contract is implemented.
+The CPU references remain independent of encoding. H13/H14 spatial dispatch
+now reuses existing elementwise copy, convolution and matrix kernels to
+assemble halo patches and materialize resize/concat results. Its separate
+package ABI describes contiguous slices and bounded dispatch loops; no host
+arithmetic step is emitted. Existing per-op refusals and H16G envelopes
+remain in place.
 
 | ROADMAP family | H13 | H14 | H16G | Missing coverage |
 | --- | --- | --- | --- | --- |
-| Full-frame denoiser / small UNet | Incomplete | Incomplete | Incomplete | Spatial gather/scatter, halo dispatch, resize/concat and model-specific conv shapes |
-| Selfie segmentation | Incomplete | Incomplete | Incomplete | Resize/concat, small-channel and pooling geometries |
-| Face detector | Incomplete | Incomplete | Incomplete | Model-specific small-channel and kernel coverage, head movement |
+| Full-frame denoiser / small UNet | Spatial primitives in explicit schedule | Spatial primitives in explicit schedule | Incomplete | Exact imported models, unsupported operations, device accuracy and throughput |
+| Selfie segmentation | Spatial primitives in explicit schedule | Spatial primitives in explicit schedule | Incomplete | Exact imported models and additional pooling geometries |
+| Face detector | Spatial primitives in explicit schedule | Spatial primitives in explicit schedule | Incomplete | Model-specific kernel and head coverage |
 | Decomposed GRU | Individual covered primitives only | Individual covered primitives only | Individual covered primitives only | Exact model shapes and supported routing between gates |
 | Whisper encoder | Individual covered primitives only | Individual covered primitives only | Individual covered primitives only | Exact model shapes and routing; existing matmul/GELU/reduction support is reused |
 
-No complete imported model or open weights were supplied for this change.
-This table records missing requirements, not a device benchmark or a claim
-that every model in a family was tested. H17/H18 retain byte parity only.
+The spatial acceptance suite compiles the complete deterministic MobileNetV1
+benchmark graph for H13/H14 at batch 1/8. The table records broader family
+requirements, not a device benchmark or a claim that every model in a family
+was tested. H17/H18 retain byte parity only.
 A device-run H17 target additionally needs a proved ownership backend,
 runtime protocol, validated mappings and completion, then numerical runs.
