@@ -310,7 +310,16 @@ $(BUILD)/test_h13_anec: plugins/H13/H13ANEC.cpp tests/test_h13_anec.cpp plugins/
 test-hwx-inspection:
 	python3 tests/test_hwx_inspection.py
 
-test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection
+.PHONY: test-h16g-validation
+test-h16g-validation: $(BUILD)/prepare_alu
+	python3 tests/test_h16g_validation.py
+	python3 tests/test_h16g_owner.py $(BUILD)/prepare_alu
+
+.PHONY: test-spatial-reference
+test-spatial-reference:
+	python3 tests/test_spatial_reference.py
+
+test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
 
 .PHONY: test-h13-hardware
 test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec

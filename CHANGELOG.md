@@ -4,6 +4,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- Aurora: reuse the existing H16G backend and descriptor writer. Add an
+  independent SPEC-r3 fp16 container validator and source-generated owner
+  identity regression. Preserve the add-128 hash and expose the consumer's
+  zero-prologue disagreement. Tighten H16 binding names, integer widths and
+  relocation identities; separate batch spans from allocation padding.
+- Aurora: CPU halo geometry and fp16 reference checks for spatial convolution,
+  resize and concat. These do not expand a hardware encoding envelope. See
+  `docs/aurora-compiler-status.md` for the branch audit and remaining coverage.
+
 ## 0.3.1 (2026-10-25)
 
 New since 0.3.0:

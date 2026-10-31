@@ -25,6 +25,10 @@ reshape, squeeze, and expand_dims round out the set.
 A shape outside a backend's verified envelope is refused with a named error, such as `h13.conv-outside-envelope`.
 The compiler does not guess.
 
+The Aurora fork's [change inventory](docs/aurora-compiler-status.md) separates
+the existing H16G backend and branch work from the added SPEC-r3 validation
+and spatial CPU references, including the remaining driver disagreement.
+
 ## Supported targets
 
 | Target | Chip | Output | Device runs |
