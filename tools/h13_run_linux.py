@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, dispatch, and numerically check an H13 ANEC package with libane."""
+"""Validate, dispatch, and numerically check an H13/H14 ANEC package with libane."""
 
 import argparse
 import ctypes
@@ -56,14 +56,15 @@ class LibANEAdapter:
 
     def __init__(self, library, device=0):
         self.device = device
+        self.target = None
         self.lib = ctypes.CDLL(os.fspath(library), use_errno=True)
         pointer = ctypes.c_void_p
         try:
             # getattr: `self.lib.__ane_src_size` would name-mangle inside
             # this class body and look up a symbol libane never exports.
-            self._init = getattr(self.lib, "pyane_init")
-            self._init.restype = pointer
-            self._init.argtypes = [ctypes.c_char_p, ctypes.c_int]
+            self._init_target = getattr(self.lib, "ane_init_target")
+            self._init_target.restype = pointer
+            self._init_target.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32]
             self._free = getattr(self.lib, "pyane_free")
             self._free.restype = ctypes.c_int
             self._free.argtypes = [pointer]
@@ -73,12 +74,12 @@ class LibANEAdapter:
             self._dst_size = getattr(self.lib, "__ane_dst_size")
             self._dst_size.restype = ctypes.c_uint64
             self._dst_size.argtypes = [pointer, ctypes.c_uint32]
-            self._send = getattr(self.lib, "__ane_send")
-            self._send.restype = None  # void
-            self._send.argtypes = [pointer, pointer, ctypes.c_uint32]
-            self._read = getattr(self.lib, "__ane_read")
-            self._read.restype = None  # void
-            self._read.argtypes = [pointer, pointer, ctypes.c_uint32]
+            self._send_checked = getattr(self.lib, "ane_send_checked")
+            self._send_checked.restype = ctypes.c_int
+            self._send_checked.argtypes = [pointer, pointer, ctypes.c_uint64, ctypes.c_uint32]
+            self._read_checked = getattr(self.lib, "ane_read_checked")
+            self._read_checked.restype = ctypes.c_int
+            self._read_checked.argtypes = [pointer, pointer, ctypes.c_uint64, ctypes.c_uint32]
             self._exec = getattr(self.lib, "ane_exec")
             self._exec.restype = ctypes.c_int
             self._exec.argtypes = [pointer]
@@ -86,9 +87,32 @@ class LibANEAdapter:
             raise RuntimeError(
                 f"{library} does not export the libane ABI: {error}") from error
 
+    def select_target(self, target):
+        if target not in ('H13', 'H14'):
+            raise ValueError(f'unsupported resident target: {target}')
+        if self.target is not None and self.target != int(target[1:]):
+            raise RuntimeError('an adapter cannot change generation while owning handles')
+        self.target = int(target[1:])
+
+    def _init(self, path, device):
+        if self.target is None:
+            raise RuntimeError('validate and select a package target before loading')
+        ctypes.set_errno(0)
+        return self._init_target(path, device, self.target)
+
+    def _send(self, handle, buffer, index):
+        rc = self._send_checked(handle, buffer, len(buffer), index)
+        if rc:
+            raise self._failure('ane_send_checked', rc)
+
+    def _read(self, handle, buffer, index):
+        rc = self._read_checked(handle, buffer, len(buffer), index)
+        if rc:
+            raise self._failure('ane_read_checked', rc)
+
     @staticmethod
     def _failure(name, result):
-        number = ctypes.get_errno()
+        number = -result if result < -1 else ctypes.get_errno()
         detail = os.strerror(number) if number else "no errno"
         return RuntimeError(f"{name} failed: {result}, errno={number} ({detail})")
 
@@ -100,22 +124,24 @@ class LibANEAdapter:
             _close_all([program], sys.exc_info()[1])
 
     @staticmethod
-    def call_sequence(program):
+    def call_sequence(program, target="H13"):
         """The exact order the runner issues libane calls for one program, so a
         driver owner can review the submission before any hardware run. Size
         validation is part of the prepared phase, before the first transfer."""
-        calls = [f"pyane_init(\"{program['file']}\", device)"]
+        calls = [f"ane_init_target(\"{program['file']}\", device, {int(target[1:])})"]
         for index, binding in enumerate(program["inputs"]):
             calls.append(f"__ane_src_size(handle, {index}) == "
                          f"{binding['allocationBytes']}  # {binding['name']}")
+        calls.append(f"__ane_src_size(handle, {len(program['inputs'])}) == 0  # exact input count")
         for index, binding in enumerate(program["outputs"]):
             calls.append(f"__ane_dst_size(handle, {index}) == "
                          f"{binding['allocationBytes']}  # {binding['name']}")
+        calls.append(f"__ane_dst_size(handle, {len(program['outputs'])}) == 0  # exact output count")
         for index, binding in enumerate(program["inputs"]):
-            calls.append(f"__ane_send(handle, buffer, {index})")
+            calls.append(f"ane_send_checked(handle, buffer, {binding['allocationBytes']}, {index})")
         calls.append("ane_exec(handle)")
-        for index in range(len(program["outputs"])):
-            calls.append(f"__ane_read(handle, buffer, {index})")
+        for index, binding in enumerate(program["outputs"]):
+            calls.append(f"ane_read_checked(handle, buffer, {binding['allocationBytes']}, {index})")
         calls.append("pyane_free(handle)")
         return calls
 
@@ -123,10 +149,10 @@ class LibANEAdapter:
 class PreparedProgram:
     """An open libane handle with validated sizes and prepared buffers.
 
-    Everything that answers questions about the package (`pyane_init`,
+    Everything that answers questions about the package (`ane_init_target`,
     `__ane_src_size`, `__ane_dst_size`) and every allocation happens in
     `__init__`: a size disagreement fails closed before the first
-    `__ane_send`. The instance is reusable -- benchmark iterations repeat only
+    `ane_send_checked`. The instance is reusable -- benchmark iterations repeat only
     transfers, submission, and readback on the same handle and buffers, so
     initialization is reported as setup and never hidden inside a timed window.
     """
@@ -149,6 +175,8 @@ class PreparedProgram:
                     raise RuntimeError(
                         f"libane input {index} size {size} differs from manifest {len(data)}")
                 self.input_buffers.append(ctypes.create_string_buffer(data, len(data)))
+            if adapter._src_size(self.handle, len(inputs)):
+                raise RuntimeError("libane input count differs from manifest")
             self.output_buffers = []
             for index, expected in enumerate(output_sizes):
                 size = adapter._dst_size(self.handle, index)
@@ -156,6 +184,8 @@ class PreparedProgram:
                     raise RuntimeError(
                         f"libane output {index} size {size} differs from manifest {expected}")
                 self.output_buffers.append(ctypes.create_string_buffer(size))
+            if adapter._dst_size(self.handle, len(output_sizes)):
+                raise RuntimeError("libane output count differs from manifest")
         except BaseException:
             _close_all([self], sys.exc_info()[1])
             raise
@@ -276,10 +306,11 @@ def build_plan(manifest, reference_outputs):
             "taskDescriptors": program["taskDescriptors"],
             "inputs": inputs,
             "outputs": [_binding_record(item, tensors) for item in program["outputs"]],
-            "libaneCalls": LibANEAdapter.call_sequence(program),
+            "libaneCalls": LibANEAdapter.call_sequence(program, manifest["target"]),
         })
     plan = {
-        "schema": "mil-hwxc.h13-linux-plan.v1",
+        "schema": f"mil-hwxc.{manifest['target'].lower()}-linux-plan.v1",
+        "target": manifest["target"],
         "deviceCalls": False,
         "programs": programs,
         "referenceOutputs": {name: len(data)
@@ -370,7 +401,8 @@ def _package_contract(package, mil, model_root, inputs, outputs):
     """Load the package and settle the whole request before any device work:
     requested input names, requested output names, input byte counts, and the
     MIL's returns must all agree with the manifest."""
-    manifest, _ = inspect_anec.load_package(package)
+    program_data = {}
+    manifest, _ = inspect_anec.load_package(package, allow_h14=True, program_data=program_data)
     tensors = manifest["tensors"]
     input_names = {name for name, tensor in tensors.items()
                    if tensor["role"] == "input" and "aliasOf" not in tensor}
@@ -386,7 +418,7 @@ def _package_contract(package, mil, model_root, inputs, outputs):
     expected = evaluate(Path(mil).read_text(), model_root, dense_inputs)
     if set(expected) != output_names:
         raise ValueError("MIL returns differ from manifest output tensors")
-    return manifest, tensors, output_names, dense_inputs, expected
+    return manifest, tensors, output_names, dense_inputs, expected, program_data
 
 
 def _program_inputs(manifest, tensors, dense_inputs, intermediate_regions,
@@ -454,11 +486,12 @@ def _check_outputs(manifest, tensors, output_names, actual, expected,
 def run_package(package, mil, model_root, inputs, outputs, adapter,
                 deadline_seconds=None, now=time.monotonic):
     deadline = _qualification_deadline(adapter, deadline_seconds, now)
-    manifest, tensors, output_names, dense_inputs, expected = _package_contract(
+    manifest, tensors, output_names, dense_inputs, expected, program_data = _package_contract(
         package, mil, model_root, inputs, outputs)
     if adapter is None:
         return manifest, expected, build_plan(manifest, expected)
 
+    _select_target(adapter, manifest)
     package = Path(package).resolve()
     intermediate_regions = {}
     output_regions = {}
@@ -466,7 +499,7 @@ def run_package(package, mil, model_root, inputs, outputs, adapter,
         _check_deadline(deadline, deadline_seconds, program_index, now)
         program, input_buffers = _program_inputs(
             manifest, tensors, dense_inputs, intermediate_regions, program_index)
-        anec = inspect_anec.local_file(package, program["file"], program["bytes"])
+        anec = program_data[program["file"]]
         data = adapter.execute(
             anec, input_buffers,
             [binding["allocationBytes"] for binding in program["outputs"]])
@@ -474,6 +507,95 @@ def run_package(package, mil, model_root, inputs, outputs, adapter,
     actual = _unpack_outputs(manifest, output_regions, output_names)
     _check_outputs(manifest, tensors, output_names, actual, expected, package)
     return manifest, actual, None
+
+
+def _select_target(adapter, manifest):
+    # Test adapters have no hardware. Real native loads always use the guarded
+    # libane entry point; there is no generation override or old-ABI fallback.
+    if isinstance(adapter, LibANEAdapter):
+        adapter.select_target(manifest['target'])
+
+
+class ResidentGraph:
+    """One caller-owned, serialized H13/H14 graph, callable with dense fp16 bytes.
+
+    Validation and all handle/buffer preparation precede the first transfer.
+    Use as a context manager or explicitly close. Any failed call closes every
+    handle and permanently retires this owner. CPU fallback must recompute the
+    whole graph from the original inputs, using the same open weights.
+    """
+    def __init__(self, package, mil, model_root, inputs, outputs, adapter,
+                 deadline_seconds, now=time.monotonic):
+        if adapter is None:
+            raise ValueError('resident execution requires an adapter')
+        self.programs = {}
+        self.failed = False
+        self.closed = False
+        self.now = now
+        self.deadline_seconds = deadline_seconds
+        self.package = Path(package).resolve()
+        self.mil = Path(mil).read_text()
+        self.model_root = model_root
+        (self.manifest, self.tensors, self.output_names, self.inputs,
+         self.expected, program_data) = _package_contract(package, mil, model_root, inputs, outputs)
+        self.deadline = _qualification_deadline(adapter, deadline_seconds, now)
+        _select_target(adapter, self.manifest)
+        try:
+            for index in self.manifest['dispatchPlan']:
+                _check_deadline(self.deadline, deadline_seconds, index, now)
+                program = self.manifest['programs'][index]
+                placeholders = [_constant_buffer(program, b) if b.get('binding') == 'constant'
+                                else bytes(b['allocationBytes']) for b in program['inputs']]
+                anec = program_data[program['file']]
+                self.programs[index] = PreparedProgram(adapter, anec, placeholders,
+                    [b['allocationBytes'] for b in program['outputs']])
+        except BaseException:
+            self.failed = True
+            self.close(sys.exc_info()[1])
+            raise
+
+    def __call__(self, inputs):
+        if self.closed or self.failed:
+            raise RuntimeError('resident graph is closed or retired')
+        try:
+            if set(inputs) != set(self.inputs):
+                raise ValueError('resident graph input names differ')
+            # Snapshot the request so neither native composition nor a fallback
+            # callback can observe partially updated caller buffers.
+            dense = {}
+            for name, value in inputs.items():
+                view = memoryview(value)
+                if not view.contiguous or view.nbytes != self.tensors[name]['logicalBytes']:
+                    raise ValueError('resident graph input byte count or contiguity differs')
+                dense[name] = view.tobytes()
+            expected = evaluate(self.mil, self.model_root, dense)
+            intermediate_regions, output_regions = {}, {}
+            for index in self.manifest['dispatchPlan']:
+                _check_deadline(self.deadline, self.deadline_seconds, index, self.now)
+                program, buffers = _program_inputs(self.manifest, self.tensors,
+                                                   dense, intermediate_regions, index)
+                prepared = self.programs[index]
+                prepared.refill(buffers)
+                data = prepared.run_once()
+                _collect_outputs(self.tensors, program, data, intermediate_regions, output_regions)
+            actual = _unpack_outputs(self.manifest, output_regions, self.output_names)
+            _check_outputs(self.manifest, self.tensors, self.output_names, actual, expected, self.package)
+            return actual
+        except BaseException:
+            self.failed = True
+            self.close(sys.exc_info()[1])
+            raise
+
+    def close(self, primary=None):
+        if not self.closed:
+            self.closed = True
+            _close_all(list(self.programs.values()), primary)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, error, traceback):
+        self.close(error)
 
 
 def _timing_summary(samples):
@@ -500,9 +622,10 @@ def benchmark_package(package, mil, model_root, inputs, outputs, adapter, warmup
     only returned when every output of every iteration meets the declared
     criteria, and every handle is closed on every exit path.
     """
-    manifest, tensors, output_names, dense_inputs, expected = _package_contract(
+    manifest, tensors, output_names, dense_inputs, expected, program_data = _package_contract(
         package, mil, model_root, inputs, outputs)
     deadline = _qualification_deadline(adapter, deadline_seconds, now)
+    _select_target(adapter, manifest)
     package = Path(package).resolve()
     records = {}
     package_samples = []
@@ -517,7 +640,7 @@ def benchmark_package(package, mil, model_root, inputs, outputs, adapter, warmup
                     placeholders.append(_constant_buffer(program, binding))
                 else:
                     placeholders.append(bytes(binding["allocationBytes"]))
-            anec = inspect_anec.local_file(package, program["file"], program["bytes"])
+            anec = program_data[program["file"]]
             sizes = [binding["allocationBytes"] for binding in program["outputs"]]
             setup_started = time.perf_counter()
             prepared = PreparedProgram(adapter, anec, placeholders, sizes)
@@ -565,7 +688,8 @@ def benchmark_package(package, mil, model_root, inputs, outputs, adapter, warmup
             _check_outputs(manifest, tensors, output_names, actual, expected)
             final_actual = actual
         report = {
-            "schema": "mil-hwxc.h13-linux-benchmark.v1",
+            "schema": f"mil-hwxc.{manifest['target'].lower()}-linux-benchmark.v1",
+            "target": manifest["target"],
             "package": str(package),
             "warmup": warmup,
             "iterations": iterations,
@@ -697,7 +821,7 @@ def main():
                       f"over {program['iterations']} iterations")
             print(f"WROTE {args.benchmark_json}")
     except (OSError, ValueError, RuntimeError, struct.error) as error:
-        parser.exit(1, f"H13 Linux runner error: {error}\n")
+        parser.exit(1, f"ANE Linux runner error: {error}\n")
 
 
 if __name__ == "__main__":
