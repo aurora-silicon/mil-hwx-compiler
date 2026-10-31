@@ -141,6 +141,12 @@ A runner can drive the package without parsing programs.
 | layer_norm | Constant axes, `epsilon` of 1e-5, no `gamma` or `beta` |
 | reduce_sum, reduce_max, reduce_mean | Constant axes, `keep_dims` either way, never over the batch axis |
 | reshape, squeeze, expand_dims | Constant shapes with equal element counts. Emits no program |
+| resize, channel concat, sigmoid, hardswish | H13/H14 whole-layer encodings on the [native layer grid](docs/ane/native-layers.md). Nearest/bilinear 2× resize and sigmoid take one task. Concat uses two copies or places exclusive producers into adjacent output channel slices |
+
+The [native layer grid](docs/ane/native-layers.md) also adds small-channel
+and kernel-5 convolution points. Linked programs can contain these layers
+and channel-concat branches. Its [35×35 dense reproducer](docs/ane/camera-046-reproducer.md)
+prepares procedural inputs and float64 references for device checks.
 
 Anything else fails with a named `*-outside-envelope` error.
 The decoded grids that define each envelope live in `plugins/H13/` and `plugins/H14/`.

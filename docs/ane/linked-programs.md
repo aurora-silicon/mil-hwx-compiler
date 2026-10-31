@@ -1,5 +1,11 @@
 # H13 linked programs: a whole conv chain in one submit
 
+The native layer extension adds H13/H14 resize, activations, small/kernel-5
+convolution and channel-concat graphs, including producer placement for
+zero-copy concat. See [native-layers.md](native-layers.md) for that envelope
+and its host-only qualification limits. The measurements below describe
+the earlier H13 convolution implementation.
+
 This page describes `--schedule linked`, which compiles a straight-line chain
 of convolutions (each optionally followed by its relu) into one H13 program.
 It also records what a whole MobileNetV1 224 costs on the M1 Pro with it, how

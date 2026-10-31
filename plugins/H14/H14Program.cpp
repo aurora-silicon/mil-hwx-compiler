@@ -643,6 +643,8 @@ std::vector<std::uint8_t> encodeANEC(const Program &program) {
 
     std::array<std::uint32_t, channelCount> tiles{};
     tiles[0] = tileCount(contentSize, "ANEC content tile count overflows");
+    if (program.scratchAllocationBytes)
+        tiles[3] = tileCount(program.scratchAllocationBytes, "scratch tile count overflows");
     tiles[4] = tileCount(program.output.allocationBytes,
                          "output tile count overflows");
     for (std::size_t index = 0; index != program.inputs.size(); ++index)
@@ -725,7 +727,7 @@ std::vector<std::uint32_t> laneChunks(std::uint32_t outputs, std::uint32_t cap) 
             while (lanes > remaining / 16) lanes /= 2;
         }
         chunks.push_back(lanes);
-        remaining -= 16 * lanes;
+        remaining -= std::min(remaining, 16 * lanes);
     }
     return chunks;
 }
@@ -738,6 +740,34 @@ void putHalfword(std::vector<std::uint8_t> &bytes, std::size_t offset,
                  const std::uint8_t *source) {
     bytes[offset] = source[0];
     bytes[offset + 1] = source[1];
+}
+
+/// Native small-output packing (c3/c8/c24): distribute adjacent outputs
+/// evenly over up to 16 cores, padding each core's interleaved plane.
+std::vector<std::uint8_t> packConvSmallDense(std::uint32_t reduction,
+    std::uint32_t outputs, const std::uint8_t *weights, const std::uint8_t *bias) {
+    const auto cores = std::min(16u, outputs);
+    const std::uint64_t rows = reduction + (bias ? 1 : 0);
+    std::vector<std::uint8_t> packed;
+    unsigned first = 0;
+    for (unsigned core = 0; core != cores; ++core) {
+        const unsigned lanes = outputs / cores + (core < outputs % cores);
+        const auto base = packed.size();
+        packed.resize(base + alignUp(rows * lanes * 2, 64), 0);
+        for (unsigned lane = 0; lane != lanes; ++lane) {
+            auto cursor = base + lane * 2;
+            if (bias) {
+                putHalfword(packed, cursor, bias + (first + lane) * 2);
+                cursor += lanes * 2;
+            }
+            for (unsigned row = 0; row != reduction; ++row) {
+                putHalfword(packed, cursor, weights + (static_cast<std::size_t>(first + lane) * reduction + row) * 2);
+                cursor += lanes * 2;
+            }
+        }
+        first += lanes;
+    }
+    return packed;
 }
 
 /// Apple's dense convolution section. A plane interleaves `lanes` output
@@ -798,13 +828,20 @@ std::vector<std::uint8_t> packConvDepthwise(std::uint32_t taps,
                                             const std::uint8_t *weights,
                                             const std::uint8_t *bias) {
     const std::uint32_t lanes = std::min<std::uint32_t>(16, outputs);
-    const std::uint32_t slots = outputs / lanes;
     const std::uint64_t rows = taps + (bias ? 1 : 0);
-    const std::uint64_t laneBytes = alignUp(slots * rows * 2, 64);
-    std::vector<std::uint8_t> packed(laneBytes * lanes, 0);
+    // A non-multiple of 16 has unequal core chunks: c24 gives two channels
+    // to cores 0..7 and one to 8..15. Pad each core's actual span separately.
+    std::vector<std::uint64_t> laneBases(lanes);
+    std::uint64_t total = 0;
+    for (std::uint32_t lane = 0; lane != lanes; ++lane) {
+        laneBases[lane] = total;
+        const auto slots = (outputs - lane + lanes - 1) / lanes;
+        total += alignUp(slots * rows * 2, 64);
+    }
+    std::vector<std::uint8_t> packed(total, 0);
     for (std::uint32_t column = 0; column != outputs; ++column) {
         std::size_t cursor = static_cast<std::size_t>(
-            (column % lanes) * laneBytes + (column / lanes) * rows * 2);
+            laneBases[column % lanes] + (column / lanes) * rows * 2);
         if (bias) {
             putHalfword(packed, cursor, bias + column * 2);
             cursor += 2;
@@ -908,6 +945,29 @@ std::vector<std::uint8_t> packConvWeights(ConvShape shape,
     if (shape.groups == shape.input.channels &&
         shape.groups == shape.output.channels)
         return packConvDepthwise(taps, shape.output.channels, weights, bias);
+    if (shape.kernel == 3 && shape.kernelWidth == 3 && shape.stride == 1 &&
+        shape.groups == 1 && ((shape.input.channels == 128 && shape.output.channels == 512) ||
+                             (shape.input.channels == 512 && shape.output.channels == 128)) &&
+        shape.input.height == 35 && shape.input.width == 35 &&
+        shape.output.height == 35 && shape.output.width == 35) {
+        // The native 35x35 schedule writes the upper output slice first.
+        // Indexed-weight hashes prove the two contiguous coefficient groups.
+        std::vector<std::uint8_t> packed;
+        const unsigned split = shape.output.channels == 512 ? 256 : 96;
+        for (const unsigned first : {split, 0u}) {
+            const unsigned count = first ? shape.output.channels - split : split;
+            const auto part = packConvSmallDense(reduction, count,
+                weights + static_cast<std::size_t>(first) * reduction * 2,
+                bias ? bias + first * 2 : nullptr);
+            packed.insert(packed.end(), part.begin(), part.end());
+        }
+        return packed;
+    }
+    if (shape.output.channels % 16) {
+        if (shape.groups != 1 || shape.stride != 1)
+            throw std::invalid_argument("small dense outputs are qualified only for stride 1, groups 1");
+        return packConvSmallDense(reduction, shape.output.channels, weights, bias);
+    }
     const auto chunks = laneChunks(shape.output.channels, laneCap(shape.input));
     if (shape.stride > 1) {
         if (shape.groups != 1 || taps != 1 ||
