@@ -1,0 +1,164 @@
+# H13 linked programs: a whole conv chain in one submit
+
+This page describes `--schedule linked`, which compiles a straight-line chain
+of convolutions (each optionally followed by its relu) into one H13 program.
+It also records what a whole MobileNetV1 224 costs on the M1 Pro with it, how
+the three wide stride-2 layers now run, and what is still slow.
+
+It builds on the per-layer encoder in [fused-conv.md](fused-conv.md) and on
+the task-descriptor notes in [task-descriptors.md](task-descriptors.md).
+
+## What the linker does
+
+`ane::h13::linkConvChain` takes the per-layer programs that
+`encodeConvGeneric` (plus the relu fusion) already builds and relinks their
+tasks into one stream:
+
+- **Order and headers.** Tasks keep their layer order. Each task gets its
+  index in `header[0]`, the continuation bit after the first task and the end
+  bit on the last, `header[7]` pointing at the next task (0x100 aligned) and
+  the next task's size in `header[1]` bits 24:16. The header words are the
+  form the multi-task generic convolution already runs on the device: every
+  task keeps the DRAM source and destination bits (`header[6]` 0x30000800),
+  the end-of-stream event bits go on the last task only, and `header[8]` bit
+  23 (TBE) is set on every task with a successor.
+- **Intermediates in DRAM.** The first layer reads the program input
+  (channel 5) and the last writes the program output (channel 4). Every
+  intermediate goes through the scratch channel (3): the producer's write
+  selector and the consumer's read selector point at channel 3, and the
+  producer's tile-DMA destination base (`0x17804`) and the consumer's source
+  base (`0x13808`) both point at that intermediate's own region. Apple's own
+  decoded programs stage through channel 3 the same way (the boolean select
+  captures).
+- **A simple allocator.** Each intermediate gets its own tile-aligned region
+  and no region is reused, so no task ever writes a region that an earlier
+  task still reads. The only ordering the stream relies on is producer before
+  consumer, which the hardware gives us (see the bit-exact check below).
+  Every task's write span (`0x17804 + 0x17814`) and read span (`0x13814`) is
+  range-checked against its region. MobileNetV1 needs 17.9 MB of scratch.
+- **Constants.** Each layer's kernel section is appended to one constant
+  section and every task's 16 kernel-DMA offsets (`0x1f848..`) move by its
+  layer's base. The linker checks that the driver's kernel base (task length
+  rounded to 16 bytes) equals the ANEC constant offset (rounded to 64).
+
+The compiler front end accepts the schedule only for a graph that is one
+input, a straight chain of `conv` and `relu`, at least two convolutions and
+one result. Everything else is refused with `h13.linked-outside-envelope`.
+
+```sh
+mil-hwxc --target H13 --schedule linked --mil net.mil --model-root . --output build/net
+```
+
+## Stride 2 above 128 outputs
+
+The zero-skipping stride-2 kernel section is byte-proven only up to 8
+interleaved lanes, and one 16-lane program (128 to 256 at 56 to 28) hung the
+M1 Pro engine. A wider stride-2 1x1 layer now runs as output-channel tasks of
+128 channels each. Every task is the proven one-chunk 8-lane form (`ConvCfg`
+OCG 3) and writes its own slice of the output surface. No program ever
+carries a 16-lane stride-2 section.
+
+| Layer (bias + relu) | Tasks | p50 / busy (us) | within 1 ulp |
+| --- | ---: | ---: | ---: |
+| 1x1 s2 128->128 @56->28 | 1 | 95.0 / 83.9 | 97.2 % |
+| 1x1 s2 128->256 @56->28 | 2 | 147.9 / 142.6 | 97.2 % |
+| 1x1 s2 256->512 @28->14 | 4 | 188.2 / 183.3 | 96.0 % |
+| 1x1 s2 512->1024 @14->7 | 8 | 255.5 / 258.1 | 94.5 % |
+
+M1 Pro, 31/10/2026, `wedged` 0 after every run.
+
+## MobileNetV1 224 as one program
+
+`tools/h13-mobilenet/mobilenet.py` builds the network as a 28-layer chain.
+The ANE runs it in a mirrored frame: the host flips the image on both
+spatial axes and every 3x3 kernel likewise. TensorFlow's SAME padding at
+stride 2 samples odd input positions; in the mirrored frame those are the
+even positions, which is exactly what a symmetric-pad stride-1 layer followed
+by a stride-2 1x1 layer samples. So:
+
+- the stem (3x3 s2, 3 to 32) is a space-to-depth of the mirrored image (12
+  channels, zero-padded to 16) followed by a 3x3 s1 conv whose kernel holds
+  the stem taps in a 2x2 window;
+- each depthwise s2 layer runs at stride 1 and the stride moves onto the next
+  1x1 layer;
+- the classifier (1x1, 1024 to 1001, padded to 1024) runs on the ANE at 7x7,
+  before the average pool. Pooling commutes with it, so the host only averages
+  49 values per logit.
+
+On the host, in float64, this chain equals the TensorFlow-frame network to
+7e-16 (`mobilenet.tf_reference` against `chain_ref`).
+
+### Measured on the M1 Pro
+
+31/10/2026, T6000, kernel 7.3.0-aurora-fleet12d, default ANE clock (perf
+level 5, linux #684, is not in this kernel). Random He-scaled fp16 weights.
+Wall time includes the input and output copies unless marked exec only.
+
+| Form | Submits | p50 | p99 | inf/s | engine busy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 28 per-layer programs, host copy between layers | 28 | 4.82 ms | 4.93 ms | 208 | 2.99 ms |
+| one linked program (45 tasks) | 1 | 2.35 ms | 2.38 ms | 426 | 2.31 ms |
+| one linked program, exec only (50 runs) | 1 | 2.23 ms | | 449 | 2.21 ms |
+
+The linked output equals the per-layer output bit for bit (100 % of the
+1024x7x7 surface, and on every smaller chain tested: 2 to 16 layers at 8x8
+and 32x32, repeatable across runs). Linking halves the wall time: it removes
+27 submits (about 25 us each), the host copies, and about 0.7 ms of engine
+time per inference.
+
+Per-task cost inside a linked stream, from chains of identical layers: about
+7 us per extra 64->64 1x1 task at 8x8 and 12 us at 32x32, against 30 to 50 us
+per extra program when each layer is its own submit.
+
+### Where the 2.2 ms goes
+
+`tools/h13-mobilenet/prefixes.py` compiles every prefix of the chain, so the
+difference of busy time between prefixes is the cost of one layer inside the
+stream:
+
+| Layers | Busy (us) |
+| --- | ---: |
+| stem + first dw/pw pair at 112x112 | 273 |
+| dw 64 @112 (stride moved to the next layer) | 212 |
+| the 56x56 block (5 layers incl. the 2-task s2 layer) | 377 |
+| the 28x28 block (4 layers incl. the 4-task s2 layer) | 270 |
+| five dw/pw pairs at 14x14, then the dw before the last s2 | 536 |
+| s2 512->1024 (8 tasks), dw 1024, pw 1024 (4 tasks) | 368 |
+| classifier 1024->1024 at 7x7 (4 tasks) | 178 |
+
+Every layer is bound by DMA, not by the MAC array. A single-task layer moves
+its input and output at about 19 to 27 GB/s (for example the 1x1 128->128
+layer at 56x56 moves 1.8 MB in 70 us), and changing the tile height from the
+whole image down to 2 rows changes nothing (measured on the 1x1 128 @56 and
+32->64 @112 layers). The DRAM surfaces also pad rows to 64 bytes, which costs
+2.3x at 14x14 and 4.6x at 7x7. The weights add 8.4 MB per inference.
+
+## L2-resident intermediates: not working yet
+
+The next step is to keep an intermediate in L2 instead of DRAM. A first try
+used the decoded routing from t-3752 and the decoded load-then-reuse probes
+(producer: result config type 0 with the consumer's strides, Common `0x24`
+bit 14, no output DMA; consumer: source config `0x100`, input DMA off). The
+smallest case, two 64->64 1x1 layers at 8x8, timed out on the M1 Pro twice.
+The first time the driver recovered; the second time the engine wedged and
+needs a module reload or a reboot. That code is not in this branch. What is
+still missing is probably an inter-task dependency or a producer-side field
+that the decoded chains carry and the conv template does not; it needs a
+Daybreak answer before another device try.
+
+## Remaining gap to macOS and next steps
+
+macOS runs MobileNetV1 224 on the M4 Pro (H16) in 0.30 ms (measured). For
+H13 the macOS figure is about 1 ms, scaled from that, not measured. We are at
+2.2 to 2.35 ms at the default ANE clock. Joshua's perf-level results (+31 %
+on M1, 1.45x on M1 Max) would put us near 1.6 to 1.8 ms once linux #684 is in
+the kernel; that is an estimate.
+
+1. L2-resident intermediates for the 28x28, 14x14 and 7x7 layers. Those
+   layers take 1.46 ms of the 2.21 ms, and they are bound by activation and
+   weight DMA. Needs the missing dependency field first.
+2. Fewer kernel tasks: the 1 MiB per-task budget splits the 1024-wide layers
+   into 4 tasks; Apple keeps up to 1.18 MB in one task. With L2 input reuse
+   (the decoded two-task c1024 form) the extra tasks would also stop
+   re-reading their input.
+3. Run with perf level 5 and measure the real uplift.

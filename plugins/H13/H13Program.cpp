@@ -2582,6 +2582,21 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
     // Output-channel tasks: each task's kernel bytes must fit the budget.
     const std::uint64_t perChannel = (reduction + (shape.bias ? 1 : 0)) * 2;
     std::uint32_t slice = out.channels;
+    if (shape.stride == 2) {
+        // The zero-skipping stride-2 section is byte-proven only up to 8
+        // interleaved lanes, and a 16-lane program (128 -> 256 at 56 -> 28)
+        // hung the M1 Pro engine. A wider stride-2 layer therefore runs as
+        // output-channel tasks of 128 channels: each task is the proven
+        // one-chunk 8-lane form, writing its own slice of the output.
+        const auto chunks = laneChunks(out.channels, laneCap(in));
+        if (chunks.size() != 1 || chunks.front() > 8) {
+            if (out.channels % 128)
+                return "stride 2 above 128 output channels needs a multiple of 128 outputs";
+            slice = 128;
+        }
+        if (slice * perChannel > kGenericKernelBudget)
+            return "a strided 128-channel task exceeds the per-task kernel budget";
+    }
     if (plan.kind == ConvKind::Dense && slice * perChannel > kGenericKernelBudget) {
         if (shape.stride != 1)
             return "a strided convolution above the per-task kernel budget has no generic split";
@@ -2603,10 +2618,10 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
         // chunk): a 16-lane zero-skipping section (128 -> 256 at 56 -> 28)
         // hung the engine on the M1 Pro, matching the decoded record that the
         // 16-lane body count is two bytes off the model.
-        const auto chunks = laneChunks(out.channels, laneCap(in));
+        const auto chunks = laneChunks(slice, laneCap(in));
         if (chunks.size() != 1 || chunks.front() > 8)
             return "stride 2 is verified only up to 8 interleaved lanes "
-                   "(at most 128 output channels)";
+                   "(at most 128 output channels per task)";
     }
     if (plan.kind == ConvKind::Depthwise &&
         out.channels * perChannel > kGenericKernelBudget)
@@ -2844,6 +2859,206 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
     program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
     program.scratchAllocationBytes = 0;
     if (program.constants.empty()) program.constants.assign(64, 0);
+    return program;
+}
+
+namespace {
+
+/// One task of a program's linked stream: where it sits and how long it is.
+struct TaskSpan {
+    std::size_t offset;
+    std::size_t bytes;
+};
+
+std::vector<TaskSpan> taskSpans(const Program &program) {
+    std::vector<TaskSpan> spans;
+    std::size_t offset = 0, bytes = program.firstTaskBytes;
+    for (std::uint32_t index = 0; index != program.taskCount; ++index) {
+        if (bytes < 40 || offset + bytes > program.task.size())
+            throw std::invalid_argument(
+                "h13.linked-outside-envelope: layer task stream is truncated");
+        spans.push_back({offset, bytes});
+        if (index + 1 == program.taskCount) break;
+        const auto next = loadLE32(program.task, offset + 28);
+        const auto header1 = loadLE32(program.task, offset + 4);
+        if (next < offset + bytes || next % 4)
+            throw std::invalid_argument(
+                "h13.linked-outside-envelope: layer task link is invalid");
+        offset = next;
+        bytes = (((header1 >> 16) & 0x1ff) + 1) * sizeof(std::uint32_t);
+    }
+    return spans;
+}
+
+bool sameLayout(const TensorLayout &left, const TensorLayout &right) {
+    return left.nchw == right.nchw && left.elementSize == right.elementSize;
+}
+
+} // namespace
+
+Program linkConvChain(const std::vector<Program> &layers,
+                      std::vector<LinkedLayer> *layout) {
+    if (layers.size() < 2)
+        throw std::invalid_argument(
+            "h13.linked-outside-envelope: a linked program needs two or more layers");
+    constexpr std::array<std::uint32_t, 4> convChannels{5, 4, 6, 7};
+    for (std::size_t index = 0; index != layers.size(); ++index) {
+        const auto &layer = layers[index];
+        if (!layer.formulaBuilt || layer.inputs.size() != 1 ||
+            layer.inputs[0].index != 5 || layer.output.index != 4 ||
+            layer.taskSurfaceChannels != convChannels ||
+            layer.scratchAllocationBytes || !layer.taskCount)
+            throw std::invalid_argument(
+                "h13.linked-outside-envelope: every layer must be a one-input "
+                "formula-built convolution");
+        if (index && !sameLayout(layers[index - 1].output, layer.inputs[0]))
+            throw std::invalid_argument(
+                "h13.linked-outside-envelope: a layer's input surface differs "
+                "from the previous layer's output surface");
+    }
+
+    // Scratch arena: one region per intermediate, never reused, so the only
+    // ordering the stream relies on is producer before consumer.
+    std::vector<std::uint64_t> regions;
+    std::uint64_t arena = 0;
+    for (std::size_t index = 0; index + 1 != layers.size(); ++index) {
+        regions.push_back(arena);
+        arena += alignTile(layers[index].output.allocationBytes);
+    }
+    if (arena > 0xffffffffull)
+        throw std::invalid_argument(
+            "h13.linked-outside-envelope: the scratch arena exceeds the 32-bit "
+            "tile-DMA base");
+
+    Program program;
+    program.taskSurfaceChannels = convChannels;
+    program.inputs = {layers.front().inputs[0]};
+    program.output = layers.back().output;
+    program.formulaBuilt = true;
+    program.scratchAllocationBytes = arena;
+
+    std::uint32_t totalTasks = 0;
+    std::vector<std::vector<TaskSpan>> spans;
+    for (const auto &layer : layers) {
+        spans.push_back(taskSpans(layer));
+        totalTasks += layer.taskCount;
+    }
+    if (totalTasks > 0xffff)
+        throw std::invalid_argument(
+            "h13.linked-outside-envelope: more than 65535 tasks");
+
+    std::uint32_t global = 0;
+    std::size_t cursor = 0;
+    if (layout) layout->clear();
+    for (std::size_t index = 0; index != layers.size(); ++index) {
+        const auto &layer = layers[index];
+        const std::uint32_t constantBase =
+            static_cast<std::uint32_t>(program.constants.size());
+        const bool readsScratch = index != 0;
+        const bool writesScratch = index + 1 != layers.size();
+        if (layout)
+            layout->push_back({global, layer.taskCount, readsScratch,
+                               readsScratch ? regions[index - 1] : 0,
+                               writesScratch,
+                               writesScratch ? regions[index] : 0});
+        for (const auto &span : spans[index]) {
+            const bool last = global + 1 == totalTasks;
+            const std::size_t offset = cursor;
+            program.task.resize(offset + span.bytes, 0);
+            std::copy(layer.task.begin() + static_cast<std::ptrdiff_t>(span.offset),
+                      layer.task.begin() + static_cast<std::ptrdiff_t>(span.offset + span.bytes),
+                      program.task.begin() + static_cast<std::ptrdiff_t>(offset));
+            auto &task = program.task;
+            const std::size_t bytes = span.bytes;
+            // Linked-stream header, the form the generic multi-task
+            // convolution already runs on the M1 Pro: task id with the
+            // continuation bit after the first task and the end bit on the
+            // last; every task keeps the DRAM source and destination bits
+            // (header[6] 0x30000800) because every task loads its input
+            // surface from DRAM; the end-of-stream event bits go on the last
+            // task only; TBE (header[8] bit 23) on every task with a
+            // successor.
+            std::uint32_t word0 = global;
+            if (global) word0 |= 1u << 24;
+            if (last) word0 |= 1u << 24 | 1u << 25;
+            storeLE32(task, offset, word0);
+            const std::uint32_t exeCycles = loadLE32(task, offset + 4) & 0xffffu;
+            std::size_t nextOffset = 0, nextBytes = 0;
+            if (!last) {
+                nextOffset = alignUp(offset + bytes, 0x100);
+                const auto &nextSpan = index + 1 != layers.size() &&
+                    &span == &spans[index].back()
+                    ? spans[index + 1].front()
+                    : *(&span + 1);
+                nextBytes = nextSpan.bytes;
+                if (nextBytes % 4 || nextBytes / 4 - 1 > 0x1ff)
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: task exceeds the 9-bit NextSize field");
+            }
+            storeLE32(task, offset + 4,
+                      last ? exeCycles
+                           : exeCycles | ((static_cast<std::uint32_t>(nextBytes / 4) - 1) << 16));
+            storeLE32(task, offset + 8, 0x400u | 0x08u | (last ? 0x22u : 0u));
+            storeLE32(task, offset + 16, 0x00fff868u | (last ? 0x2u : 0u));
+            storeLE32(task, offset + 24, 0x30000800u | (last ? 0x9000u : 0u));
+            storeLE32(task, offset + 28, static_cast<std::uint32_t>(nextOffset));
+            std::uint32_t selectors = loadLE32(task, offset + 32);
+            if (((selectors >> 0) & 31) != 4 || !(selectors & (1u << 5)) ||
+                ((selectors >> 12) & 31) != 5 || !(selectors & (1u << 17)))
+                throw std::invalid_argument(
+                    "h13.linked-outside-envelope: layer task does not read "
+                    "channel 4 and write channel 5");
+            if (readsScratch) {
+                const std::uint64_t depth = loadLE32(task,
+                    h13RegisterOffset(task, offset, bytes, 0x13814));
+                if (loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x13808)) ||
+                    depth > layer.inputs[0].allocationBytes)
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: a task reads past its scratch region");
+                selectors = (selectors & ~31u) | 3u;
+                putRegister(task, offset, bytes, 0x13808,
+                            static_cast<std::uint32_t>(regions[index - 1]));
+            }
+            if (writesScratch) {
+                selectors = (selectors & ~(31u << 12)) | (3u << 12);
+                const auto word = h13RegisterOffset(task, offset, bytes, 0x17804);
+                const std::uint64_t first = loadLE32(task, word);
+                const std::uint64_t depth = loadLE32(task,
+                    h13RegisterOffset(task, offset, bytes, 0x17814));
+                if (first + depth > layer.output.allocationBytes)
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: a task writes past its scratch region");
+                storeLE32(task, word, static_cast<std::uint32_t>(first + regions[index]));
+            }
+            selectors = (selectors & ~(1u << 23)) | (last ? 0u : 1u << 23);
+            storeLE32(task, offset + 32, selectors);
+            for (std::uint32_t chunk = 0; chunk != 16; ++chunk) {
+                const auto word = h13RegisterOffset(task, offset, bytes,
+                                                    0x1f848 + 4 * chunk);
+                const std::uint64_t moved =
+                    static_cast<std::uint64_t>(loadLE32(task, word)) + constantBase;
+                if (moved > 0xffffffffull)
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: kernel offset overflows");
+                storeLE32(task, word, static_cast<std::uint32_t>(moved));
+            }
+            cursor = last ? offset + bytes : alignUp(offset + bytes, 0x100);
+            ++global;
+        }
+        program.constants.insert(program.constants.end(), layer.constants.begin(),
+                                 layer.constants.end());
+        program.constants.resize(alignUp(program.constants.size(), 64), 0);
+    }
+    program.taskCount = totalTasks;
+    program.firstTaskBytes = spans.front().front().bytes;
+    program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
+    // The driver places the kernel base at the task length rounded to 16
+    // bytes; the ANEC places constants at the 64-byte rounding. They agree
+    // only when the last task starts 64-byte aligned, which the 0x100 task
+    // placement guarantees; check it rather than assume it.
+    if (alignUp(program.task.size(), 0x10) != program.constantOffsetBytes)
+        throw std::logic_error(
+            "h13.linked-outside-envelope: kernel base would not match the constant offset");
     return program;
 }
 

@@ -365,6 +365,30 @@ void fuseElementwisePostOperation(Program &program, PostOperation operation);
 /// provides no task-DMA addressing for declared intermediate surfaces (reads
 /// are wired to the input channels, writes to the output channel or L2), so
 /// any multi-program relink would emit tasks that never exchange data.
+/// Where one layer of a linked convolution program reads and writes. A
+/// boundary surface is the program input (channel 5) or output (channel 4);
+/// an intermediate lives in the channel-3 scratch arena at `scratchOffset`.
+struct LinkedLayer {
+    std::uint32_t firstTask;
+    std::uint32_t taskCount;
+    bool readsScratch;
+    std::uint64_t readOffset;
+    bool writesScratch;
+    std::uint64_t writeOffset;
+};
+
+/// Links the per-layer programs of a straight-line convolution chain into
+/// one task stream, so the whole chain is one submit. Every layer must be a
+/// formula-built convolution (`encodeConvGeneric`, optionally relu-fused)
+/// whose input is the previous layer's output surface. Intermediates are
+/// DRAM-resident in the scratch channel (3): each gets its own
+/// non-overlapping, tile-aligned region, so no task ever writes a region an
+/// earlier task still reads. Kernel-DMA offsets move by each layer's place
+/// in the shared constant section. `layout`, when given, receives each
+/// layer's task span and scratch routing.
+Program linkConvChain(const std::vector<Program> &layers,
+                      std::vector<LinkedLayer> *layout = nullptr);
+
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);
 

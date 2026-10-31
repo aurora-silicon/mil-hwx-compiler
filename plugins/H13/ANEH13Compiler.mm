@@ -1513,7 +1513,11 @@ struct H13ConvPlan {
 /// MILHWXC_H13_CONV_GENERIC=1 routes every convolution the generic encoder
 /// accepts through it even when a decoded template exists, so the parity
 /// suite can hold the formulas against Apple's own words.
+/// The linked schedule sets this while it compiles: every layer of a linked
+/// program must be formula-built so the linker can reroute its surfaces.
+static BOOL gLinkedScheduleForcesGenericConv = NO;
 static BOOL forceGenericConv(void) {
+    if (gLinkedScheduleForcesGenericConv) return YES;
     const char *value = getenv("MILHWXC_H13_CONV_GENERIC");
     return value && value[0] == '1';
 }
@@ -2927,10 +2931,23 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
                                          diagnostics:diagnostics];
     if (![schedule isEqualToString:@"per-op"] &&
-        ![schedule isEqualToString:@"chain"])
+        ![schedule isEqualToString:@"chain"] &&
+        ![schedule isEqualToString:@"linked"])
         return reject(diagnostics,
-            @"H13 schedule must be 'per-op' or 'chain'", nil,
+            @"H13 schedule must be 'per-op', 'chain' or 'linked'", nil,
             @"h13.unsupported-schedule");
+    // `linked` compiles a straight-line convolution chain (each conv
+    // optionally followed by its relu) into one program of linked tasks:
+    // one submit for the whole chain, intermediates in the scratch channel.
+    const BOOL linkedSchedule = [schedule isEqualToString:@"linked"];
+    struct LinkedGenericScope {
+        BOOL previous;
+        explicit LinkedGenericScope(BOOL on)
+            : previous(gLinkedScheduleForcesGenericConv) {
+            if (on) gLinkedScheduleForcesGenericConv = YES;
+        }
+        ~LinkedGenericScope() { gLinkedScheduleForcesGenericConv = previous; }
+    } linkedScope(linkedSchedule);
     NSArray<MILToken *> *tokens = lexer.lexAllTokens;
     if (diagnostics.errorCount) return NO;
     MILParser *parser = [[MILParser alloc] initWithTokens:tokens
@@ -2998,6 +3015,34 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }
 
     BOOL chainSchedule = [schedule isEqualToString:@"chain"];
+    if (linkedSchedule) {
+        if (function.inputs.count != 1 || function.returnValues.count != 1)
+            return reject(diagnostics,
+                @"H13 linked scheduling needs one boundary input and one result",
+                sourceOperations[0], @"h13.linked-outside-envelope");
+        ANEGraphValue *current = function.inputs[0];
+        NSUInteger convolutions = 0;
+        for (ANEGraphOperation *candidate in sourceOperations) {
+            NSString *kind = candidate.operationName;
+            BOOL conv = [kind isEqualToString:@"conv"];
+            if ((!conv && ![kind isEqualToString:@"relu"]) ||
+                candidate.operands[@"x"].value != current)
+                return reject(diagnostics,
+                    @"H13 linked scheduling needs a straight-line chain of conv and relu operations",
+                    candidate, @"h13.linked-outside-envelope");
+            if (conv) ++convolutions;
+            if (![current isEqual:function.inputs[0]] &&
+                [function.returnValues containsObject:current])
+                return reject(diagnostics,
+                    @"H13 linked scheduling keeps intermediates internal; an intermediate is also a result",
+                    candidate, @"h13.linked-outside-envelope");
+            current = candidate.results[0];
+        }
+        if (convolutions < 2 || current != function.returnValues[0])
+            return reject(diagnostics,
+                @"H13 linked scheduling needs two or more convolutions ending in the function result",
+                sourceOperations[0], @"h13.linked-outside-envelope");
+    }
     if (chainSchedule) {
         if (sourceOperations.count < 2 || function.inputs.count > 2)
             return reject(diagnostics,
@@ -4316,9 +4361,77 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 [programRecords addObject:record];
                 [dispatchPlan addObject:@(programIndex)];
                 [payloads addObject:payload];
-                if (chainSchedule)
+                if (chainSchedule || linkedSchedule)
                     chainPrograms.push_back(std::move(program));
             }
+        }
+        if (linkedSchedule) {
+            if (chainPrograms.size() != programRecords.count ||
+                chainPrograms.size() < 2)
+                throw std::logic_error(
+                    "h13.linked-outside-envelope: linked program bookkeeping is inconsistent");
+            for (NSDictionary *record in programRecords)
+                if (![record[@"encoder"] isEqualToString:@"h13-generic-conv"])
+                    throw std::invalid_argument(
+                        "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
+            std::vector<ane::h13::LinkedLayer> layout;
+            ane::h13::Program combined =
+                ane::h13::linkConvChain(chainPrograms, &layout);
+            std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
+            NSData *combinedPayload = nil;
+            if (hwx) {
+                combinedPayload = encodeHWX(combined, bytes, error);
+                if (!combinedPayload) return NO;
+            } else {
+                combinedPayload = [NSData dataWithBytes:bytes.data()
+                                                 length:bytes.size()];
+            }
+            taskRecords = [NSMutableArray arrayWithCapacity:combined.taskCount];
+            NSMutableDictionary *regions = [NSMutableDictionary dictionary];
+            NSMutableArray *layers = [NSMutableArray array];
+            for (std::size_t index = 0; index != layout.size(); ++index) {
+                NSDictionary *record = programRecords[index];
+                NSString *result = [record[@"outputs"] firstObject][@"name"];
+                for (std::uint32_t task = 0; task != layout[index].taskCount; ++task)
+                    [taskRecords addObject:@{
+                        @"index": @(layout[index].firstTask + task),
+                        @"layer": @(index), @"operation": record[@"operation"]}];
+                [layers addObject:@{
+                    @"result": result, @"operation": record[@"operation"],
+                    @"firstTask": @(layout[index].firstTask),
+                    @"taskDescriptors": @(layout[index].taskCount)}];
+                if (layout[index].writesScratch) {
+                    regions[result] = @{
+                        @"offset": @(layout[index].writeOffset),
+                        @"bytes": [record[@"outputs"] firstObject][@"allocationBytes"],
+                        @"nchw": [record[@"outputs"] firstObject][@"nchw"]};
+                    [tensors removeObjectForKey:result];
+                    [intermediateNames removeObject:result];
+                    [intermediateStorageNames removeObject:result];
+                }
+            }
+            scratch = @{@"bytes": @(combined.scratchAllocationBytes),
+                        @"channel": @3, @"regions": regions};
+            NSDictionary *firstRecord = programRecords.firstObject;
+            NSDictionary *lastRecord = programRecords.lastObject;
+            NSString *file = [NSString stringWithFormat:@"program-0.%@", format];
+            NSDictionary *combinedRecord = @{
+                @"file": file, @"bytes": @(combinedPayload.length),
+                @"taskDescriptors": @(combined.taskCount),
+                @"encoder": @"h13-linked-conv", @"operation": @"linked",
+                @"inputs": firstRecord[@"inputs"], @"constantInputs": @{},
+                @"outputs": lastRecord[@"outputs"],
+                @"constantOffset": @(combined.constantOffsetBytes),
+                @"constantBytes": @(combined.constants.size()),
+                @"scratchBytes": @(combined.scratchAllocationBytes),
+                @"layers": layers,
+            };
+            [programRecords removeAllObjects];
+            [programRecords addObject:combinedRecord];
+            [payloads removeAllObjects];
+            [payloads addObject:combinedPayload];
+            [dispatchPlan removeAllObjects];
+            [dispatchPlan addObject:@0];
         }
         if (chainSchedule) {
             if (chainPrograms.size() != programRecords.count ||
@@ -4409,7 +4522,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     } catch (const std::exception &exception) {
         NSString *message = [NSString stringWithUTF8String:exception.what()];
         NSString *code = chainSchedule ? @"h13.chain-outside-envelope"
-                                       : @"h13.unsupported-program";
+            : linkedSchedule ? @"h13.linked-outside-envelope"
+                             : @"h13.unsupported-program";
         NSRange codeEnd = [message rangeOfString:@": "];
         if ([message hasPrefix:@"h13."] && codeEnd.location != NSNotFound &&
             codeEnd.location <= 48)
@@ -4547,8 +4661,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         @"intermediates": intermediateNames, @"tensors": tensors,
         @"physicalOutputs": physicalOutputs, @"logicalResults": logicalResults,
     } mutableCopy];
-    if (chainSchedule)
-        [manifest addEntriesFromDictionary:@{@"schedule": @"chain",
+    if (chainSchedule || linkedSchedule)
+        [manifest addEntriesFromDictionary:@{
+            @"schedule": linkedSchedule ? @"linked" : @"chain",
             @"tasks": taskRecords, @"scratch": scratch}];
     if (programRecords.count == 1)
         [manifest addEntriesFromDictionary:programRecords[0]];

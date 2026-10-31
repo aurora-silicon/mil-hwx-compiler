@@ -117,7 +117,8 @@ intermediates in L2 inside one program.
   refused. One such program (128 to 256 at 56 to 28) hung the M1 Pro engine.
   The driver's recovery could not clear it, so the engine needs a reboot. The
   decoded record already says this body count is two bytes off the model.
-  Splitting into 128-output tasks would avoid it, but that has not run.
+  Update: such layers now run as 128-output tasks of the proven 8-lane form,
+  verified on the M1 Pro (see [linked-programs.md](linked-programs.md)).
 - **3x3 stride 2, grouped other than depthwise, and channel counts that are
   not multiples of 16** are refused.
 - **The low half of `header[1]`** (a cost hint?) is copied from the template.

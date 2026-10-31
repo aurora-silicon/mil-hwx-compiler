@@ -12,6 +12,8 @@ fusion (docs/ane/fused-conv.md).
    program, and kernels over the per-task budget split into linked tasks.
 3. Fusion: conv followed by relu is one program with the NE clamp bit set.
 4. Refusals: shapes the generic encoder has not run on a device stay refused.
+   Stride 2 above 128 outputs runs as 128-channel tasks, never as a 16-lane
+   section (one of those hung the M1 Pro engine).
 """
 import json
 import os
@@ -188,6 +190,11 @@ COVERAGE = [
     ((1024, 7, 7, 1024, 3, 1, 1024, True), 1),
     ((512, 7, 7, 1024, 1, 1, 1, True), 2),
     ((1024, 7, 7, 1024, 1, 1, 1, True), 4),
+    # Stride 2 above 128 outputs: 128-channel tasks of the proven 8-lane form
+    # (M1 Pro, 31/10/2026: all three MobileNet shapes, wedged 0).
+    ((128, 56, 56, 256, 1, 2, 1, True), 2),
+    ((256, 28, 28, 512, 1, 2, 1, True), 4),
+    ((512, 14, 14, 1024, 1, 2, 1, True), 8),
 ]
 
 
@@ -263,7 +270,7 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-h13-generic-") as tmp:
 
     # Still refused: forms the generic encoder has not run on the device.
     for name, row in (
-            ("s2-16-lanes", (128, 56, 56, 256, 1, 2, 1, False)),
+            ("s2-not-128-multiple", (64, 16, 16, 320, 1, 2, 1, False)),
             ("s2-3x3", (64, 16, 16, 64, 3, 2, 1, False)),
             ("mixed-lanes", (64, 16, 16, 48, 1, 1, 1, False)),
             ("odd-channels", (24, 16, 16, 64, 1, 1, 1, False)),
