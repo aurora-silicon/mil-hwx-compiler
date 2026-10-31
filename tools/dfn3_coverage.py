@@ -243,9 +243,10 @@ def audit_graph(data, name, frames, compiler, output):
             directory = output / Path(name).stem / f'node-{index}'
             try:
                 row['probe'] = emit_probe(node, arrays, constants, directory)
-                row['compilations'] = [compile_probe(compiler, directory, target, schedule)
+                row['compilations'] = ([compile_probe(compiler, directory, target, schedule)
                     for target in ('H13', 'H14') for schedule in ('per-op', 'regions')]
-                row['status'] = 'fragment-probed'
+                    if compiler else [])
+                row['status'] = 'fragment-probed' if compiler else 'fragment-exported'
             except Unsupported as error:
                 row.update(status='lowering-required', diagnostic=str(error))
         rows.append(row)
@@ -257,7 +258,10 @@ def audit_graph(data, name, frames, compiler, output):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--df-model', type=Path, required=True)
-    p.add_argument('--compiler', type=Path, required=True)
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--compiler', type=Path)
+    mode.add_argument('--prepare-only', action='store_true',
+                      help='observe every node and export probes, without claiming compilation')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--frames', type=int, default=1)
     a = p.parse_args()
@@ -267,7 +271,8 @@ def main():
     if a.output.exists() and any(a.output.iterdir()): p.error('--output must be empty')
     a.output.mkdir(parents=True, exist_ok=True)
     report = {'schema': 'mil-hwxc.dfn3-coverage.v1', 'archive_sha256': sha(payload),
-        'compiler_sha256': sha(a.compiler.read_bytes()), 'frames': a.frames,
+        'compiler_sha256': sha(a.compiler.read_bytes()) if a.compiler else None,
+        'compiler_probes_run': bool(a.compiler), 'frames': a.frames,
         'shape_source': 'deterministic CPU ONNX sample; fixed S, not a streaming-state proof',
         'complete_native_graph': False, 'streaming_state_complete': False,
         'full_model_package_validated': False, 'device_execution': False,
@@ -279,11 +284,11 @@ def main():
             p.error('coverage.archive-members: expected exactly the three audited graphs')
         for member in members:
             report['graphs'].append(audit_graph(archive.extractfile(member).read(), member.name,
-                a.frames, a.compiler.resolve(), a.output))
+                a.frames, a.compiler.resolve() if a.compiler else None, a.output))
     report['probe_errors'] = sum(c['result'] == 'error' for g in report['graphs']
         for row in g['nodes'] for c in row.get('compilations', []))
     (a.output / 'coverage.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
-    print(json.dumps({'probe_errors': report['probe_errors'], 'graphs': [{k: g[k] for k in ('file', 'sha256', 'status_counts', 'op_counts')}
+    print(json.dumps({'compiler_probes_run': bool(a.compiler), 'probe_errors': report['probe_errors'], 'graphs': [{k: g[k] for k in ('file', 'sha256', 'status_counts', 'op_counts')}
                                 for g in report['graphs']], 'complete_native_graph': False}, indent=2))
 
 

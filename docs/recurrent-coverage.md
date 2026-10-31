@@ -87,6 +87,13 @@ as errors, not target coverage refusals, and make the audit fail.
 
 A successful cell or primitive probe does not establish graph-edge routing,
 sequence loops, temporal caches, graph import, DSP or a complete model package.
+`--prepare-only` replaces `--compiler` when only shape/provenance and MIL
+export checks are wanted. It records `compiler_probes_run: false`, a null
+compiler hash and `fragment-exported` rather than `fragment-probed`. The
+[preparation receipt](dfn3-preparation.json) is this mode at one frame. It
+accounts for all 375 nodes: 263 compile-time values, 62 exported probes and
+50 nodes requiring additional lowering. It contains no compilation result.
+
 The receipt explicitly records `complete_native_graph`,
 `streaming_state_complete` and `full_model_package_validated` as false.
 

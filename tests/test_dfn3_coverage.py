@@ -11,7 +11,7 @@ import onnx
 from onnx import TensorProto as T, helper as h, numpy_helper
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from dfn3_coverage import observe, emit_probe, Unsupported
+from dfn3_coverage import observe, emit_probe, audit_graph, Unsupported
 from h13_reference import evaluate
 
 
@@ -30,6 +30,20 @@ class CoverageTest(unittest.TestCase):
             self.assertEqual(values['shape'].tolist(), [1, frames, 4])
             self.assertEqual(values['y'].shape, (1, frames, 4))
             self.assertTrue(np.all(values['y'] == 0))
+
+    def test_preparation_never_claims_compilation(self):
+        node = h.make_node('Add', ['x', 'bias'], ['y'])
+        model = h.make_model(h.make_graph([node], 'probe',
+            [h.make_tensor_value_info('x', T.FLOAT, [1, 512])],
+            [h.make_tensor_value_info('y', T.FLOAT, [1, 512])],
+            [numpy_helper.from_array(np.zeros((1, 512), np.float32), 'bias')]),
+            opset_imports=[h.make_opsetid('', 14)], ir_version=10)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = audit_graph(model.SerializeToString(), 'synthetic.onnx', 1, None, Path(tmp))
+            self.assertEqual(len(result['nodes']), 1)
+            self.assertEqual(result['nodes'][0]['status'], 'fragment-exported')
+            self.assertEqual(result['nodes'][0]['compilations'], [])
+            self.assertTrue((Path(tmp) / 'synthetic/node-0/cell.mil').exists())
 
     def test_conv_padding_and_weights(self):
         # An asymmetric pad catches ONNX-to-MIL pad-order mistakes. Integer
