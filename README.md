@@ -27,7 +27,8 @@ The compiler does not guess.
 
 The Aurora fork's [change inventory](docs/aurora-compiler-status.md) separates
 the existing H16G backend and branch work from the added SPEC-r3 validation
-and spatial CPU references, including the remaining driver disagreement.
+and spatial CPU references. H16 bundles also emit [execute resource metadata](docs/h16-execute-resources.md), checked independently with
+`python3 tools/h16g_validate.py program-0.hwx --manifest manifest.json`.
 
 ## Supported targets
 
