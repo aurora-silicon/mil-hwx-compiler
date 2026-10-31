@@ -603,10 +603,10 @@ def load_package(directory, *, allow_h14=False, program_data=None):
         check_tensor(name, tensor)
     alias_names = {name for name, tensor in tensors.items() if 'aliasOf' in tensor}
     for name in alias_names:
-        target = tensors[name]['aliasOf']
-        require(target != name and target in tensors and 'aliasOf' not in tensors[target],
+        alias_target = tensors[name]['aliasOf']
+        require(alias_target != name and alias_target in tensors and 'aliasOf' not in tensors[alias_target],
                 'tensor aliasOf must name an underlying tensor')
-        require(tensors[name]['logicalBytes'] == tensors[target]['logicalBytes'],
+        require(tensors[name]['logicalBytes'] == tensors[alias_target]['logicalBytes'],
                 'tensor alias element count differs from its underlying tensor')
     intermediate_set = {name for name, tensor in tensors.items()
                         if tensor['role'] == 'intermediate'}

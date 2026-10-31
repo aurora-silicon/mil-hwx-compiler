@@ -207,6 +207,17 @@ class ResidentTests(unittest.TestCase):
         self.assertEqual(adapter.sent, [])
         self.assertEqual(adapter.freed, 1)
 
+    def test_h14_alias_metadata_keeps_task_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, dest, _, _ = package(root, 'H14')
+            path = dest / 'manifest.json'
+            metadata = json.loads(path.read_text())
+            metadata['tensors']['alias'] = dict(metadata['tensors']['y'], aliasOf='y')
+            path.write_text(json.dumps(metadata))
+            manifest, _ = inspect_anec.load_package(dest, allow_h14=True)
+            self.assertEqual(manifest['target'], 'H14')
+
     def test_h14_task_corruption_refused_before_load(self):
         for corruption in ('size', 'register'):
             with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as directory:
