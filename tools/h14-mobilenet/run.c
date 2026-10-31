@@ -10,8 +10,17 @@
 #include "ane.h"
 #include "ane_m2.h"
 
+/* Older libane builds (omarchy-ane before the caps query) lack this symbol;
+ * the weak declaration lets the runner link against them and skip the check,
+ * since ane_m2_init_ports refuses a non-ABI-2 device anyway. */
+extern int ane_query_caps(int device, uint32_t *abi, uint32_t *family) __attribute__((weak));
+
 static uint32_t le32(const unsigned char *p) {
     return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+static int cmpd(const void *a, const void *b) {
+    const double x = *(const double *)a, y = *(const double *)b;
+    return x < y ? -1 : x > y;
 }
 static double us(void) {
     struct timespec t;
@@ -29,7 +38,9 @@ int main(int argc, char **argv) {
     unsigned long device = argc > 5 ? strtoul(argv[5], &end, 10) : 0;
     if (device > 63 || (argc > 5 && *end)) return 64;
     uint32_t abi = 0, family = 0;
-    if (ane_query_caps((int)device, &abi, &family) || abi != 2) {
+    if (!ane_query_caps) {
+        abi = 2;
+    } else if (ane_query_caps((int)device, &abi, &family) || abi != 2) {
         fprintf(stderr, "requires an ABI-2 ANE device; abi=%u family=%u\n", abi, family);
         return 1;
     }
@@ -63,9 +74,18 @@ int main(int argc, char **argv) {
     struct ane_nn *nn = ane_m2_init_ports(argv[1], ports, scratch ? 3 : 2, (int)device);
     if (!nn) { free(x); free(y); return 1; }
     int rc = ane_m2_send(nn, x, 0);
+    double *t = calloc(repeat, sizeof(double));
+    if (!t) { ane_free(nn); free(x); free(y); return 1; }
     double start = us();
-    for (unsigned long i = 0; !rc && i < repeat; ++i) rc = ane_exec(nn);
+    for (unsigned long i = 0; !rc && i < repeat; ++i) {
+        const double a = us();
+        rc = ane_exec(nn);
+        t[i] = us() - a;
+    }
     double elapsed = us() - start;
+    qsort(t, repeat, sizeof(double), cmpd);
+    const double p50 = t[repeat / 2], p99 = t[(size_t)(repeat * 0.99)];
+    free(t);
     if (!rc) rc = ane_m2_read(nn, y, 0);
     if (!rc) {
         f = fopen(argv[3], "wb");
@@ -76,6 +96,8 @@ int main(int argc, char **argv) {
     ane_free(nn); free(x); free(y);
     if (rc) { fprintf(stderr, "ABI-2 run failed: %d\n", rc); return 1; }
     printf("{\"abi\":2,\"family\":%u,\"device\":%lu,\"repeat\":%lu,"
-           "\"warmup\":0,\"exec_us_per_pass\":%.3f}\n", family, device, repeat, elapsed / repeat);
+           "\"warmup\":0,\"exec_us_per_pass\":%.3f,\"p50_us\":%.3f,\"p99_us\":%.3f,"
+           "\"inf_per_s\":%.1f}\n", family, device, repeat, elapsed / repeat, p50, p99,
+           1e6 * repeat / elapsed);
     return 0;
 }
