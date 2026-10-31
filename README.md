@@ -155,6 +155,10 @@ The parity suites in `tests/` pin them.
 
 omarchy-ane provides the ANE kernel module and the libane library.
 `tools/h13_run_linux.py` checks a package against the MIL and dense fp16 inputs.
+The matching libane update also supports [resident H13/H14 graphs](docs/ane/resident-linux.md),
+with capability checks, explicit handle ownership and the existing CPU fallback.
+Initial H14 graph support accepts per-operation elementwise packages.
+
 Then it runs the package:
 
 ```sh

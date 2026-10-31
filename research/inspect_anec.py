@@ -7,9 +7,9 @@ import math
 import struct
 from pathlib import Path
 try:
-    from .h13_td import split_h13_tasks
+    from .h13_td import split_h13_tasks, split_h14_tasks, decode_task
 except ImportError:
-    from h13_td import split_h13_tasks
+    from h13_td import split_h13_tasks, split_h14_tasks, decode_task
 
 HEADER = struct.Struct('<QIIQQII32I192Q')
 HEADER_BYTES = 0x1000
@@ -314,7 +314,8 @@ def check_binding(binding, index, tiles, layouts, tensors):
     return physical_elements
 
 
-def validate_program(directory, program, tensors):
+def validate_program(directory, program, tensors, target="H13", program_data=None):
+    h14 = target == "H14"
     require(isinstance(program, dict), 'program must be an object')
     operation = program.get('operation')
     require(operation in ('chain', 'add', 'mul', 'maximum', 'minimum', 'sub',
@@ -344,6 +345,8 @@ def validate_program(directory, program, tensors):
     require(program['bytes'] == HEADER_BYTES + offset + constants,
             'incorrect bytes')
     data = local_file(directory, program.get('file'), program['bytes'])
+    if program_data is not None:
+        program_data[program['file']] = data
     require(len(data) == program['bytes'], 'ANEC file length differs from manifest')
     fields = HEADER.unpack_from(data)
     size, td_size, td_count, task_size, kernel_size, source_count, dest_count = fields[:7]
@@ -356,8 +359,32 @@ def validate_program(directory, program, tensors):
     require(not any(data[HEADER.size:HEADER_BYTES]) and
             not any(data[HEADER_BYTES + task_size:HEADER_BYTES + offset]),
             'nonzero reserved padding')
-    tasks = split_h13_tasks(data[HEADER_BYTES:HEADER_BYTES + task_size],
-                            td_size // 4 - 1, td_count)
+    if h14:
+        # Initial H14 graph support uses per-operation elementwise programs.
+        # Other encoders require their own shape/routing validation.
+        require(program.get('encoder') == 'h14-oracle-parity' and
+                operation in ('add', 'mul', 'maximum', 'minimum', 'sub',
+                              'real_div', 'relu', 'tanh', 'sigmoid', 'silu',
+                              'gelu', 'sqrt', 'rsqrt', 'exp', 'abs', 'leaky_relu'),
+                'H14 runner supports per-operation elementwise programs only')
+        require(program.get('firstTaskBytes') == td_size,
+                'H14 firstTaskBytes differs from ANEC header')
+        tasks = split_h14_tasks(data[HEADER_BYTES:HEADER_BYTES + task_size])
+        require(tasks and len(tasks[0]) == td_size,
+                'H14 first task size differs from ANEC header')
+        for task in tasks:
+            decoded = decode_task(task, 'h14')
+            require(not any(block['name'].startswith('unknown_')
+                            for block in decoded['blocks'].values()),
+                    'H14 register outside source-backed blocks')
+        require(program.get('scratchBytes', 0) == 0,
+                'H14 elementwise programs cannot allocate scratch')
+        require(all(item.get('dtype') == 'float16' and 'slice' not in item
+                    for item in inputs + outputs),
+                'H14 runner requires whole fp16 surfaces')
+    else:
+        tasks = split_h13_tasks(data[HEADER_BYTES:HEADER_BYTES + task_size],
+                                td_size // 4 - 1, td_count)
     require(len(tasks) == program['taskDescriptors'],
             'task list differs from ANEC task stream')
     if operation == 'chain':
@@ -367,8 +394,8 @@ def validate_program(directory, program, tensors):
     tiles, layouts = fields[7:39], fields[39:]
     require(tiles[0] == (size + TILE_BYTES - 1) // TILE_BYTES,
             'incorrect command allocation')
-    scratch = program.get('scratchBytes')
-    require('scratchBytes' in program and type(scratch) is int and
+    scratch = program.get('scratchBytes', 0) if h14 else program.get('scratchBytes')
+    require((h14 or 'scratchBytes' in program) and type(scratch) is int and
             0 <= scratch <= 0xffffffff * TILE_BYTES,
             'invalid scratchBytes allocation size')
     require(tiles[3] == (scratch + TILE_BYTES - 1) // TILE_BYTES,
@@ -388,7 +415,8 @@ def validate_program(directory, program, tensors):
                     'unexpected tensor channel')
             if index not in (0, 3):
                 require(tiles[index] == 0, 'unexpected channel allocation')
-    validate_task_headers(program, tasks, tiles)
+    if not h14:
+        validate_task_headers(program, tasks, tiles)
     encoder = program.get('encoder')
     require(isinstance(encoder, str) and encoder, 'program needs an encoder name')
     for index, item in enumerate(inputs, start=5):
@@ -542,14 +570,21 @@ def check_result_metadata(manifest, tensors, produced_outputs):
             'physicalOutputs must exactly match produced and referenced outputs')
 
 
-def load_package(directory):
+def load_package(directory, *, allow_h14=False, program_data=None):
     directory = Path(directory).resolve()
     manifest = json.loads(local_file(directory, 'manifest.json', 64 << 20))
     require(isinstance(manifest, dict), 'manifest must be an object')
-    require(manifest.get('schema') == 'mil-hwxc.h13-anec-package.v2',
-            'unsupported package schema')
-    require(manifest.get('target') == 'H13' and manifest.get('artifactFormat') == 'anec',
+    target = manifest.get('target')
+    h14 = allow_h14 and target == 'H14'
+    schema = 'mil-hwxc.h14-anec-package.v1' if h14 else 'mil-hwxc.h13-anec-package.v2'
+    require(manifest.get('schema') == schema, 'unsupported package schema')
+    require((target == 'H13' or h14) and manifest.get('artifactFormat') == 'anec',
+            'package must target supported H13/H14 ANEC' if allow_h14 else
             'package must target H13 ANEC')
+    if h14:
+        require('schedule' not in manifest, 'H14 chained programs are not supported')
+        require('physicalOutputs' not in manifest and 'logicalResults' not in manifest,
+                'H14 v1 does not carry H13 v2 result metadata')
     programs = manifest.get('programs')
     dispatch = manifest.get('dispatchPlan')
     intermediates = manifest.get('intermediates')
@@ -581,11 +616,11 @@ def load_package(directory):
     require(len(files) == len(programs) and len(set(files)) == len(files),
             'program files must be unique')
     if len(programs) == 1:
-        for key in PROGRAM_FIELDS:
+        for key in (*PROGRAM_FIELDS, *(['firstTaskBytes'] if h14 else [])):
             require(manifest.get(key) == programs[0].get(key),
                     f'legacy top-level {key} must match the sole program')
     else:
-        require(not any(key in manifest for key in PROGRAM_FIELDS),
+        require(not any(key in manifest for key in (*PROGRAM_FIELDS, *(['firstTaskBytes'] if h14 else []))),
                 'multi-program packages must omit legacy top-level program fields')
 
     chain = manifest.get('schedule') == 'chain'
@@ -621,7 +656,7 @@ def load_package(directory):
                 'scratch' not in manifest,
                 'per-operation packages must omit chain metadata')
 
-    allocations = [validate_program(directory, program, tensors) for program in programs]
+    allocations = [validate_program(directory, program, tensors, target, program_data) for program in programs]
     storage_intermediates = [] if chain else [
         name for name in intermediates if name not in alias_names]
     storage_outputs = [name for name, tensor in tensors.items()
@@ -706,7 +741,8 @@ def load_package(directory):
             require(cursor >= consumed_end or
                     consumed_end <= (cursor + 63) // 64 * 64,
                     'produced tensor consumer range exceeds producer writes')
-    check_result_metadata(manifest, tensors, output_tensors)
+    if not h14:
+        check_result_metadata(manifest, tensors, output_tensors)
     return manifest, allocations
 
 
