@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Numpy-free fp16 reference interpreter for the MIL subset accepted by H13.
+"""Numpy-free fp16 MIL reference, including CPU-only tiling, resize and concat references.
+
+Reference support does not expand any target's hardware encoding envelope.
 
 Matmul products accumulate in float32 and round once to fp16. H13 reductions
 larger than 512 elements use chunked-fp16 partial sums, so device results may
@@ -175,6 +177,12 @@ class Parser:
         return tuple(positional), named
 
     def parse_expression(self):
+        if self.peek("("):
+            self.take("(")
+            positional, named = self.parse_arguments(")")
+            if named:
+                raise ValueError("MIL tuple cannot contain named values")
+            return list(positional)
         if self.peek("["):
             self.take("[")
             positional, named = self.parse_arguments("]")
@@ -693,6 +701,120 @@ def _conv(value, weight, bias, strides, dilations, pad, pad_type, groups,
     return Tensor("fp16", expected, tuple(results))
 
 
+def conv_tiled(value, weight, bias=None, groups=1, patch_size=64):
+    """CPU-only halo reference for stride-one SAME square k1/k3 conv.
+
+    No programs are emitted. Accumulation order within each output is the
+    same as the dense reference, making seam and border comparisons exact.
+    """
+    from spatial_tiles import conv_tiles
+    value, weight = _tensor(value), _tensor(weight)
+    if len(value.shape) != 4 or value.shape[0] != 1 or len(weight.shape) != 4:
+        raise ValueError('spatial.rank-outside-reference-envelope')
+    _, channels, height, width = value.shape
+    outputs, _, kh, kw = weight.shape
+    if not all(map(math.isfinite, value.values)) or not all(map(math.isfinite, weight.values)):
+        raise ValueError('spatial.nonfinite-outside-reference-envelope')
+    if kh != kw:
+        raise ValueError('spatial.kernel-outside-reference-envelope')
+    tiles = conv_tiles(height, width, kh, patch_size)
+    result = [0.0] * (outputs * height * width)
+    for t in tiles:
+        patch = []
+        for c in range(channels):
+            for y in range(t.patch_size):
+                for x in range(t.patch_size):
+                    sy, sx = t.input_top + y, t.input_left + x
+                    patch.append(value.values[(c * height + sy) * width + sx]
+                                 if 0 <= sy < height and 0 <= sx < width else 0.0)
+        shape = (1, channels, t.patch_size, t.patch_size)
+        output = _conv(Tensor('fp16', shape, tuple(patch)), weight, bias,
+                       (1, 1), (1, 1), (0, 0, 0, 0), 'same', groups,
+                       MILType('fp16', (1, outputs, t.patch_size, t.patch_size)))
+        for c in range(outputs):
+            for y in range(t.output_height):
+                dst = (c * height + t.output_top + y) * width + t.output_left
+                src = (c * t.patch_size + t.crop_top + y) * t.patch_size + t.crop_left
+                result[dst:dst + t.output_width] = output.values[src:src + t.output_width]
+    return Tensor('fp16', (1, outputs, height, width), tuple(result))
+
+
+def _scalar(value):
+    if isinstance(value, Tensor) and value.shape == () and len(value.values) == 1:
+        return value.values[0]
+    return value
+
+
+def _concat(values, axis, interleave, result_type):
+    if interleave:
+        raise ValueError('reference.concat-interleave-outside-envelope')
+    if not isinstance(values, (list, tuple)) or len(values) < 2:
+        raise ValueError('reference.concat-inputs')
+    tensors = [_tensor(v) for v in values]
+    rank = len(tensors[0].shape)
+    if type(axis) is not int or not -rank <= axis < rank:
+        raise ValueError('reference.concat-axis')
+    axis %= rank
+    shape = list(tensors[0].shape)
+    shape[axis] = sum(t.shape[axis] for t in tensors if len(t.shape) == rank)
+    if any(t.dtype != 'fp16' or len(t.shape) != rank or
+           any(d != t.shape[i] for i, d in enumerate(shape) if i != axis) for t in tensors):
+        raise ValueError('reference.concat-shape')
+    if result_type.dtype != 'fp16' or tuple(shape) != result_type.shape:
+        raise ValueError('reference.concat-result-shape')
+    inner, outer = math.prod(shape[axis + 1:]), math.prod(shape[:axis])
+    result = []
+    for o in range(outer):
+        for t in tensors:
+            span = t.shape[axis] * inner
+            result.extend(t.values[o * span:(o + 1) * span])
+    return Tensor('fp16', tuple(shape), tuple(result))
+
+
+def _resize(value, height, width, mode, result_type):
+    value = _tensor(value)
+    if value.dtype != 'fp16' or len(value.shape) < 3 or len(value.shape) > 4:
+        raise ValueError('reference.resize-type')
+    if any(type(v) is not int or v <= 0 for v in (height, width)):
+        raise ValueError('reference.resize-size')
+    ih, iw = value.shape[-2:]
+    shape = value.shape[:-2] + (height, width)
+    if result_type.dtype != 'fp16' or result_type.shape != shape:
+        raise ValueError('reference.resize-result-shape')
+    if mode not in ('nearest', 'DEFAULT', 'STRICT_ALIGN_CORNERS', 'UNALIGN_CORNERS'):
+        raise ValueError('reference.resize-sampling-mode-outside-envelope')
+    if mode == 'nearest' and (height % ih or width % iw):
+        raise ValueError('reference.nearest-fractional-scale-outside-envelope')
+
+    def coordinate(i, n, out):
+        if mode == 'STRICT_ALIGN_CORNERS':
+            return i * (n - 1) / (out - 1) if out > 1 else 0.0
+        x = (i + .5) * n / out - .5 if mode == 'UNALIGN_CORNERS' else i * n / out
+        return min(n - 1, max(0.0, x))
+
+    result = []
+    for plane in range(math.prod(value.shape[:-2])):
+        for y in range(height):
+            fy = y * ih // height if mode == 'nearest' else coordinate(y, ih, height)
+            y0, y1 = math.floor(fy), min(ih - 1, math.floor(fy) + 1)
+            dy = fy - y0
+            for x in range(width):
+                fx = x * iw // width if mode == 'nearest' else coordinate(x, iw, width)
+                x0, x1 = math.floor(fx), min(iw - 1, math.floor(fx) + 1)
+
+                def sample(sy, sx):
+                    return value.values[(plane * ih + sy) * iw + sx]
+
+                if mode == 'nearest':
+                    result.append(sample(y0, x0))
+                else:
+                    dx = fx - x0
+                    a = fp32(sample(y0, x0) * (1 - dx) + sample(y0, x1) * dx)
+                    b = fp32(sample(y1, x0) * (1 - dx) + sample(y1, x1) * dx)
+                    result.append(fp16(fp32(a * (1 - dy) + b * dy)))
+    return Tensor('fp16', shape, tuple(result))
+
+
 def _execute(operation, environment, model_root):
     arguments = {name: _resolve(value, environment, model_root)
                  for name, value in operation.arguments.items()}
@@ -710,6 +832,31 @@ def _execute(operation, environment, model_root):
         return _binary(name, arguments["x"], arguments["y"], operation.result_type)
     if name == "relu":
         return _binary("maximum", arguments["x"], 0.0, operation.result_type)
+    if name == 'concat':
+        return _concat(arguments['values'], _scalar(arguments['axis']),
+                       _scalar(arguments.get('interleave', False)), operation.result_type)
+    if name in ('upsample_nearest_neighbor', 'upsample_bilinear', 'resize_nearest_neighbor', 'resize_bilinear'):
+        value = _tensor(arguments['x'])
+        if name.startswith('upsample'):
+            factors = (_scalar(arguments.get('scale_factor_height', 1)),
+                       _scalar(arguments.get('scale_factor_width', 1)))
+            if any(not math.isfinite(v) or v <= 0 for v in factors):
+                raise ValueError('reference.resize-scale')
+            if 'nearest' in name and any(int(v) != v for v in factors):
+                raise ValueError('reference.nearest-fractional-scale-outside-envelope')
+            height, width = (math.floor(n * f) for n, f in zip(value.shape[-2:], factors))
+            align = _scalar(arguments.get('align_corners', True))
+            mode = 'STRICT_ALIGN_CORNERS' if align else 'UNALIGN_CORNERS'
+            if 'half_pixel_centers' in arguments:
+                half = bool(_scalar(arguments['half_pixel_centers']))
+                if align and half:
+                    raise ValueError('reference.resize-coordinate-conflict')
+                if not align and not half:
+                    mode = 'DEFAULT'
+        else:
+            height, width = _scalar(arguments['target_size_height']), _scalar(arguments['target_size_width'])
+            mode = _scalar(arguments.get('sampling_mode', 'DEFAULT'))
+        return _resize(value, height, width, 'nearest' if 'nearest' in name else mode, operation.result_type)
     if name == "clip":
         lower = _binary("maximum", arguments["x"], arguments["alpha"], operation.result_type)
         return _binary("minimum", lower, arguments["beta"], operation.result_type)

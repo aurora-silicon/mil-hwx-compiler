@@ -78,6 +78,14 @@ static uint32_t elementCode(ANEElementType type) {
     if(type==ANEElementTypeFP16)return 5; if(type==ANEElementTypeInt8)return 2;
     if(type==ANEElementTypeFP32)return 6; return 0;
 }
+static BOOL descriptorNameValid(NSString *value) {
+    NSData *bytes = [value dataUsingEncoding:NSASCIIStringEncoding];
+    if (!bytes.length) return NO;
+    const uint8_t *p = (const uint8_t *)bytes.bytes;
+    for (NSUInteger i = 0; i < bytes.length; ++i)
+        if (p[i] < 0x21 || p[i] > 0x7e) return NO;
+    return YES;
+}
 static void shapeDimensions(NSArray<NSNumber *> *s, NSUInteger *n,
                             NSUInteger *c, NSUInteger *h, NSUInteger *w) {
     *n = 1; *c = 1; *h = 1; *w = 1;
@@ -424,6 +432,55 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
                       kernelRelocationOffsets:(NSArray<NSNumber *> *)kernelRelocationOffsets
                                  programInfo:(HWXObjectProgramInfo *)programInfo
                                        error:(NSError **)error {
+    if (architecture == HWXObjectArchitectureH16G) {
+        // A short reference has eight bytes including its NUL. Keep semantic
+        // tensor symbols intact and give longer MIL identifiers a local name.
+        // This does not affect the pinned owner fixture's x/z/y identities.
+        NSMutableSet<NSString *> *symbols = [NSMutableSet set];
+        NSMutableSet<NSString *> *shortNames = [NSMutableSet set];
+        for (HWXObjectBinding *binding in bindings) {
+            BOOL valid = descriptorNameValid(binding.symbol) &&
+                descriptorNameValid(binding.shortName) &&
+                ![symbols containsObject:binding.symbol] &&
+                ![shortNames containsObject:binding.shortName] &&
+                (binding.role == HWXObjectBindingRoleInput ||
+                 binding.role == HWXObjectBindingRoleOutput);
+            for (NSNumber *dimension in binding.shape)
+                valid = valid && dimension.longLongValue > 0 &&
+                    dimension.unsignedLongLongValue <= UINT32_MAX;
+            if (!valid) {
+                if (error) *error = [NSError errorWithDomain:HWXObjectWriterErrorDomain
+                    code:1 userInfo:@{NSLocalizedDescriptionKey:
+                        @"h16g.invalid-binding-identity: unique printable names, valid directions and positive u32 dimensions required"}];
+                return nil;
+            }
+            [symbols addObject:binding.symbol];
+            [shortNames addObject:binding.shortName];
+        }
+        NSMutableArray<HWXObjectBinding *> *normalized = [NSMutableArray array];
+        NSUInteger nameIndex = 0;
+        for (HWXObjectBinding *binding in bindings) {
+            NSString *shortName = binding.shortName;
+            if ([shortName lengthOfBytesUsingEncoding:NSASCIIStringEncoding] > 7) {
+                do {
+                    shortName = [NSString stringWithFormat:@"_io%lu", (unsigned long)nameIndex++];
+                } while ([shortNames containsObject:shortName]);
+                [shortNames addObject:shortName];
+            }
+            // SPEC-r3 +0x70/+0x80 describe one batch span, not the backing
+            // allocation. Preserve allocation padding independently.
+            HWXObjectBinding *copy = [[HWXObjectBinding alloc]
+                initWithSymbol:binding.symbol shortName:shortName role:binding.role
+                elementType:binding.elementType shape:binding.shape
+                rowStrideBytes:binding.rowStrideBytes
+                planeStrideBytes:binding.planeStrideBytes
+                batchStrideBytes:binding.batchStrideBytes
+                storageByteLength:binding.batchStrideBytes];
+            copy.allocationByteLength = binding.allocationByteLength;
+            [normalized addObject:copy];
+        }
+        bindings = normalized;
+    }
     NSMutableArray<HWXObjectBinding *> *inputs = [NSMutableArray array];
     NSMutableArray<HWXObjectBinding *> *outputs = [NSMutableArray array];
     for (HWXObjectBinding *binding in bindings) {
@@ -480,6 +537,7 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
     }
     BOOL relocationsValid = (textConstants ? hasConstants : hasKernel) ||
         kernelRelocationOffsets.count == 0;
+    NSMutableSet<NSNumber *> *relocationSites = [NSMutableSet set];
     for (NSNumber *offset in kernelRelocationOffsets) {
         NSUInteger value = offset.unsignedIntegerValue;
         relocationsValid = relocationsValid &&
@@ -487,6 +545,11 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
             value % 4 == 0 &&
             value <= taskDescriptor.length &&
             sizeof(uint32_t) <= taskDescriptor.length - value;
+        if (architecture == HWXObjectArchitectureH16G) {
+            relocationsValid = relocationsValid &&
+                ![relocationSites containsObject:@(value)];
+            [relocationSites addObject:@(value)];
+        }
         if (relocationsValid) {
             uint32_t addend = 0;
             [taskDescriptor getBytes:&addend
@@ -517,6 +580,13 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
     // covers that decoded maximum.
     else if (taskDescriptor.length == 0 || taskDescriptor.length > 0x60000)
         rejection = @"writer requires a nonempty task descriptor of at most 0x60000 bytes";
+    else if (architecture == HWXObjectArchitectureH16G &&
+             (taskDescriptor.length % 4 || programInfo.taskCount > UINT32_MAX ||
+              programInfo.recordCount > UINT32_MAX ||
+              programInfo.scratchByteLength > UINT32_MAX ||
+              (programInfo.firstTaskByteLength &&
+               programInfo.firstTaskByteLength != taskDescriptor.length)))
+        rejection = @"h16g.invalid-program-width: H16 word count covers the complete stream and descriptor fields must fit u32";
     // Apple keeps a whole matmul weight in one program's __TEXT/__const: the
     // largest decoded section is 134,217,728 bytes, for [512,8192] x
     // const[8192,8192]. The cap is twice that.
