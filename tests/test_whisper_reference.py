@@ -238,17 +238,16 @@ class ExactMovementTests(unittest.TestCase):
                 inverse = tuple(perm.index(n) for n in range(len(perm)))
                 restored = ref._transpose(y, inverse, ref.MILType('int32', shape))
                 self.assertEqual(restored.values, x.values)
-                # One-way coordinates catch a pair of symmetric wrong inverses.
-                for index in (0, 1, len(y.values)//2+65, len(y.values)-1):
-                    remaining, coords = index, []
-                    for size in reversed(out_shape):
-                        remaining, coordinate = divmod(remaining, size)
-                        coords.insert(0, coordinate)
-                    source_coords = [coords[perm.index(n)] for n in range(len(shape))]
-                    source = 0
-                    for size, coordinate in zip(shape, source_coords):
-                        source = source*size + coordinate
-                    self.assertEqual(y.values[index], source)
+                # Independent nested-loop index maps check every one-way
+                # position, so a symmetric wrong pair cannot pass a roundtrip.
+                if len(shape) == 3:
+                    expected = tuple(channel*1500 + token
+                                     for token in range(1500) for channel in range(d))
+                else:
+                    expected = tuple((token*h + head)*64 + lane
+                                     for head in range(h) for token in range(1500) for lane in range(64))
+                self.assertEqual(y.values, expected)
+
 
 
 if __name__ == '__main__':
