@@ -617,9 +617,49 @@ def load_package(directory):
                     region['offset'] + region['bytes'] <= scratch_bytes,
                     'chain scratch region exceeds its allocation')
     else:
-        require('schedule' not in manifest and 'tasks' not in manifest and
-                'scratch' not in manifest,
+        require(manifest.get('schedule') in (None, 'regions') and
+                'tasks' not in manifest and 'scratch' not in manifest,
                 'per-operation packages must omit chain metadata')
+        if manifest.get('schedule') == 'regions':
+            regions = manifest.get('regions')
+            require(isinstance(regions, list), 'regions must be an array')
+            seen_programs = set()
+            seen_values = set()
+            for region in regions:
+                require(isinstance(region, dict) and
+                        set(region) == {'program', 'operations', 'postOperation'} and
+                        region['postOperation'] == 'relu', 'unsupported region record')
+                index = region['program']
+                names = region['operations']
+                require(type(index) is int and 0 <= index < len(programs) and
+                        index not in seen_programs, 'invalid region program index')
+                require(isinstance(names, list) and len(names) == 2 and
+                        all(isinstance(name, str) and name for name in names) and
+                        names[0] != names[1] and not seen_values.intersection(names),
+                        'invalid region value names')
+                program = programs[index]
+                require(names[0] not in tensors and len(program['outputs']) == 1 and
+                        names[1] == program['outputs'][0]['name'],
+                        'region output differs from its program')
+                require((program['operation'] in ('add', 'mul') and
+                         program['encoder'] == 'h13-oracle-parity') or
+                        (program['operation'] == 'matmul' and
+                         program['encoder'] == PARITY_MATVEC),
+                        'region producer is outside the decoded epilogue envelope')
+                data = local_file(directory, program['file'], program['bytes'])
+                _, first_words, count, stream_bytes = struct.unpack_from('<QIIQ', data)
+                tasks = split_h13_tasks(data[HEADER_BYTES:HEADER_BYTES + stream_bytes],
+                                        first_words // 4 - 1, count)
+                registers = [h13_task_registers(task) for task in tasks]
+                address, expected, expected_tasks = ((0x0c804, 0x00111c00, 2)
+                    if program['operation'] == 'matmul' else (0x08800, 0x00080020, 1))
+                require(len(tasks) == expected_tasks and
+                        registers[-1].get(address) == expected,
+                        'region program does not carry the decoded ReLU epilogue')
+                seen_programs.add(index)
+                seen_values.update(names)
+        else:
+            require('regions' not in manifest, 'regions require the regions schedule')
 
     allocations = [validate_program(directory, program, tensors) for program in programs]
     storage_intermediates = [] if chain else [

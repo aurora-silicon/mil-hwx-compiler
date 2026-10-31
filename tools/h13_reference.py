@@ -656,15 +656,26 @@ def _conv(value, weight, bias, strides, dilations, pad, pad_type, groups,
         raise ValueError("conv requires a [Cout, Cin/groups, kh, kw] weight")
     if any(dilation != 1 for dilation in dilations):
         raise ValueError("conv reference covers unit dilations")
-    if any(amount != 0 for amount in pad):
-        raise ValueError("conv reference covers zero explicit padding")
+    if len(strides) != 2 or any(type(s) is not int or s <= 0 for s in strides):
+        raise ValueError("conv requires two positive integer strides")
+    if len(pad) != 4 or any(type(p) is not int or p < 0 for p in pad):
+        raise ValueError("conv requires four nonnegative integer pad amounts")
+    if pad_type != "custom" and any(pad):
+        raise ValueError("conv explicit padding requires custom pad_type")
     _, channels, height, width = value.shape
     outputs, group_channels, kernel_height, kernel_width = weight.shape
     if groups < 1 or channels % groups or outputs % groups or \
             group_channels != channels // groups:
         raise ValueError("conv groups must divide both channel counts")
-    top, out_height = _conv_padding(height, kernel_height, strides[0], pad_type)
-    left, out_width = _conv_padding(width, kernel_width, strides[1], pad_type)
+    if pad_type == "custom":
+        top, bottom, left, right = pad
+        out_height = (height + top + bottom - kernel_height) // strides[0] + 1
+        out_width = (width + left + right - kernel_width) // strides[1] + 1
+        if out_height <= 0 or out_width <= 0:
+            raise ValueError("conv kernel does not fit the custom-padded input")
+    else:
+        top, out_height = _conv_padding(height, kernel_height, strides[0], pad_type)
+        left, out_width = _conv_padding(width, kernel_width, strides[1], pad_type)
     expected = (1, outputs, out_height, out_width)
     if tuple(result_type.shape) != expected:
         raise ValueError("conv result shape differs from its declaration")

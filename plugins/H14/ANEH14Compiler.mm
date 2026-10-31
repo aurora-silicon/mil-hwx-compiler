@@ -2,6 +2,7 @@
 
 #import "ANEBlobResolver.h"
 #import "ANEGraphVerifier.h"
+#import "ANEReluRegions.h"
 #import "MILLexer.h"
 #import "MILGraphImporter.h"
 #import "MILParser.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <stdexcept>
 
 static BOOL reject(ANEDiagnosticEngine *diagnostics, NSString *message,
                    ANEGraphOperation *operation = nil,
@@ -386,7 +388,9 @@ static BOOL scalarOperation(ANEGraphOperation *operation, NSString *name,
 static BOOL expScaledChainPlan(ANEGraphFunction *function,
                                NSArray<ANEGraphOperation *> *operations,
                                std::uint32_t *channels) {
-    if (operations.count != 5 || function.inputs.count != 1) return NO;
+    if (operations.count != 5 || function.inputs.count != 1 ||
+        function.returnValues.count != 1 ||
+        function.returnValues[0] != operations.lastObject.results[0]) return NO;
     ANEGraphValue *x = function.inputs[0];
     ane::h14::ElementwiseShape shape{};
     if (!elementwiseShape(x, &shape) || shape.height != 1 || shape.width != 1)
@@ -817,9 +821,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         return NO;
     }
     if (![schedule isEqualToString:@"per-op"] &&
-        (!h14 || ![schedule isEqualToString:@"chain"]))
+        (!h14 || (![schedule isEqualToString:@"chain"] &&
+                  ![schedule isEqualToString:@"regions"])))
         return reject(diagnostics, h14
-            ? @"H14 schedule must be 'per-op' or 'chain'"
+            ? @"H14 schedule must be 'per-op', 'chain', or 'regions'"
             : [NSString stringWithFormat:@"%@ schedule must be 'per-op'",
                   target.name], nil, code(target, @"unsupported-schedule"));
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
@@ -852,14 +857,29 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     BOOL chain = sourceOperations.count > 1;
     BOOL chainSchedule = [schedule isEqualToString:@"chain"];
     ANEGraphOperation *lastOperation = sourceOperations.lastObject;
-    if (function.returnValues.count != 1 ||
-        function.returnValues[0] != lastOperation.results[0])
-        return reject(diagnostics, [NSString stringWithFormat:chain
-                ? @"%@ chains must return only the last operation result"
-                : @"%@ requires one operation with its result returned",
-                target.name],
-            lastOperation, chain ? code(target, @"unsupported-chain")
-                                 : unsupported);
+    // Package results are independent program outputs, not additional DMA
+    // destinations in one task. Preserve return order, including duplicates.
+    NSMutableSet<NSString *> *returnedNames = [NSMutableSet set];
+    if (h14) {
+        if (!function.returnValues.count)
+            return reject(diagnostics, @"H14 requires at least one function result",
+                          lastOperation, unsupported);
+        for (ANEGraphValue *value in function.returnValues) {
+            NSUInteger elements = 0;
+            if (!tensorElementCount(value, &elements) || elements > NSUIntegerMax / 2 ||
+                ![sourceOperations containsObject:value.producer])
+                return reject(diagnostics,
+                    @"H14 results must be fp16 tensors produced by encoded operations",
+                    value.producer ?: lastOperation, @"h14.unsupported-logical-result-storage");
+            [returnedNames addObject:value.name];
+        }
+    }
+    if ((!h14 || chainSchedule) &&
+        (function.returnValues.count != 1 ||
+         function.returnValues[0] != lastOperation.results[0]))
+        return reject(diagnostics, [NSString stringWithFormat:
+            @"%@ chain scheduling requires only the last operation result", target.name],
+            lastOperation, chain ? code(target, @"unsupported-chain") : unsupported);
     NSMutableSet<NSString *> *inputNames = [NSMutableSet set];
     for (ANEGraphValue *input in function.inputs) {
         [inputNames addObject:input.name];
@@ -872,9 +892,9 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
                 @"%@ function inputs must all be used", target.name],
                 sourceOperations[0], unsupported);
     }
-    for (NSUInteger index = 0; index + 1 < sourceOperations.count; ++index) {
+    for (NSUInteger index = 0; index < sourceOperations.count; ++index) {
         ANEGraphValue *value = sourceOperations[index].results[0];
-        BOOL used = NO;
+        BOOL used = [function.returnValues containsObject:value];
         for (NSUInteger consumer = index + 1; consumer < sourceOperations.count;
              ++consumer)
             for (ANEGraphArgument *operand in
@@ -982,7 +1002,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     }
 
 
+    NSMutableSet<NSString *> *regionConsumers = [NSMutableSet set];
+    NSMutableArray<NSDictionary *> *regions = [NSMutableArray array];
     for (ANEGraphOperation *operation in expChain ? @[] : sourceOperations) {
+        if ([regionConsumers containsObject:operation.results[0].name]) continue;
         NSString *name = operation.operationName;
         if (chainSchedule && operation == lastOperation) {
             ANEGraphValue *value = operation.operands[@"x"].value;
@@ -1086,6 +1109,29 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             return reject(diagnostics, [NSString stringWithFormat:
                 @"%@ encoder returned unexpected inputs", target.name],
                 operation, unsupported);
+        ANEGraphOperation *reluConsumer = nil;
+        ANEGraphValue *outputValue = operation.results[0];
+        if ([schedule isEqualToString:@"regions"] &&
+            (matvec || (!normalization && !convolutionProgram && !plan.unary))) {
+            ANEGraphOperation *candidate = ANEReluRegionConsumer(
+                sourceOperations, operation, returnedNames);
+            if (candidate) {
+                // Probe a copy. Unsupported epilogues leave the per-op route.
+                auto fused = program;
+                try {
+                    if (matvec)
+                        ane::h14::fuseMatmulPostOperation(fused, ane::h14::PostOperation::Relu);
+                    else
+                        ane::h14::fuseElementwisePostOperation(fused, ane::h14::PostOperation::Relu);
+                    program = std::move(fused);
+                    reluConsumer = candidate;
+                    outputValue = candidate.results[0];
+                    [regionConsumers addObject:outputValue.name];
+                } catch (const std::invalid_argument &) {
+                    // No decoded epilogue for this otherwise legal program.
+                }
+            }
+        }
         NSData *payload = nil;
         try {
             if (hwx) {
@@ -1093,7 +1139,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
                 [names addObject:operation.operands[@"x"].value.name];
                 if (inputCount == 2)
                     [names addObject:operation.operands[@"y"].value.name];
-                [names addObject:operation.results[0].name];
+                [names addObject:outputValue.name];
                 payload = encodeHWX(program, target.architecture, names, error);
                 if (!payload) return NO;
             } else {
@@ -1115,20 +1161,22 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             ANEGraphValue *value = inputValues[index];
             NSMutableDictionary *item = [binding(value, program.inputs[index])
                 mutableCopy];
-            if (![inputNames containsObject:value.name])
+            if (![inputNames containsObject:value.name] &&
+                ![returnedNames containsObject:value.name])
                 item[@"role"] = @"intermediate";
             [inputRecords addObject:item];
         }
-        BOOL final = operation == lastOperation;
+        BOOL final = h14 ? [returnedNames containsObject:outputValue.name]
+                         : operation == lastOperation;
         NSMutableDictionary *outputRecord =
-            [binding(operation.results[0], program.output) mutableCopy];
+            [binding(outputValue, program.output) mutableCopy];
         NSString *outputRole = final ? @"output" : @"intermediate";
         if (!final) {
             outputRecord[@"role"] = @"intermediate";
-            [intermediates addObject:operation.results[0].name];
+            [intermediates addObject:outputValue.name];
         }
-        tensors[operation.results[0].name] = @{@"shape": operation.results[0].type.shape,
-            @"logicalBytes": @(logicalBytes(operation.results[0])), @"role": outputRole};
+        tensors[outputValue.name] = @{@"shape": outputValue.type.shape,
+            @"logicalBytes": @(logicalBytes(outputValue)), @"role": outputRole};
         NSUInteger programIndex = programRecords.count;
         NSDictionary *record = @{
             @"file": [NSString stringWithFormat:@"program-%lu.%@",
@@ -1144,6 +1192,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             @"constantBytes": @(program.constants.size()),
             @"firstTaskBytes": @(program.firstTaskBytes),
         };
+        if (reluConsumer)
+            [regions addObject:@{@"program": @(programIndex),
+                @"operations": @[operation.results[0].name, outputValue.name],
+                @"postOperation": @"relu"}];
         [programRecords addObject:record];
         [payloads addObject:payload];
         [dispatchPlan addObject:@(programIndex)];
@@ -1260,6 +1312,34 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         @"programs": programRecords, @"dispatchPlan": dispatchPlan,
         @"intermediates": intermediates, @"tensors": tensors,
     } mutableCopy];
+    if (h14) {
+        NSMutableArray<NSDictionary *> *physicalOutputs = [NSMutableArray array];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        NSMutableArray<NSDictionary *> *logicalResults = [NSMutableArray array];
+        for (ANEGraphValue *value in function.returnValues) {
+            if (!tensors[value.name] ||
+                ![tensors[value.name][@"role"] isEqualToString:@"output"])
+                return reject(diagnostics, @"H14 result has no encoded output storage",
+                    value.producer, @"h14.unsupported-logical-result-storage");
+            if (![seen containsObject:value.name]) {
+                [physicalOutputs addObject:@{@"tensor": value.name,
+                    @"dtype": @"float16", @"shape": value.type.shape,
+                    @"logicalBytes": @(logicalBytes(value))}];
+                [seen addObject:value.name];
+            }
+            [logicalResults addObject:@{@"name": value.name, @"dtype": @"float16",
+                @"shape": value.type.shape, @"conversion": @"identity",
+                @"physical": @{@"tensor": value.name, @"elementOffset": @0,
+                    @"elementCount": @(logicalBytes(value) / 2)}}];
+        }
+        manifest[@"schema"] = @"mil-hwxc.h14-anec-package.v2";
+        manifest[@"physicalOutputs"] = physicalOutputs;
+        manifest[@"logicalResults"] = logicalResults;
+    }
+    if ([schedule isEqualToString:@"regions"]) {
+        manifest[@"schedule"] = @"regions";
+        manifest[@"regions"] = regions;
+    }
     if (chainSchedule)
         [manifest addEntriesFromDictionary:@{@"schedule": @"chain",
             @"tasks": taskRecords, @"scratch": scratch}];

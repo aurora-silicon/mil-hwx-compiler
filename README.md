@@ -115,7 +115,7 @@ H16G is the default target, so the flag is optional there.
 ```text
 usage: mil-hwxc --mil FILE --model-root DIR --output DIR
                 [--target H16G|H13|H14|H17|H18] [--format anec|hwx]
-                [--schedule per-op|chain]
+                [--schedule per-op|chain|regions]
 ```
 
 `--target` picks the backend.
@@ -125,6 +125,13 @@ H13 and H14 write ANEC packages unless `--format hwx` says otherwise.
 The default, `per-op`, emits one program per operation.
 `chain` fuses a supported producer into a following `relu`.
 The pair then becomes one program with no intermediate buffer.
+`regions` finds single-use `add`/`mul`/constant-weight `matmul` to `relu` edges
+inside a larger DAG and reuses the same decoded epilogues. Returned values and
+fan-out block that fusion. Other edges keep their per-operation programs.
+H14 now uses the same ordered `logicalResults` and distinct `physicalOutputs`
+contract as H13, including returned state values also consumed by later operations.
+See [recurrent coverage](docs/recurrent-coverage.md) for the exact limits and
+DFN3 audit commands. This does not establish a complete native denoiser.
 `--model-root` is the directory where `BLOBFILE` constants resolve.
 For the fixtures, that is their `tests/models` directory.
 The output directory must be absent or empty.

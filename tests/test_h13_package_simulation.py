@@ -247,6 +247,7 @@ def dense_of(tensors, name):
 def run_sim(package: Path, mil: Path, model_root: Path, inputs: dict[str, bytes]):
     manifest, _ = inspect_anec.load_package(package)
     chain = manifest.get('schedule') == 'chain'
+    region_indices = {region['program'] for region in manifest.get('regions', [])}
     chain_tasks = []
     if chain:
         program = manifest['programs'][0]
@@ -336,9 +337,16 @@ def run_sim(package: Path, mil: Path, model_root: Path, inputs: dict[str, bytes]
         else:
             raise ValueError(op)
 
-        if chain:
-            registers = [inspect_anec.h13_task_registers(task)
-                         for task in chain_tasks]
+        if chain or pi in region_indices:
+            if chain:
+                tasks = chain_tasks
+            else:
+                data = inspect_anec.local_file(package, program['file'], program['bytes'])
+                _, first_words, count, stream_bytes = struct.unpack_from('<QIIQ', data)
+                tasks = inspect_anec.split_h13_tasks(
+                    data[inspect_anec.HEADER_BYTES:inspect_anec.HEADER_BYTES + stream_bytes],
+                    first_words // 4 - 1, count)
+            registers = [inspect_anec.h13_task_registers(task) for task in tasks]
             address, bit = ((0x0c804, 0x00010000) if op == 'matmul'
                             else (0x08800, 0x20))
             assert not any(task.get(address, 0) & bit for task in registers[:-1])
