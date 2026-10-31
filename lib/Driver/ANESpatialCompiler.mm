@@ -153,6 +153,14 @@ struct Builder {
         need(![v.name hasPrefix:@"$spatial."], "spatial.reserved-name");
         tensors[v.name] = @{@"shape": v.type.shape, @"elements": @(n), @"role": role};
     }
+    void source(ANEGraphValue *v) {
+        elements(v);
+        if (!tensors[v.name]) {
+            need([v.producer.operationName isEqualToString:@"const"], "spatial.unproduced-source");
+            value(v,@"constant");
+            constant(v);
+        }
+    }
     NSData *constant(ANEGraphValue *v) {
         if (constantData[v.name]) return constantData[v.name];
         NSUInteger n = elements(v);
@@ -279,6 +287,7 @@ struct Builder {
     }
     void unary(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0];
+        source(x);
         NSUInteger n = elements(x);
         need([x.type.shape isEqualToArray:y.type.shape], "spatial.elementwise-shape");
         NSString *name = op.operationName;
@@ -316,7 +325,7 @@ struct Builder {
         for (NSUInteger d = axis + 1; d < rank; ++d) inner *= y.type.shape[d].unsignedIntegerValue;
         for (ANEGraphArgument *a in sources) {
             ANEGraphValue *x = a.value;
-            elements(x);
+            source(x);
             need(x.type.shape.count == rank, "spatial.concat-rank");
             for (NSUInteger d = 0; d < rank; ++d)
                 need(d == (NSUInteger)axis || [x.type.shape[d] isEqual:y.type.shape[d]],
@@ -342,7 +351,7 @@ struct Builder {
     void convolution(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0];
         ANEGraphValue *w = op.operands[@"weight"].value, *bias = op.operands[@"bias"].value;
-        elements(x); elements(w); elements(y);
+        source(x); elements(w); elements(y);
         auto xs = x.type.shape, ys = y.type.shape, ws = w.type.shape;
         need(xs.count == 4 && ys.count == 4 && ws.count == 4 &&
              [xs[0] isEqual:ys[0]], "spatial.conv-rank");
@@ -460,6 +469,7 @@ struct Builder {
     }
     void mean(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0];
+        source(x);
         auto shape = x.type.shape;
         need(shape.count == 4, "spatial.mean-rank");
         auto axes = list(op.arguments[@"axes"]);
@@ -480,6 +490,7 @@ struct Builder {
     void linear(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0],
             *w = op.operands[@"weight"].value, *bias = op.operands[@"bias"].value;
+        source(x);
         NSUInteger k = x.type.shape.lastObject.unsignedIntegerValue,
             n = y.type.shape.lastObject.unsignedIntegerValue, rows = elements(x) / k;
         NSMutableArray *expected = [x.type.shape mutableCopy]; expected[expected.count - 1] = @(n);
@@ -509,6 +520,7 @@ struct Builder {
     }
     void softmax(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0];
+        source(x);
         NSUInteger n = x.type.shape.lastObject.unsignedIntegerValue, rank = x.type.shape.count;
         long long axis = integer(op.arguments[@"axis"]); if (axis < 0) axis += rank;
         need(axis == (long long)rank - 1 && n <= 1024 &&
@@ -532,6 +544,7 @@ struct Builder {
     }
     void resize(ANEGraphOperation *op) {
         ANEGraphValue *x = op.operands[@"x"].value, *y = op.results[0];
+        source(x);
         NSUInteger rank = x.type.shape.count;
         need(rank >= 3 && rank == y.type.shape.count, "spatial.resize-rank");
         for (NSUInteger d = 0; d + 2 < rank; ++d)

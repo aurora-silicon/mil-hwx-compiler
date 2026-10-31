@@ -173,6 +173,12 @@ class SpatialTests(unittest.TestCase):
             source = mil('tensor<fp16,[1,1,2,2]> x',f'{typ(out)} y={name}(x=x,{args});')
             self.compare(source,{'x':np.array([0,1,2,3],dtype='<f2').tobytes()},label=name)
 
+    def test_constant_runtime_surface(self):
+        source = mil('',
+            'tensor<fp16,[1,1,2,2]> x=const()[name=string("x"),val=tensor<fp16,[1,1,2,2]>([1,2,3,4])];\n'
+            'tensor<fp16,[1,1,4,4]> y=resize_nearest_neighbor(x=x,target_size_height=int32(4),target_size_width=int32(4));')
+        self.compare(source,{},label='constant')
+
     def test_connected_conv_resize_concat_conv(self):
         model = Model(self.root)
         model.conv('x',[1,3,7,9],'feature',[1,2,7,9],3,1,1)
