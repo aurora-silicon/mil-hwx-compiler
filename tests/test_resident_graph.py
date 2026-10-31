@@ -23,6 +23,7 @@ class Adapter(old.ScriptedAdapter):
         super().__init__([16384, 16384], [16384])
         self.loaded = 0
         self.current = {}
+        self.sizes = {}
         self.fail_exec, self.fail_load = fail_exec, fail_load
         self.bad_output = bad_output
 
@@ -31,7 +32,19 @@ class Adapter(old.ScriptedAdapter):
         if self.loaded == self.fail_load:
             return None
         self.current[self.loaded] = {}
+        fields = inspect_anec.HEADER.unpack_from(Path(path).read_bytes())
+        tiles = fields[7:39]
+        self.sizes[self.loaded] = ([tiles[i] * 16384 for i in (5, 6)],
+                                   [tiles[4] * 16384])
         return self.loaded
+
+    def _src_size(self, handle, index):
+        sizes = self.sizes[handle][0]
+        return sizes[index] if index < len(sizes) else 0
+
+    def _dst_size(self, handle, index):
+        sizes = self.sizes[handle][1]
+        return sizes[index] if index < len(sizes) else 0
 
     def _send(self, handle, buffer, index):
         self.sent.append((handle, index))
@@ -41,11 +54,12 @@ class Adapter(old.ScriptedAdapter):
         self.exec_calls += 1
         if self.exec_calls == self.fail_exec:
             return -5
-        a, b = [struct.unpack('<8192e', self.current[handle][i]) for i in (0, 1)]
-        self.result = struct.pack('<8192e', *[(x + y if handle == 1 else x * y)
+        count = len(self.current[handle][0]) // 2
+        a, b = [struct.unpack(f'<{count}e', self.current[handle][i]) for i in (0, 1)]
+        self.result = struct.pack(f'<{count}e', *[(x + y if handle == 1 else x * y)
                                              for x, y in zip(a, b)])
         if self.bad_output:
-            self.result = bytes(16384)
+            self.result = bytes(self.sizes[handle][1][0])
         return 0
 
     def _read(self, handle, buffer, index):
