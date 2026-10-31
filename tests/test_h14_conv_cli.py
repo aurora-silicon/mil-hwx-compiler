@@ -100,9 +100,14 @@ def linked_checks(root):
         previous = -1
         for tr, t in zip(m['tasks'], tasks):
             layer = tr['layer']
-            assert (t[0x1100] >> 28) == (1 if layer and layer != previous else 0)
-            if layer:
-                assert t[0x1108] == 0x4e
+            if layer == previous:
+                # A later slice reuses the layer's L2 input: no source TileDMA.
+                assert not any(0x1100 <= a < 0x1500 for a in t), path.name
+                assert 0x504 not in t and 0x514 not in t and 0x518 not in t, path.name
+            else:
+                assert (t[0x1100] >> 28) == (1 if layer else 0)
+                if layer:
+                    assert t[0x1108] == 0x4e
             if layer + 1 < r['parameters']['layers']:
                 assert t[0x1500] & 0xf0 == 0xf0
             previous = layer

@@ -60,9 +60,10 @@ alignment. Word 0 contains its own word count in bits 26–16 and TID in
 15–0. There is no NextPointer, NextSize, H13 continuation/end flag, or ninth
 DTID word. Word 6 is LiveOuts; word 7 holds TSR bit 0 and engine selection.
 In particular, copying H13 TSE/TSR (`0x9000`) into word 6 would corrupt
-LiveOuts. The independent generic tasks close their live-outs and keep the
-observed H14 TSR form `0x50001`; the consumer's DMA dependency supplies the
-DRAM hand-off.
+LiveOuts. Single-task layers close their live-outs and keep the observed H14
+TSR form `0x50001`; the consumer's DMA dependency supplies the DRAM hand-off.
+Every task of a multi-task layer keeps LiveOuts `0x1fffffff`, except the
+program's last task, as in Apple's linked programs.
 
 A dense BAR record has bit 29 set, and BAR slot in bits 28–23. The native
 convolution records bind slot 1 to constants, slot 4 to input and slot 5 to
@@ -71,8 +72,20 @@ H13 header selector. Every intermediate gets a separate 16-KiB-aligned
 region. No region is reused.
 
 On each layer's first task after the first layer, the source config sets
-DependencyMode 1 (`0x10000000`). Further output slices read the same region
-with DependencyMode 0. Scratch readers use the decoded low config `0xe41`
+DependencyMode 1 (`0x10000000`). Further output slices of a multi-task layer
+do not read the input again. They reuse what the first slice staged in L2,
+which is the form Apple emits for every decoded multi-task layer
+(`chain3_c1024_s28` tasks 1-3 and 6-8, and the stride-2 consumer of
+`h14_s2link_pw1024_pws2_2048`, tasks 5-9, both in research/oracles/h14-mobile).
+Such a task has no source TileDMA records and no `0x504`/`0x514`/`0x518` words, its NE repeat fields (`0x38` bits 15:8)
+take the NE class, and ResultCfg (`0x530`) drops the DMA-source bits
+`0x500030`. Before this, a second slice reloaded the input from scratch DRAM
+with DependencyMode 0. On the M2 that slice computed on zeros at MobileNet
+layer 9 (the first two-task consumer): its 128 channels equalled relu(bias)
+while the first slice was correct, although the same two tasks are correct
+when they read the program input. With the reuse form both slices match the
+CPU (rel. L2 5.5e-4) and the whole linked MobileNetV1 agrees on top-1 for
+16/16 images at 1.13 to 1.21 ms p50 (01/11/2026, 7.3.0-aurora-tt3). Scratch readers use the decoded low config `0xe41`
 and extension `0x4e`; scratch writers use cache hint `0xf`, producing
 `0x01000ef1` in the ordinary output mode. The fresh `chain2_c128_s112` and
 `chain3_c512_s56` probes exhibit these exact settings. Per-DMA task tags in

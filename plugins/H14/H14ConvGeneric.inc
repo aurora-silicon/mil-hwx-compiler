@@ -291,6 +291,76 @@ void fuseConvRelu(Program &p) {
     }
 }
 
+// Later output slices of a multi-task layer reuse the input the layer's
+// first task staged in L2, as Apple's linked H14 programs do (decoded
+// chain3_c1024_s28 tasks 1-3 and 6-8, and the stride-2 consumer of
+// h14_s2link_pw1024_pws2_2048, tasks 5-9). Such a task carries no source TileDMA
+// records and no SourceCfg/depth-stride words (0x504, 0x514, 0x518). Its
+// NE repeat fields (0x38 bits 15:8) take the NE class and ResultCfg (0x530)
+// drops the bits a DMA-loaded source sets (0x500030). The task must be the
+// last one in the stream.
+void reuseLayerInput(Program &p, std::size_t off, std::size_t &bytes) {
+    if (off + bytes != p.taskStream.size())
+        throw std::logic_error("H14 input reuse requires the final task");
+    const auto ne = get(p, off, bytes, 0x38);
+    const auto cls = (ne >> 16) & 0xfu;
+    const auto resultCfg = get(p, off, bytes, 0x530) & ~0x500030u;
+    const std::size_t extra = (loadLE32(p.taskStream, off + 28) & 3) == 3 ? 4 : 0;
+    std::vector<std::uint8_t> out(p.taskStream.begin() + static_cast<std::ptrdiff_t>(off),
+        p.taskStream.begin() + static_cast<std::ptrdiff_t>(off + 32 + extra));
+    for (std::size_t c = off + 32 + extra; c < off + bytes;) {
+        const auto h = loadLE32(p.taskStream, c);
+        const auto base = (h & 0x7fff) * 4;
+        std::vector<std::uint32_t> addrs{base};
+        if (h & 0x80000000u) {
+            for (unsigned b = 0; b < 16; ++b)
+                if ((h >> (15 + b)) & 1) addrs.push_back(base + (b + 1) * 4);
+        } else {
+            for (std::uint32_t n = ((h >> 15) & 0x3f); n; --n)
+                addrs.push_back(addrs.back() + 4);
+        }
+        const auto end = c + (addrs.size() + 1) * 4;
+        const bool source = base >= 0x1100 && base < 0x1500;
+        if (source != (addrs.back() >= 0x1100 && addrs.back() < 0x1500))
+            throw std::logic_error("H14 record straddles the source TileDMA block");
+        if (source) { c = end; continue; }
+        const bool sourceCfg = std::any_of(addrs.begin(), addrs.end(), [](std::uint32_t a) {
+            return a == 0x504 || a == 0x514 || a == 0x518; });
+        if (!sourceCfg) {
+            out.insert(out.end(), p.taskStream.begin() + static_cast<std::ptrdiff_t>(c),
+                       p.taskStream.begin() + static_cast<std::ptrdiff_t>(end));
+            c = end;
+            continue;
+        }
+        if (!(h & 0x80000000u))
+            throw std::logic_error("H14 input reuse expects the L2 words in a scatter record");
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> kept;
+        for (std::size_t k = 0; k < addrs.size(); ++k) {
+            const auto a = addrs[k];
+            if (a == 0x504 || a == 0x514 || a == 0x518) continue;
+            kept.emplace_back(a, a == 0x530 ? resultCfg : loadLE32(p.taskStream, c + 4 + 4 * k));
+        }
+        if (!kept.empty()) {
+            const auto first = kept.front().first / 4;
+            std::uint32_t mask = 0;
+            for (std::size_t k = 1; k < kept.size(); ++k) {
+                const auto bit = kept[k].first / 4 - first - 1;
+                if (bit >= 16) throw std::logic_error("H14 L2 scatter record does not fit");
+                mask |= 1u << bit;
+            }
+            appendLE(out, 0x80000000u | (mask << 15) | first, 4);
+            for (const auto &kv : kept) appendLE(out, kv.second, 4);
+        }
+        c = end;
+    }
+    storeLE32(out, 0, (static_cast<std::uint32_t>(out.size() / 4) << 16) |
+              (loadLE32(out, 0) & 0xffff));
+    p.taskStream.resize(off);
+    p.taskStream.insert(p.taskStream.end(), out.begin(), out.end());
+    bytes = out.size();
+    put(p, off, bytes, 0x38, (ne & ~0xff00u) | (cls << 12) | (cls << 8));
+}
+
 Program linkConvChain(const std::vector<Program> &layers,
                       std::vector<LinkedLayer> *layout) {
     if (layers.size() < 2) throw std::invalid_argument("h14.linked-outside-envelope: need at least two conv layers");
@@ -350,9 +420,11 @@ Program linkConvChain(const std::vector<Program> &layers,
                 p.taskStream.begin() + static_cast<std::ptrdiff_t>(src.first + src.second));
             auto bytes = src.second;
             auto set = [&](std::uint32_t a, std::uint32_t v) { put(result, off, bytes, a, v); };
+            const bool reuse = p.taskCount > 1 && i > 0;
+            if (reuse) reuseLayerInput(result, off, bytes);
             set(0x1908, get(p, src.first, src.second, 0x1908) +
                 static_cast<std::uint32_t>(result.constants.size()));
-            if (l) {
+            if (l && !reuse) {
                 route(result, off, bytes, 0x1110, 3);
                 set(0x1110, static_cast<std::uint32_t>(regions[l - 1]));
                 // Native H14 scratch hints + dependency, not H13's 0x7bb81.
@@ -368,7 +440,8 @@ Program linkConvChain(const std::vector<Program> &layers,
             if (result.taskCount >= 254)
                 throw std::invalid_argument("h14.linked-outside-envelope: DMA task-tag limit exceeded");
             const auto tag = result.taskCount << 16;
-            set(0x1100, (get(result, off, bytes, 0x1100) & ~0xff0000u) | tag);
+            if (!reuse)
+                set(0x1100, (get(result, off, bytes, 0x1100) & ~0xff0000u) | tag);
             set(0x1500, (get(result, off, bytes, 0x1500) & ~0xff0000u) | tag);
             set(0x1900, (get(result, off, bytes, 0x1900) & ~0xff0000u) | ((result.taskCount + 1) << 16));
             for (unsigned j = 0; j < 16; ++j)
@@ -377,9 +450,12 @@ Program linkConvChain(const std::vector<Program> &layers,
             storeLE32(result.taskStream, off,
                 (static_cast<std::uint32_t>(bytes / 4) << 16) | result.taskCount);
             storeLE32(result.taskStream, off + 8, (result.taskCount == 0 ? 8u : 0u) | (last ? 0x22u : 0u));
-            // LiveOuts closes at each independently loaded task, TSR remains
-            // set. H14 has no H13 header[6] TSE flag (it is LiveOuts).
-            storeLE32(result.taskStream, off + 24, 0);
+            // LiveOuts: every task of a multi-task layer keeps L2 live, as
+            // in Apple's linked programs, so later slices can reuse the
+            // staged input; single tasks and the program's last task close
+            // it. TSR remains set. H14 has no H13 header[6] TSE flag.
+            storeLE32(result.taskStream, off + 24,
+                      p.taskCount > 1 && !last ? 0x1fffffffu : 0u);
             storeLE32(result.taskStream, off + 28, 0x50001);
             if (!result.taskCount) result.firstTaskBytes = bytes;
             ++result.taskCount;

@@ -35,24 +35,38 @@ def main():
     regions = sorted(m['scratch']['regions'].values(), key=lambda r: r['offset'])
     for left, right in zip(regions, regions[1:]):
         assert left['offset'] + left['bytes'] <= right['offset']
+    per_layer = {}
+    for tr in m['tasks']:
+        per_layer[tr['layer']] = per_layer.get(tr['layer'], 0) + 1
     previous = -1
+    reused = 0
     for index, (raw, tr) in enumerate(zip(tasks, m['tasks'])):
         task = decode_task(raw, 'h14')
         words = register_words(task)
         layer = tr['layer']
         header = [int(w, 16) for w in task['header_words']]
-        assert header[0] & 0xffff == index and header[6] == 0 and header[7] == 0x50001
+        multi = per_layer[layer] > 1
+        reuse = layer == previous
+        # Multi-task layers keep L2 live; later slices reuse the staged input.
+        assert header[0] & 0xffff == index and header[7] == 0x50001
+        assert header[6] == (0x1fffffff if multi and index != 44 else 0)
         assert header[2] == (8 if index == 0 else 0) | (0x22 if index == 44 else 0)
-        assert (words[0x1100] >> 28) == (1 if layer and layer != previous else 0)
-        assert (words[0x1100] >> 16) & 255 == index
+        if reuse:
+            reused += 1
+            assert not any(0x1100 <= k < 0x1500 for k in words)
+            assert 0x504 not in words and 0x514 not in words and 0x518 not in words
+        else:
+            assert (words[0x1100] >> 28) == (1 if layer else 0)
+            assert (words[0x1100] >> 16) & 255 == index
         assert (words[0x1500] >> 16) & 255 == index
         assert (words[0x1900] >> 16) & 255 == index + 1
         read_base, read_size = ((regions[layer - 1]['offset'], regions[layer - 1]['bytes'])
                                if layer else (0, m['inputs'][0]['allocationBytes']))
         write_base, write_size = ((regions[layer]['offset'], regions[layer]['bytes'])
                                  if layer != 27 else (0, m['outputs'][0]['allocationBytes']))
-        assert read_base <= words[0x1110]
-        assert words[0x1110] + words[0x111c] * words[0xc] <= read_base + read_size
+        if not reuse:
+            assert read_base <= words[0x1110]
+            assert words[0x1110] + words[0x111c] * words[0xc] <= read_base + read_size
         assert write_base <= words[0x1508]
         assert words[0x1508] + words[0x1514] * words[0x10] <= write_base + write_size
         for i in range(16):
@@ -60,9 +74,11 @@ def main():
         # Native BAR routing, independent of the header allocation table.
         bars = {int(r['address'], 16): (int(r['header'], 16) >> 23) & 63
                 for r in task['records'] if int(r['header'], 16) & 0xa0000000 == 0x20000000}
-        assert bars[0x1908] == 1 and bars[0x1110] == (3 if layer else 4)
+        assert bars[0x1908] == 1
+        assert (0x1110 not in bars) if reuse else bars[0x1110] == (3 if layer else 4)
         assert bars[0x1508] == (3 if layer != 27 else 5)
         previous = layer
+    assert reused == 45 - 28
     pm = json.loads((net / 'perop/manifest.json').read_text())
     assert len(pm['programs']) == 28
     parts = [contents(net / 'perop' / p['file']) for p in pm['programs']]
