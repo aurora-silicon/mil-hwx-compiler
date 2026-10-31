@@ -22,6 +22,7 @@ import mint_conv_probes as conv  # noqa: E402
 from test_h14_parity import write_weights  # noqa: E402
 from timeouts import scaled_timeout  # noqa: E402
 
+PROBE = '--probe' in sys.argv
 COMPILER = str(Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'build/mil-hwxc').resolve())
 
 
@@ -31,10 +32,28 @@ def expected_generic(p):
     st, g = p['stride'], p['groups']
     return (ci % 16 == 0 and co % 16 == 0 and k == kw and k in (1, 3) and
             (g == 1 or g == ci == co) and (st == 1 or (st == 2 and k == 1 and g == 1)) and
-            not (max(p['input_shape'][2:]) <= 8 and co == 768))
+            not (max(p['input_shape'][2:]) <= 8 and co == 768 and g == 1 and
+                 (ci * k * kw + int(p['bias'])) * co * 2 <= 0x100000))
+
+
+def probe_one(r, root, mode='generic'):
+    p = r['parameters']
+    w, b = conv.case_weights(r)
+    (root / 'raw-weight.bin').write_bytes(w)
+    (root / 'raw-bias.bin').write_bytes(b or b'')
+    out = root / mode
+    out.mkdir()
+    args = [COMPILER, mode, str(p['input_shape'][1]), str(p['output_shape'][1]),
+            *map(str, p['input_shape'][2:]), *map(str, p['weight_shape'][2:]),
+            str(p['stride']), str(p['groups']), str(int(p['bias'])),
+            *map(str, p['output_shape'][2:]), str(root / 'raw-weight.bin'),
+            str(root / 'raw-bias.bin'), str(out / 'program-0.anec')]
+    return subprocess.run(args, text=True, capture_output=True, timeout=scaled_timeout(120)), out
 
 
 def compile_one(r, root):
+    if PROBE:
+        return probe_one(r, root)
     (root / 'model.mil').write_text(r['mil'])
     write_weights(r, root)
     out = root / 'out'
@@ -90,15 +109,27 @@ def main():
         for path in sorted((ROOT / 'research/oracles' / directory).glob('*.json')):
             r = json.loads(path.read_text())
             if r.get('error') is None and r.get('parameters', {}).get('weight_shape'):
+                r['_original'] = directory == 'h14'
                 records.append(r)
     counts = collections.Counter()
     with tempfile.TemporaryDirectory(prefix='h14-conv-formula-') as tmp:
         root = Path(tmp)
-        counts['linked_chains'] = linked_checks(root)
+        counts['linked_chains'] = 0 if PROBE else linked_checks(root)
         for index, r in enumerate(records):
             p = r['parameters']
             case = root / str(index)
             case.mkdir()
+            if PROBE and r['_original'] and conv.covered(r):
+                run, out = probe_one(r, case, 'parity')
+                assert run.returncode == 0, (r['case'], run.stderr)
+                a = (out / 'program-0.anec').read_bytes()
+                stream_size = struct.unpack_from('<Q', a, 0x10)[0]
+                words = conv.stream_words(r)
+                expected = struct.pack(f'<{len(words)}I', *words)
+                assert a[0x1000:0x1000 + stream_size] == expected, r['case']
+                constants_size = struct.unpack_from('<Q', a, 0x18)[0]
+                assert hashlib.sha256(a[-constants_size:]).hexdigest() == r['constant_section']['sha256'], r['case']
+                counts['strict_conv_parity'] += 1
             run, out = compile_one(r, case)
             if not expected_generic(p):
                 assert run.returncode != 0, r['case']
@@ -106,9 +137,13 @@ def main():
                 counts['explicit_refusal'] += 1
                 continue
             assert run.returncode == 0, (r['case'], run.stderr)
-            m = json.loads((out / 'manifest.json').read_text())
-            assert len(m['programs']) == 1, r['case']
             a = (out / 'program-0.anec').read_bytes()
+            if PROBE:
+                payload, _, _, _, constants = struct.unpack_from('<QIIQQ', a)
+                m = dict(constantBytes=constants, constantOffset=payload - constants)
+            else:
+                m = json.loads((out / 'manifest.json').read_text())
+                assert len(m['programs']) == 1, r['case']
             td_bytes = struct.unpack_from('<Q', a, 0x10)[0]
             tasks = [register_words(decode_task(t, 'h14')) for t in split_h14_tasks(a[0x1000:0x1000 + td_bytes])]
             co = 0
@@ -133,9 +168,11 @@ def main():
                 assert hashlib.sha256(constants).hexdigest() == r['constant_section']['sha256'], r['case']
                 counts['constant_parity'] += 1
             counts['formula_geometry'] += 1
+    if PROBE:
+        assert counts['strict_conv_parity'] == 284, counts
     assert counts['formula_geometry'] >= 250, counts
     assert counts['constant_parity'] >= 150, counts
-    print('H14 convolution corpus audit: PASS', dict(counts), 'records=', len(records))
+    print('H14 convolution ' + ('portable API' if PROBE else 'CLI') + ' corpus audit: PASS', dict(counts), 'records=', len(records))
 
 if __name__ == '__main__':
     main()

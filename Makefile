@@ -334,3 +334,11 @@ test-h14-conv: $(BUILD)/test_h14_conv_encoding $(BUILD)/mil-hwxc
 
 # Every H14 parity run also exercises the formula encoder and linked emitter.
 test-h14-parity: test-h14-conv
+
+$(BUILD)/h14_conv_probe: tests/h14_conv_probe.cpp plugins/H14/H14Program.cpp plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) | $(BUILD)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -Iplugins/H14 -Iplugins/H13 -Iplugins/H17 -Iplugins/H18 tests/h14_conv_probe.cpp plugins/H14/H14Program.cpp -o $@
+
+.PHONY: test-h14-conv-portable
+test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
+	$(BUILD)/test_h14_conv_encoding
+	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
