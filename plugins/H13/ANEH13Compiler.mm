@@ -1506,7 +1506,17 @@ struct H13ConvPlan {
     ane::h13::ConvShape shape;
     ANEGraphValue *weight;
     ANEGraphValue *bias;
+    /// No decoded template covers the geometry; `encodeConvGeneric` builds it.
+    BOOL generic;
 };
+
+/// MILHWXC_H13_CONV_GENERIC=1 routes every convolution the generic encoder
+/// accepts through it even when a decoded template exists, so the parity
+/// suite can hold the formulas against Apple's own words.
+static BOOL forceGenericConv(void) {
+    const char *value = getenv("MILHWXC_H13_CONV_GENERIC");
+    return value && value[0] == '1';
+}
 
 /// Resolves a rank-1 `int32` constant into its literal values.
 static BOOL int32Vector(ANEGraphValue *value, NSUInteger count,
@@ -1715,8 +1725,19 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H13ConvPlan *plan) {
     if (bias && (!fp16Tensor(bias) || bias.type.shape.count != 1 ||
                  bias.type.shape[0].unsignedIntValue !=
                      candidate.shape.output.channels)) return NO;
-    if (!ane::h13::supportsConvParity(candidate.shape)) {
-        return NO;
+    if (!ane::h13::supportsConvParity(candidate.shape) || forceGenericConv()) {
+        // No decoded template: the formula-built encoder takes the geometry
+        // when it is a symmetric same/valid pad it can express.
+        if (rank3 || !ane::h13::convGenericRefusal(candidate.shape).empty())
+            return NO;
+        if (declaredPads) {
+            const long long same = (kernel - 1) / 2;
+            const BOOL zero = !padding[0] && !padding[1] && !padding[2] && !padding[3];
+            const BOOL symmetric = kernel == kernelWidth && padding[0] == same &&
+                padding[1] == same && padding[2] == same && padding[3] == same;
+            if (!zero && !symmetric) return NO;
+        }
+        candidate.generic = YES;
     }
     *plan = candidate;
     return YES;
@@ -1932,6 +1953,35 @@ static ANEGraphOperation *ffnChainOperation(
         attributes:@{} range:range];
 }
 
+/// Matches a convolution whose only consumer is a relu, where the
+/// convolution result is not itself a function result, and returns the
+/// convolution re-spelled to produce the relu's result. The caller encodes
+/// it with the relu folded into the NE epilogue
+/// (`ane::h13::fuseConvPostOperation`) and drops the relu, so the pair is one
+/// program instead of a whole-tensor convolution plus a sliced relu.
+static ANEGraphOperation *convReluOperation(
+    NSArray<ANEGraphOperation *> *operations, ANEGraphOperation *conv,
+    NSArray<ANEGraphValue *> *returnValues,
+    ANEGraphOperation *__autoreleasing *reluOut) {
+    if (![conv.operationName isEqualToString:@"conv"] ||
+        conv.results.count != 1) return nil;
+    ANEGraphValue *product = conv.results[0];
+    if ([returnValues containsObject:product]) return nil;
+    ANEGraphOperation *relu = singleConsumerOf(operations, product);
+    if (!relu || ![relu.operationName isEqualToString:@"relu"] ||
+        relu.results.count != 1 || relu.operands[@"x"].value != product ||
+        ![relu.results[0].type isEqualToValueType:product.type])
+        return nil;
+    H13ConvPlan plan{};
+    if (!convParityPlan(conv, &plan)) return nil;
+    ANEGraphValue *result = [[ANEGraphValue alloc]
+        initWithName:relu.results[0].name type:relu.results[0].type];
+    *reluOut = relu;
+    return [[ANEGraphOperation alloc] initWithOperationName:@"conv"
+        results:@[result] arguments:conv.arguments
+        attributes:conv.attributes range:conv.range];
+}
+
 static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                            ANEDiagnosticEngine *diagnostics, BOOL preferNative,
                            NSDictionary<NSString *, NSData *> *synthesizedConstants,
@@ -2078,9 +2128,29 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         }
         // The MIL weight is already `[Cout, Cin / groups, kh, kw]` row-major,
         // which is the order the packing consumes, so no host transform runs.
-        program = ane::h13::encodeConvParity(convolution.shape,
-            static_cast<const std::uint8_t *>(weights.bytes), weights.length,
-            static_cast<const std::uint8_t *>(biasData.bytes), biasData.length);
+        const auto *weightBytes = static_cast<const std::uint8_t *>(weights.bytes);
+        const auto *biasBytes = static_cast<const std::uint8_t *>(biasData.bytes);
+        // A stride-2 section skips zero weights, so its size follows the
+        // weight values and a template's recorded size fits only the
+        // oracle's own payload. The generic encoder rebuilds the same task
+        // words with the kernel-DMA table sized from the actual section.
+        const bool sectionFits = convolution.generic ||
+            convolution.shape.stride == 1 ||
+            ane::h13::packConvWeights(convolution.shape, weightBytes,
+                weights.length, biasBytes, biasData.length).size() ==
+                ane::h13::convParitySectionBytes(convolution.shape);
+        if (!sectionFits &&
+            !ane::h13::convGenericRefusal(convolution.shape).empty())
+            return reject(diagnostics,
+                [NSString stringWithFormat:
+                    @"H13 stride-2 convolution section differs from the decoded size and %s",
+                    ane::h13::convGenericRefusal(convolution.shape).c_str()],
+                operation, @"h13.conv-outside-envelope");
+        program = convolution.generic || !sectionFits
+            ? ane::h13::encodeConvGeneric(convolution.shape, weightBytes,
+                weights.length, biasBytes, biasData.length)
+            : ane::h13::encodeConvParity(convolution.shape, weightBytes,
+                weights.length, biasBytes, biasData.length);
         *inputsOut = @[x];
         *constantInputOut = nil;
         *constantDataOut = nil;
@@ -2993,10 +3063,26 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     NSMutableDictionary<NSString *, NSDictionary *> *compositeFolds =
         [NSMutableDictionary dictionary];
     NSUInteger ffnChainSkip = 0;
+    NSHashTable<ANEGraphOperation *> *fusedReluConsumers =
+        [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    NSHashTable<ANEGraphOperation *> *reluFusedConvs =
+        [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
     for (ANEGraphOperation *candidate in sourceOperations) {
         if (ffnChainSkip) {
             --ffnChainSkip;
             continue;
+        }
+        if ([fusedReluConsumers containsObject:candidate]) continue;
+        if (!chainSchedule && [candidate.operationName isEqualToString:@"conv"]) {
+            ANEGraphOperation *relu = nil;
+            if (ANEGraphOperation *fused = convReluOperation(sourceOperations,
+                    candidate, function.returnValues, &relu)) {
+                [operations addObject:fused];
+                [manifestValues addObject:fused.results[0]];
+                [fusedReluConsumers addObject:relu];
+                [reluFusedConvs addObject:fused];
+                continue;
+            }
         }
         if ([candidate.operationName isEqualToString:@"matmul"]) {
             if (ANEGraphOperation *chain = ffnChainOperation(sourceOperations,
@@ -4109,6 +4195,12 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                                     program, &inputs, &constantInput, &constantData,
                                     &manifestOperation))
                     return NO;
+                const BOOL reluFused = [reluFusedConvs containsObject:operation];
+                if (reluFused) {
+                    ane::h13::fuseConvPostOperation(program,
+                        ane::h13::PostOperation::Relu);
+                    manifestOperation = @"conv+relu";
+                }
                 std::vector<std::uint8_t> anec = ane::h13::encodeANEC(program);
                 NSMutableArray *inputRecords =
                     [NSMutableArray arrayWithCapacity:inputs.count];
@@ -4210,7 +4302,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                                          : @"apple-parity-matvec")
                         : (broadcast ? @"apple-parity-broadcast"
                         : (normalization ? @"apple-parity-norm"
-                        : (convolution ? @"apple-parity-conv"
+                        : (convolution ? (program.formulaBuilt
+                                              ? @"h13-generic-conv"
+                                              : @"apple-parity-conv")
                         : (parity ? @"h13-oracle-parity" : @"h13-source-qualified")))),
                     @"operation": manifestOperation,
                     @"inputs": inputRecords, @"constantInputs": constantInputs,
