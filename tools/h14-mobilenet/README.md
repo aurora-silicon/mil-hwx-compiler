@@ -29,7 +29,7 @@ cc -O2 -Wall -Wextra -Werror tools/h14-mobilenet/run.c \
   -I/path/to/libane -I/path/to/uapi -I/usr/include/libdrm \
   -L/path/to/libane -lane -o h14-mobilenet-run
 python3 tools/h14-mobilenet/run.py build/mobilenet-h14 \
-  --runner ./h14-mobilenet-run --device 0 --reference
+  --runner ./h14-mobilenet-run --device 0 --compare-perop --reference
 ```
 
 Use the controller's explicit M2 identity and approval policy when running
@@ -37,6 +37,10 @@ these commands on hardware. The worker does not run them. The C runner
 checks ABI 2, prints the device's reported family, binds the exact input,
 output and scratch sizes from the ANEC header, then calls libane. Libane
 performs PROG_LOAD/PROC_CREATE/EXEC and releases its objects on exit.
+
+`--compare-perop` also runs the 28 per-layer programs once each, using the
+explicit ABI-v2 ports, and fails if their logical fp16 output differs bit
+for bit from the linked output. Padding bytes are excluded.
 
 The default is one execution with **zero warm-ups**. `--input image.npy`
 accepts finite `[3,224,224]` floats in [-1,1]; otherwise a deterministic
