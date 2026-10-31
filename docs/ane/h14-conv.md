@@ -1,7 +1,7 @@
 # H14 formula-built convolution and linked DRAM schedules
 
 `--target H14 --schedule linked` accepts a straight chain of dense and
- depthwise convolutions, with optional ReLU after each convolution. The
+depthwise convolutions, with optional ReLU after each convolution. The
 MobileNetV1 graph and preprocessing are the same as
 [the H13 package](../../tools/h13-mobilenet/README.md). Device execution and
 accuracy on the base M2 remain a lead-side qualification step.
@@ -86,6 +86,10 @@ scratch-size inference, which uses the final output size and is insufficient
 for a MobileNet arena containing much larger early intermediates.
 
 ## Envelope and verification limits
+
+Formula-built convolutions emit ANEC. HWX remains available for the existing
+exact-parity forms; generic HWX is refused until its descriptor cost fields
+are derived.
 
 The generic path covers fp16 NCHW batch 1, square 1x1/3x3 dense or depthwise
 stride 1 and dense 1x1 stride 2, symmetric same/valid/custom padding and

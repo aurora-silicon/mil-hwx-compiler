@@ -5,6 +5,9 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                           NSURL *modelRoot, NSURL *directory,
                           NSString *format, BOOL linked,
                           ANEDiagnosticEngine *diagnostics, NSError **error) {
+    if (![format isEqualToString:@"anec"])
+        return reject(diagnostics, @"H14 formula-built convolution currently emits ANEC; HWX descriptor cost fields remain unresolved",
+                      nil, @"h14.conv-outside-envelope");
     if (function.inputs.count != 1 || function.returnValues.count != 1)
         return reject(diagnostics, @"H14 convolution needs one input and one result",
                       nil, @"h14.linked-outside-envelope");
@@ -67,12 +70,8 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
         for (NSUInteger i = 0; i < programs.size(); ++i) {
             const auto &p = programs[i];
             NSData *payload = nil;
-            if ([format isEqualToString:@"hwx"])
-                payload = encodeHWX(p, HWXObjectArchitectureH14, @[], error);
-            else {
-                const auto anec = ane::h14::encodeANEC(p);
-                payload = [NSData dataWithBytes:anec.data() length:anec.size()];
-            }
+            const auto anec = ane::h14::encodeANEC(p);
+            payload = [NSData dataWithBytes:anec.data() length:anec.size()];
             if (!payload) return NO;
             NSDictionary *record = @{
                 @"file": [NSString stringWithFormat:@"program-%lu.%@", (unsigned long)i, format],
