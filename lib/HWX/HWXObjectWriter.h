@@ -66,6 +66,9 @@ typedef NS_ENUM(NSUInteger, HWXProgramDescriptorLayout) {
 /// operands) Apple writes to its own __KERN_0 segment right after __TEXT,
 /// with that address as the resource slot after the surfaces. Nil for none.
 @property(nonatomic, copy, nullable) NSData *kernelTable;
+/// Formula-built H16G/H17 convolution: constantRegion is the __KERN_0
+/// weight section; __TEXT/__const is a zero allocation, never the weights.
+@property(nonatomic) BOOL kernelRegionConstants;
 - (instancetype)initWithTaskCount:(NSUInteger)taskCount
                        recordCount:(NSUInteger)recordCount
                         formatCode:(uint32_t)formatCode

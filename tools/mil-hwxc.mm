@@ -58,7 +58,8 @@ int main(int argc, const char *argv[]) {
         NSString *requestedFormat = arguments[@"--format"];
         // H17 and H18 emit HWX only; every other target defaults to ANEC.
         NSString *format = requestedFormat ?:
-            ([target isEqualToString:@"H17"] || [target isEqualToString:@"H18"]
+            ([target isEqualToString:@"H17"] || [target isEqualToString:@"H18"] ||
+             ([target isEqualToString:@"H16G"] && arguments[@"--schedule"])
                  ? @"hwx" : @"anec");
         NSString *schedule = arguments[@"--schedule"] ?: @"per-op";
         NSSet<NSString *> *accepted = [NSSet setWithArray:@[
@@ -73,8 +74,9 @@ int main(int argc, const char *argv[]) {
             }
         }
         if (arguments[@"--schedule"] &&
-            ![target isEqualToString:@"H13"] && ![target isEqualToString:@"H14"]) {
-            fprintf(stderr, "--schedule requires target H13 or H14\n");
+            ![target isEqualToString:@"H13"] && ![target isEqualToString:@"H14"] &&
+            ![target isEqualToString:@"H16G"] && ![target isEqualToString:@"H17"]) {
+            fprintf(stderr, "--schedule requires target H13, H14, H16G or H17\n");
             return 64;
         }
         if (!milPath || !modelRoot || !output) {
@@ -90,11 +92,17 @@ int main(int argc, const char *argv[]) {
         ANEDiagnosticEngine *diagnostics = [[ANEDiagnosticEngine alloc] init];
         BOOL parityTarget = [target isEqualToString:@"H14"] ||
             [target isEqualToString:@"H17"] || [target isEqualToString:@"H18"];
-        if ([target isEqualToString:@"H13"] || parityTarget) {
+        BOOL formulaH16 = [target isEqualToString:@"H16G"] &&
+            (requestedFormat || arguments[@"--schedule"]);
+        if ([target isEqualToString:@"H13"] || parityTarget || formulaH16) {
             NSError *error = nil;
             NSURL *root = [NSURL fileURLWithPath:modelRoot isDirectory:YES];
             NSURL *outputURL = [NSURL fileURLWithPath:output isDirectory:YES];
-            BOOL success = parityTarget
+            BOOL success = formulaH16
+                ? [ANEH13Compiler compileConvMILData:milData modelRoot:root
+                    target:target format:format outputDirectory:outputURL
+                    schedule:schedule diagnostics:diagnostics error:&error]
+                : parityTarget
                 ? [ANEH14Compiler compileMILData:milData modelRoot:root
                     target:target format:format outputDirectory:outputURL
                     schedule:schedule diagnostics:diagnostics error:&error]

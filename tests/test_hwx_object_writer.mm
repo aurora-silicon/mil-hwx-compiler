@@ -850,6 +850,36 @@ static void testParserRejectsInvalidSymbolAndRelocationTables(void) {
            error != nil, @"parser rejects an invalid relocation section ordinal");
 }
 
+static void testConvolutionTextGrowsBeyondCorpusCap(void) {
+    // Larger than the old 0x60000 corpus-based policy cap. No executable
+    // meaning is claimed for these zero bytes: this checks container bounds.
+    NSData *task = [NSMutableData dataWithLength:0x60004];
+    HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
+        initWithTaskCount:1 firstTaskByteLength:task.length recordCount:16
+        formatCode:0 scratchByteLength:0
+        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    info.kernelRegionConstants = YES;
+    for (NSNumber *architecture in @[@(HWXObjectArchitectureH16G), @(HWXObjectArchitectureH17)]) {
+        NSError *error = nil;
+        NSData *image = [HWXObjectWriter buildObjectForArchitecture:
+            (HWXObjectArchitecture)architecture.unsignedIntegerValue
+            taskDescriptor:task constantRegion:[NSMutableData dataWithLength:64]
+            bindings:bindings() kernelRelocationOffsets:@[] programInfo:info error:&error];
+        expect(image != nil && error == nil,
+            @"convolution container accepts a stream above the old corpus cap");
+        const struct section_64 *text = image ? textSection(image) : NULL;
+        expect(text != NULL && text->size == task.length,
+            @"large convolution text retains its complete stream");
+        if (image) expect([HWXImage imageWithData:image error:&error] != nil,
+            @"large convolution text and zero const area fit their segment");
+    }
+    NSError *error = nil;
+    expect([HWXObjectWriter buildObjectForArchitecture:HWXObjectArchitectureH13
+        taskDescriptor:task constantRegion:[NSMutableData dataWithLength:64]
+        bindings:bindings() kernelRelocationOffsets:@[] programInfo:info error:&error] == nil,
+        @"H16/H17 convolution kernel placement cannot be selected for H13");
+}
+
 int main(void) {
     @autoreleasepool {
         testObjectIsBuiltFromInputs();
@@ -864,6 +894,7 @@ int main(void) {
         testFourSurfaceScratchProgramUsesMeasuredResourceLayout();
         testWriterRejectsUnrepresentableResourcesAndRelocations();
         testParserRejectsInvalidSymbolAndRelocationTables();
+        testConvolutionTextGrowsBeyondCorpusCap();
         printf("HWX object writer: %s\n", failures == 0 ? "PASS" : "FAIL");
     }
     return failures == 0 ? 0 : 1;

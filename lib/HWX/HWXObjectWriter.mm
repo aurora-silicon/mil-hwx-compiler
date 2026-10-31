@@ -439,8 +439,10 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         architecture == HWXObjectArchitectureH14 ||
         architecture == HWXObjectArchitectureH17 ||
         architecture == HWXObjectArchitectureH18;
-    BOOL supportedArchitecture = textConstants ||
-        architecture == HWXObjectArchitectureH16G;
+    if (programInfo.kernelRegionConstants) textConstants = NO;
+    BOOL supportedArchitecture = architecture == HWXObjectArchitectureH13 ||
+        architecture == HWXObjectArchitectureH14 || architecture == HWXObjectArchitectureH16G ||
+        architecture == HWXObjectArchitectureH17 || architecture == HWXObjectArchitectureH18;
     BOOL separateKernelTable = architecture == HWXObjectArchitectureH17 ||
         architecture == HWXObjectArchitectureH18;
     NSData *kernelData = textConstants ? programInfo.kernelTable : constantRegion;
@@ -495,11 +497,14 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         }
     }
     NSString *rejection = nil;
-    if (!supportedArchitecture)
+    if (programInfo.kernelRegionConstants &&
+        architecture != HWXObjectArchitectureH16G && architecture != HWXObjectArchitectureH17)
+        rejection = @"kernel-region convolution constants require H16G or H17";
+    else if (!supportedArchitecture)
         rejection = @"writer supports only H13, H14, H16G, H17 and H18 architectures";
     else if (!programInfo || programInfo.taskCount == 0)
         rejection = @"writer requires program info with at least one task";
-    else if (programInfo.kernelTable.length && !separateKernelTable)
+    else if (programInfo.kernelTable.length && (!separateKernelTable || programInfo.kernelRegionConstants))
         rejection = @"only H17 and H18 objects carry a separate kernel table";
     else if (textConstants && (taskDescriptor.length == 0 ||
                      taskDescriptor.length % sizeof(uint32_t) ||
@@ -510,18 +515,12 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         rejection = @"text-constant HWX requires a nonempty word-aligned linear task stream";
     else if (!resourceCountValid)
         rejection = @"writer requires one output, at least one input, at most four surfaces and five total resources";
-    // Apple partitions one program into up to 129 tasks rather than emitting
-    // a second program; the largest decoded single-batch stream is 80,888
-    // bytes for [512,8192] x const[8192,8192]. The batched matmul oracles
-    // run 26·B tasks in one stream — 324,212 bytes at B=16 — so the cap
-    // covers that decoded maximum.
-    else if (taskDescriptor.length == 0 || taskDescriptor.length > 0x60000)
-        rejection = @"writer requires a nonempty task descriptor of at most 0x60000 bytes";
-    // Apple keeps a whole matmul weight in one program's __TEXT/__const: the
-    // largest decoded section is 134,217,728 bytes, for [512,8192] x
-    // const[8192,8192]. The cap is twice that.
-    else if (constantRegion.length > 0x10000000)
-        rejection = @"writer requires a constant region of at most 256 MiB";
+    // Bound by the 32-bit Mach-O file offsets, not a macOS compiler policy
+    // or the largest program in the oracle corpus.
+    else if (taskDescriptor.length == 0 || taskDescriptor.length > UINT32_MAX - 0x10000)
+        rejection = @"task stream exceeds the HWX file-offset representation";
+    else if (constantRegion.length > UINT32_MAX - 0x10000)
+        rejection = @"constant region exceeds the HWX file-offset representation";
     else if (programInfo.descriptorLayout == HWXProgramDescriptorLayoutLinear &&
              programInfo.scratchByteLength != 0)
         rejection = @"a linear program cannot declare scratch";
@@ -584,7 +583,8 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
           (bindings.count == 2 || compactThreeSurface)) ? 0x4000 : 0x8000);
     uint64_t textConstOffset = textConstVM - textVM;
     uint64_t textSegmentSize = textConstants
-        ? alignUp(textConstOffset + constantRegion.length, 0x4000) : 0x8000;
+        ? alignUp(textConstOffset + constantRegion.length, 0x4000)
+        : MAX((uint64_t)0x8000, alignUp(textConstOffset + 0x4000, 0x4000));
     // __KERN_0 follows __TEXT directly: 0x8000 past the text for H16G, one
     // 16 KiB-aligned text-and-constant span for H17 and H18.
     uint64_t kernelVM = 0;
@@ -592,6 +592,14 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         if (error) *error=[NSError errorWithDomain:HWXObjectWriterErrorDomain
             code:1 userInfo:@{NSLocalizedDescriptionKey:
                 @"writer kernel VM layout overflows"}];
+        return nil;
+    }
+    const uint64_t kernelSpan = hasKernel ? alignUp(kernelData.length, 0x4000) : 0;
+    if (textSegmentSize > UINT32_MAX - textFileOffset ||
+        kernelSpan > UINT32_MAX - textFileOffset - textSegmentSize) {
+        if (error) *error=[NSError errorWithDomain:HWXObjectWriterErrorDomain
+            code:1 userInfo:@{NSLocalizedDescriptionKey:
+                @"HWX segments exceed the 32-bit file-offset representation"}];
         return nil;
     }
     uint32_t kernelFileOffset = textFileOffset + (uint32_t)textSegmentSize;
