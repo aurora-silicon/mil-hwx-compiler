@@ -375,6 +375,13 @@ struct LinkedLayer {
     std::uint64_t readOffset;
     bool writesScratch;
     std::uint64_t writeOffset;
+    /// L2-resident edges: the layer reads its input from L2 at `l2ReadBase`
+    /// (no input DMA) and/or leaves its result in L2 at `l2WriteBase`.
+    bool readsL2 = false;
+    std::uint32_t l2ReadBase = 0;
+    bool writesL2 = false;
+    std::uint32_t l2WriteBase = 0;
+    std::uint32_t l2WriteBytes = 0;
 };
 
 /// Links the per-layer programs of a straight-line convolution chain into
@@ -387,7 +394,8 @@ struct LinkedLayer {
 /// in the shared constant section. `layout`, when given, receives each
 /// layer's task span and scratch routing.
 Program linkConvChain(const std::vector<Program> &layers,
-                      std::vector<LinkedLayer> *layout = nullptr);
+                      std::vector<LinkedLayer> *layout = nullptr,
+                      bool l2Resident = false);
 
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);

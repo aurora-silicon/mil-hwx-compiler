@@ -1,6 +1,7 @@
 #include "H13Program.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -2633,7 +2634,13 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
     const std::uint64_t outRowL2 =
         alignUp(std::max<std::uint32_t>(16, out.width * 2), 16);
     plan.tileHeight = 0;
-    for (std::uint32_t tile = out.height; tile >= 1; --tile) {
+    // Research aid: MILHWXC_H13_TILE_ROWS caps the tile height, to measure
+    // how the engine overlaps DMA with compute at smaller tiles.
+    std::uint32_t tileCap = out.height;
+    if (const char *cap = std::getenv("MILHWXC_H13_TILE_ROWS"))
+        tileCap = std::max<std::uint32_t>(1, std::min<std::uint32_t>(
+            out.height, static_cast<std::uint32_t>(std::strtoul(cap, nullptr, 10))));
+    for (std::uint32_t tile = tileCap; tile >= 1; --tile) {
         const std::uint32_t rows = std::min<std::uint32_t>(
             in.height, tile * shape.stride + shape.kernel - 1);
         const std::uint64_t used =
@@ -2896,8 +2903,106 @@ bool sameLayout(const TensorLayout &left, const TensorLayout &right) {
 
 } // namespace
 
+namespace {
+
+/// H13 L2 address space: 17-bit base and stride fields at 16-byte
+/// granularity (t-3752), so every L2 byte a task touches must sit below 2 MiB.
+constexpr std::uint32_t kL2Bytes = 0x200000;
+
+/// The L2 geometry of one single-task convolution layer, read back from the
+/// task words the generic encoder wrote.
+struct LayerL2 {
+    std::uint32_t inHeight, outHeight, outWidth, outChannels, tileHeight;
+    std::uint32_t sourceRow;     // 0x4810: input row stride in L2
+    std::uint32_t sourceRows;    // rows the input DMA stages (0x4834 / 0x4810)
+    std::uint32_t outRowL2;      // align16(max(16, 2 * Wo))
+};
+
+LayerL2 layerL2(const Program &layer) {
+    const auto &t = layer.task;
+    const std::size_t bytes = layer.firstTaskBytes;
+    auto reg = [&](std::uint32_t a) {
+        return loadLE32(t, h13RegisterOffset(t, 0, bytes, a));
+    };
+    LayerL2 g{};
+    g.inHeight = reg(0x0) >> 16;
+    g.outHeight = reg(0x14) >> 16;
+    g.outWidth = reg(0x14) & 0xffff;
+    g.outChannels = reg(0x10);
+    g.tileHeight = reg(0x28);
+    g.sourceRow = reg(0x4810);
+    g.sourceRows = g.sourceRow ? reg(0x4834) / g.sourceRow : 0;
+    g.outRowL2 = static_cast<std::uint32_t>(
+        std::max<std::uint64_t>(16, (2ull * g.outWidth + 15) / 16 * 16));
+    return g;
+}
+
+struct L2Edge {
+    bool resident = false;
+    std::uint32_t base = 0;      // where the producer leaves its result
+    std::uint32_t bytes = 0;     // consumer input rows * consumer row stride
+};
+
+bool overlaps(std::uint64_t a, std::uint64_t an, std::uint64_t b, std::uint64_t bn) {
+    return a < b + bn && b < a + an;
+}
+
+/// Picks the edges whose intermediate stays in L2 and places every L2
+/// region. An edge qualifies when the producer is one task that computes its
+/// whole output in one tile (so the full result is resident when the task
+/// ends), and the consumer's whole input plus every other region either task
+/// uses fits the 2 MiB L2 without overlap. The placement is a ping-pong over
+/// the address space: a result goes below or above the region its own task
+/// reads from. Every region is checked; anything unproven stays in DRAM.
+std::vector<L2Edge> planL2Edges(const std::vector<Program> &layers) {
+    std::vector<L2Edge> edges(layers.size() - 1);
+    std::vector<LayerL2> g;
+    for (const auto &layer : layers) g.push_back(layerL2(layer));
+    // L2 input of each layer once decided: [base, base + bytes).
+    bool inL2 = false;
+    std::uint32_t inBase = 0, inBytes = 0;
+    for (std::size_t i = 0; i + 1 < layers.size(); ++i) {
+        const auto &p = g[i];
+        const auto &c = g[i + 1];
+        // Regions the producer itself occupies: its staged input (from DRAM,
+        // at 0) or its resident input (from the previous edge).
+        const std::uint64_t pInBase = inL2 ? inBase : 0;
+        const std::uint64_t pInBytes = inL2 ? inBytes
+            : static_cast<std::uint64_t>(p.sourceRows) * p.sourceRow;
+        const std::uint64_t result = static_cast<std::uint64_t>(c.inHeight) * c.sourceRow;
+        // The consumer's own DRAM-output staging region.
+        const std::uint64_t staging = static_cast<std::uint64_t>(c.tileHeight) *
+            c.outChannels * c.outRowL2;
+        bool ok = layers[i].taskCount == 1 && p.tileHeight == p.outHeight &&
+            c.inHeight == p.outHeight && c.sourceRow &&
+            c.sourceRow % 16 == 0 && result + staging <= kL2Bytes;
+        std::uint64_t base = 0;
+        if (ok) {
+            // Below the producer's input if it fits there, else above it.
+            const std::uint64_t above = (pInBase + pInBytes + 0xf) & ~0xfull;
+            if (result <= pInBase) base = 0;
+            else base = above;
+            ok = base + result <= kL2Bytes && !overlaps(base, result, pInBase, pInBytes);
+        }
+        if (ok) {
+            // The consumer stages its own output (DRAM writes) or the next
+            // resident result outside its input; check a slot exists.
+            const std::uint64_t low = base, high = base + result;
+            ok = staging <= low || high + staging <= kL2Bytes;
+        }
+        edges[i] = {ok, static_cast<std::uint32_t>(base),
+                    static_cast<std::uint32_t>(ok ? result : 0)};
+        inL2 = ok;
+        inBase = edges[i].base;
+        inBytes = edges[i].bytes;
+    }
+    return edges;
+}
+
+} // namespace
+
 Program linkConvChain(const std::vector<Program> &layers,
-                      std::vector<LinkedLayer> *layout) {
+                      std::vector<LinkedLayer> *layout, bool l2Resident) {
     if (layers.size() < 2)
         throw std::invalid_argument(
             "h13.linked-outside-envelope: a linked program needs two or more layers");
@@ -2919,11 +3024,14 @@ Program linkConvChain(const std::vector<Program> &layers,
 
     // Scratch arena: one region per intermediate, never reused, so the only
     // ordering the stream relies on is producer before consumer.
+    std::vector<L2Edge> edges(layers.size() - 1);
+    if (l2Resident) edges = planL2Edges(layers);
     std::vector<std::uint64_t> regions;
     std::uint64_t arena = 0;
     for (std::size_t index = 0; index + 1 != layers.size(); ++index) {
         regions.push_back(arena);
-        arena += alignTile(layers[index].output.allocationBytes);
+        if (!edges[index].resident)
+            arena += alignTile(layers[index].output.allocationBytes);
     }
     if (arena > 0xffffffffull)
         throw std::invalid_argument(
@@ -2954,13 +3062,22 @@ Program linkConvChain(const std::vector<Program> &layers,
         const auto &layer = layers[index];
         const std::uint32_t constantBase =
             static_cast<std::uint32_t>(program.constants.size());
-        const bool readsScratch = index != 0;
-        const bool writesScratch = index + 1 != layers.size();
-        if (layout)
-            layout->push_back({global, layer.taskCount, readsScratch,
-                               readsScratch ? regions[index - 1] : 0,
-                               writesScratch,
-                               writesScratch ? regions[index] : 0});
+        const bool readsL2 = index != 0 && edges[index - 1].resident;
+        const bool writesL2 = index + 1 != layers.size() && edges[index].resident;
+        const bool readsScratch = index != 0 && !readsL2;
+        const bool writesScratch = index + 1 != layers.size() && !writesL2;
+        if (layout) {
+            LinkedLayer entry{global, layer.taskCount, readsScratch,
+                              readsScratch ? regions[index - 1] : 0,
+                              writesScratch,
+                              writesScratch ? regions[index] : 0};
+            entry.readsL2 = readsL2;
+            entry.l2ReadBase = readsL2 ? edges[index - 1].base : 0;
+            entry.writesL2 = writesL2;
+            entry.l2WriteBase = writesL2 ? edges[index].base : 0;
+            entry.l2WriteBytes = writesL2 ? edges[index].bytes : 0;
+            layout->push_back(entry);
+        }
         for (const auto &span : spans[index]) {
             const bool last = global + 1 == totalTasks;
             const std::size_t offset = cursor;
@@ -2998,9 +3115,16 @@ Program linkConvChain(const std::vector<Program> &layers,
             storeLE32(task, offset + 4,
                       last ? exeCycles
                            : exeCycles | ((static_cast<std::uint32_t>(nextBytes / 4) - 1) << 16));
-            storeLE32(task, offset + 8, 0x400u | 0x08u | (last ? 0x22u : 0u));
-            storeLE32(task, offset + 16, 0x00fff868u | (last ? 0x2u : 0u));
-            storeLE32(task, offset + 24, 0x30000800u | (last ? 0x9000u : 0u));
+            // A task reading a resident L2 input takes the decoded consumer
+            // form of conv_probe_k3_c1024_n1024_s16_st1_g4 and the two-task
+            // c1024 probe: no input-DMA events, no SrcLoc, no SPL.
+            storeLE32(task, offset + 8,
+                      0x400u | (readsL2 ? 0u : 0x08u) | (last ? 0x22u : 0u));
+            storeLE32(task, offset + 16,
+                      last ? 0x00fff86au : (readsL2 ? 0x00fff800u : 0x00fff868u));
+            storeLE32(task, offset + 24,
+                      (readsL2 ? 0u : 0x10000800u) | (writesL2 ? 0u : 0x20000000u) |
+                      (last ? 0x9000u : 0u));
             storeLE32(task, offset + 28, static_cast<std::uint32_t>(nextOffset));
             std::uint32_t selectors = loadLE32(task, offset + 32);
             if (((selectors >> 0) & 31) != 4 || !(selectors & (1u << 5)) ||
@@ -3008,6 +3132,63 @@ Program linkConvChain(const std::vector<Program> &layers,
                 throw std::invalid_argument(
                     "h13.linked-outside-envelope: layer task does not read "
                     "channel 4 and write channel 5");
+            if (readsL2) {
+                // Input resident in L2 at the producer's result base: no
+                // input DMA, L2Read source, the consumer's own strides
+                // (which the producer wrote its result with).
+                const auto &edge = edges[index - 1];
+                selectors &= ~(31u | (1u << 5));
+                putRegister(task, offset, bytes, 0x04804, 0x100);
+                putRegister(task, offset, bytes, 0x04808, edge.base);
+                putRegister(task, offset, bytes, 0x04818, 0);
+                putRegister(task, offset, bytes, 0x13800, 0x8880);
+                for (std::uint32_t a : {0x13808u, 0x1380cu, 0x13810u, 0x13814u, 0x13818u})
+                    putRegister(task, offset, bytes, a, 0);
+                putRegister(task, offset, bytes, 0x13838, 0x01000000);
+                // The decoded L2-reading consumers clear the conv and planar
+                // alias bits of their result config (0x50017a -> 0x14a).
+                if (!writesL2) {
+                    const auto cfg = loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x04830));
+                    putRegister(task, offset, bytes, 0x04830, cfg & ~0x00500030u);
+                }
+                if (!writesL2) {
+                    const auto g = layerL2(layer);
+                    const std::uint64_t staging =
+                        static_cast<std::uint64_t>(g.tileHeight) * g.outChannels * g.outRowL2;
+                    std::uint64_t at = (edge.base + edge.bytes + 0xf) & ~0xfull;
+                    if (staging <= edge.base) at = 0;
+                    if (at + staging > kL2Bytes || overlaps(at, staging, edge.base, edge.bytes))
+                        throw std::logic_error(
+                            "h13.linked-outside-envelope: no L2 room for the consumer's staging");
+                    putRegister(task, offset, bytes, 0x04834, static_cast<std::uint32_t>(at));
+                }
+            }
+            if (writesL2) {
+                // Result left in L2 in the consumer's source layout: result
+                // type 0 (no L2 buffer mode), strides from the consumer, no
+                // output DMA -- the producer form of the g4 probe's task 0.
+                const auto &edge = edges[index];
+                const auto &next = layers[index + 1];
+                auto nextReg = [&](std::uint32_t a) {
+                    return loadLE32(next.task, h13RegisterOffset(next.task, 0, next.firstTaskBytes, a));
+                };
+                selectors &= ~((31u << 12) | (1u << 17));
+                const auto resultCfg = loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x04830));
+                putRegister(task, offset, bytes, 0x04830, resultCfg & ~0xfu);
+                // Common 0x24 bit 14: every decoded compute task that leaves
+                // its result in L2 for a following task sets it (0x14001).
+                const auto c24 = loadLE32(task, h13RegisterOffset(task, offset, bytes, 0x00024));
+                putRegister(task, offset, bytes, 0x00024, c24 | 0x4000u);
+                putRegister(task, offset, bytes, 0x04834, edge.base);
+                putRegister(task, offset, bytes, 0x04838, nextReg(0x0480c));
+                putRegister(task, offset, bytes, 0x0483c, nextReg(0x04810));
+                putRegister(task, offset, bytes, 0x04840, nextReg(0x04814));
+                putRegister(task, offset, bytes, 0x04844, 0);
+                putRegister(task, offset, bytes, 0x17800, 0xc0);
+                for (std::uint32_t a : {0x17804u, 0x17808u, 0x1780cu, 0x17810u, 0x17814u})
+                    putRegister(task, offset, bytes, a, 0);
+                putRegister(task, offset, bytes, 0x17818, 0x01000000);
+            }
             if (readsScratch) {
                 const std::uint64_t depth = loadLE32(task,
                     h13RegisterOffset(task, offset, bytes, 0x13814));

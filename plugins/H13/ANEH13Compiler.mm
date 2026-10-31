@@ -4375,8 +4375,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     throw std::invalid_argument(
                         "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
             std::vector<ane::h13::LinkedLayer> layout;
+            const char *l2Env = getenv("MILHWXC_H13_LINKED_L2");
+            const bool l2Resident = l2Env && l2Env[0] == '1';
             ane::h13::Program combined =
-                ane::h13::linkConvChain(chainPrograms, &layout);
+                ane::h13::linkConvChain(chainPrograms, &layout, l2Resident);
             std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
@@ -4396,10 +4398,21 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     [taskRecords addObject:@{
                         @"index": @(layout[index].firstTask + task),
                         @"layer": @(index), @"operation": record[@"operation"]}];
-                [layers addObject:@{
+                NSMutableDictionary *layerRecord = [@{
                     @"result": result, @"operation": record[@"operation"],
                     @"firstTask": @(layout[index].firstTask),
-                    @"taskDescriptors": @(layout[index].taskCount)}];
+                    @"taskDescriptors": @(layout[index].taskCount)} mutableCopy];
+                if (layout[index].readsL2)
+                    layerRecord[@"l2Input"] = @(layout[index].l2ReadBase);
+                if (layout[index].writesL2)
+                    layerRecord[@"l2Result"] = @{@"base": @(layout[index].l2WriteBase),
+                                                 @"bytes": @(layout[index].l2WriteBytes)};
+                [layers addObject:layerRecord];
+                if (layout[index].writesL2) {
+                    [tensors removeObjectForKey:result];
+                    [intermediateNames removeObject:result];
+                    [intermediateStorageNames removeObject:result];
+                }
                 if (layout[index].writesScratch) {
                     regions[result] = @{
                         @"offset": @(layout[index].writeOffset),
