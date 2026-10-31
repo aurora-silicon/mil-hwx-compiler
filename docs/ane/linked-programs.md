@@ -30,6 +30,15 @@ tasks into one stream:
   base (`0x13808`) both point at that intermediate's own region. Apple's own
   decoded programs stage through channel 3 the same way (the boolean select
   captures).
+- **Inter-layer dependency.** The last task of every layer carries TSE and
+  TSR (`header[6]` bits 15 and 12), and the first task of the next layer sets
+  its input DMA's DependencyMode (`0x13800` bits 19:16, named in the public
+  H13 register map) to 7 instead of the program-input value 3. Apple sets the
+  same pair on its DRAM-chained streams (chain_ffn_d1024_s375: task 16 TSE+TSR,
+  task 17 mode 7; encoder_conv_c1024_n2048: task 4 TSE+TSR). The first version
+  of this branch had neither. Warm runs looked bit-exact, but a cold single run
+  read stale scratch (rel. L2 0.22 to 0.43, first wrong at layer 16, dw 3x3 512
+  @14x14), and it converged only after about 20 passes on the same input.
 - **A simple allocator.** Each intermediate gets its own tile-aligned region
   and no region is reused, so no task ever writes a region that an earlier
   task still reads. The only ordering the stream relies on is producer before
@@ -97,12 +106,31 @@ Wall time includes the input and output copies unless marked exec only.
 | Form | Submits | p50 | p99 | inf/s | engine busy |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 28 per-layer programs, host copy between layers | 28 | 4.82 ms | 4.93 ms | 208 | 2.99 ms |
-| one linked program (45 tasks) | 1 | 2.35 ms | 2.38 ms | 426 | 2.31 ms |
-| one linked program, exec only (50 runs) | 1 | 2.23 ms | | 449 | 2.21 ms |
+| one linked program (45 tasks), first version, no dependency bits | 1 | 2.35 ms | 2.38 ms | 426 | 2.31 ms |
+| one linked program with the dependency fix, 1000 passes | 1 | 2.30 ms | 2.32 ms | 434 | 2.24 ms |
+| same, exec only, 1000 passes | 1 | 2.25 ms | 2.26 ms | 445 | 2.24 ms |
 
-The linked output equals the per-layer output bit for bit (100 % of the
-1024x7x7 surface, and on every smaller chain tested: 2 to 16 layers at 8x8
-and 32x32, repeatable across runs). Linking halves the wall time: it removes
+The linked output equals the per-layer output bit for bit on **cold** single
+runs with a new input each time (`tools/h13-mobilenet/coldcheck.py`: a fresh
+process, no warm-up, 6 inputs each for random and real weights; prefix 16, the
+first layer that failed before the dependency fix, is also exact). Rel. L2 vs
+float64 is 0.002 on the whole net.
+
+Real weights (the Apache-2.0 quantized MobileNetV1 from Mesa's teflon tests,
+dequantized, ReLU in place of ReLU6), 16 test images, single cold runs: top-1
+agrees with the float64 CPU reference of the same network on 16 of 16, top-5
+overlap 5 of 5, logits rel. L2 at most 1.3e-3. The images are procedural
+patterns and smooth noise, not photos, and they land in 10 different classes.
+
+1000 passes (fleet12e, CPU boost on, real weights, after the fix): p50
+2.30 ms and p99 2.32 ms with I/O (434 inf/s); exec only p50 2.25 ms, p99
+2.26 ms (445 inf/s); engine busy 2.24 ms. The barrier costs about nothing.
+
+**Open hazard.** With the driver's CPU boost off (`boost_idle_ms=0`, slower
+fabric) the linked program raised a task error (-5) at pass 455 and the
+engine wedged. It did not happen in 1000 passes with boost on. It is not
+known yet whether the per-layer programs fail the same way at boost 0; until
+that is bisected, treat linked programs at low fabric clocks as unproven. Linking halves the wall time: it removes
 27 submits (about 25 us each), the host copies, and about 0.7 ms of engine
 time per inference.
 

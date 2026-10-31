@@ -2165,10 +2165,17 @@ std::vector<std::uint8_t> packConvDepthwise(std::uint32_t taps,
 /// mask byte whose bit `l` marks a lane whose weight is not zero followed by
 /// those lanes' halfwords, and closes with `lanes / 2 - 2` zero bytes. Both
 /// signed zeros count as zero, so the section's size depends on the values.
+///
+/// With `skipZeros` false every mask bit is set and zero weights are stored
+/// like any other value. That is the only form the device has run: random
+/// weights have no zeros, and the first real-weight MobileNetV1 (whose
+/// stride-2 layers hold exact zeros) wedged the M1 Pro engine on its first
+/// submit. Apple's captures skip zeros, so oracle parity keeps `skipZeros`.
 std::vector<std::uint8_t> packConvStrided(std::uint32_t reduction,
                                           const std::vector<std::uint32_t> &chunks,
                                           const std::uint8_t *weights,
-                                          const std::uint8_t *bias) {
+                                          const std::uint8_t *bias,
+                                          bool skipZeros = true) {
     std::vector<std::uint8_t> packed;
     std::uint32_t start = 0;
     for (const auto lanes : chunks) {
@@ -2186,7 +2193,7 @@ std::vector<std::uint8_t> packConvStrided(std::uint32_t reduction,
                         const std::uint8_t *value = weights +
                             (static_cast<std::size_t>(first + lane) * reduction +
                              row) * 2;
-                        if (value[0] || (value[1] & 0x7f)) {
+                        if (!skipZeros || value[0] || (value[1] & 0x7f)) {
                             mask |= static_cast<std::uint8_t>(1u << (lane - base));
                             values.push_back(value[0]);
                             values.push_back(value[1]);
@@ -2764,7 +2771,7 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
                     throw std::invalid_argument(
                         "h13.conv-outside-envelope: the generic strided "
                         "section needs one lane chunk");
-                packed = packConvStrided(reduction, chunks, w, b);
+                packed = packConvStrided(reduction, chunks, w, b, false);
             } else {
                 packed = packConvDense(reduction, chunks, w, b, false);
             }
@@ -3000,7 +3007,15 @@ Program linkConvChain(const std::vector<Program> &layers,
                            : exeCycles | ((static_cast<std::uint32_t>(nextBytes / 4) - 1) << 16));
             storeLE32(task, offset + 8, 0x400u | 0x08u | (last ? 0x22u : 0u));
             storeLE32(task, offset + 16, 0x00fff868u | (last ? 0x2u : 0u));
-            storeLE32(task, offset + 24, 0x30000800u | (last ? 0x9000u : 0u));
+            // TSE + TSR (header[6] bits 15 and 12) on the last task of every
+            // layer. Apple's decoded streams that stage through scratch set
+            // them on the last producer task before a consumer reads the
+            // region (encoder_conv_c1024_n2048 task 4, chain_ffn_d1024_s375
+            // task 16). Without them a consumer's input DMA can run ahead of
+            // the producer's output DMA: the M1 Pro read stale scratch on a
+            // cold run (dw 3x3 512 @14x14, prefix 16 of MobileNetV1).
+            const bool layerEnd = &span == &spans[index].back();
+            storeLE32(task, offset + 24, 0x30000800u | (layerEnd ? 0x9000u : 0u));
             storeLE32(task, offset + 28, static_cast<std::uint32_t>(nextOffset));
             std::uint32_t selectors = loadLE32(task, offset + 32);
             if (((selectors >> 0) & 31) != 4 || !(selectors & (1u << 5)) ||
@@ -3018,6 +3033,19 @@ Program linkConvChain(const std::vector<Program> &layers,
                 selectors = (selectors & ~31u) | 3u;
                 putRegister(task, offset, bytes, 0x13808,
                             static_cast<std::uint32_t>(regions[index - 1]));
+                // TileDMASrc DMAConfig bits 19:16 are DependencyMode (public
+                // H13 register map). The template's program-input value is 3;
+                // Apple's first scratch read after a TSE/TSR producer uses 7
+                // (chain_ffn_d1024_s375 task 17), the later reads of the same
+                // region 3 again. Bit 2 is the wait on the producer's release.
+                if (&span == &spans[index].front()) {
+                    const auto word = h13RegisterOffset(task, offset, bytes, 0x13800);
+                    const auto cfg = loadLE32(task, word);
+                    if (((cfg >> 16) & 0xf) != 3)
+                        throw std::invalid_argument(
+                            "h13.linked-outside-envelope: unexpected input DMA dependency mode");
+                    storeLE32(task, word, (cfg & ~0x000f0000u) | 0x00070000u);
+                }
             }
             if (writesScratch) {
                 selectors = (selectors & ~(31u << 12)) | (3u << 12);

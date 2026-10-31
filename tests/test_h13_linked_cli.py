@@ -6,7 +6,10 @@ layers' own formula-built tasks, relinked:
 
 1. Stream: one program, every layer's tasks in order, task ids, first/last
    flags, next pointers and NextSize words consistent, end-of-stream bits only
-   on the last task, TBE on every task with a successor.
+   on the last task, TBE on every task with a successor. Each layer's last
+   task carries TSE+TSR and the next layer's first task waits on it (input
+   DMA DependencyMode 7): without that the M1 Pro read stale scratch on cold
+   runs. Device equality is checked cold with tools/h13-mobilenet/coldcheck.py.
 2. Routing: the first layer reads the program input (channel 5), the last
    writes the program output (channel 4); every intermediate goes through the
    scratch channel (3) at its own tile-aligned region, the producer's write
@@ -189,11 +192,21 @@ with tempfile.TemporaryDirectory(prefix="mil-hwx-h13-linked-") as tmp:
             assert bool(h[0] & (1 << 24)) == (index > 0), (name, index)
             assert bool(h[0] & (1 << 25)) == last, (name, index)
             assert (h[2] & 0x22 == 0x22) == last and h[2] & 0x408 == 0x408, (name, index)
-            assert h[6] & 0x30000800 == 0x30000800 and bool(h[6] & 0x9000) == last, (name, index)
+            assert h[6] & 0x30000800 == 0x30000800, (name, index)
             assert bool(h[8] & (1 << 23)) == (not last), (name, index)
             assert (h[7] == 0) == last, (name, index)
             if not last:
                 assert h[7] % 0x100 == 0 and h[7] >= offset + size, (name, index)
+        # 1b. inter-layer dependency: TSE+TSR on each layer's last task, and
+        # the first task of every consumer layer waits on it (input DMA
+        # DependencyMode 7); every other task keeps the program-input mode 3.
+        firsts, ends, task_index = set(), set(), 0
+        for n in per_layer:
+            firsts.add(task_index); ends.add(task_index + n - 1); task_index += n
+        for index, (offset, size, h, regs) in enumerate(tasks):
+            assert (h[6] & 0x9000 == 0x9000) == (index in ends), (name, index, hex(h[6]))
+            dep = (regs[0x13800] >> 16) & 0xF
+            assert dep == (7 if index in firsts and index else 3), (name, index, dep)
         # 2. routing through the scratch channel
         regions = manifest["scratch"]["regions"]
         assert manifest["scratch"]["channel"] == 3, name
