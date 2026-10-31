@@ -1,0 +1,9 @@
+program(1.3)
+[buildInfo = dict<string, string>({})]
+{
+  func main<ios18>(tensor<fp16, [1, 1500, 384]> v30) {
+    tensor<fp16, [384, 384]> v31 = const()[name = string("v31"), val = tensor<fp16, [384, 384]>(BLOBFILE(path = string("@model_path/weights.bin"), offset = uint64(2224704)))];
+    tensor<fp16, [384]> v32 = const()[name = string("v32"), val = tensor<fp16, [384]>(BLOBFILE(path = string("@model_path/weights.bin"), offset = uint64(2519680)))];
+    tensor<fp16, [1, 1500, 384]> v33 = linear(x = v30, weight = v31, bias = v32)[name = string("v33")];
+  } -> (v33);
+}
