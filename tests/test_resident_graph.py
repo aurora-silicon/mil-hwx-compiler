@@ -3,6 +3,7 @@
 import copy
 import ctypes
 import json
+import os
 import importlib.util
 from pathlib import Path
 import struct
@@ -15,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_h13_linux_runtime as old
 from research import inspect_anec
+from research.h13_td import split_h14_tasks
 import h13_run_linux as runner
 
 
@@ -32,7 +34,7 @@ class Adapter(old.ScriptedAdapter):
         if self.loaded == self.fail_load:
             return None
         self.current[self.loaded] = {}
-        fields = inspect_anec.HEADER.unpack_from(Path(path).read_bytes())
+        fields = inspect_anec.HEADER.unpack_from(Path(os.fsdecode(path)).read_bytes())
         tiles = fields[7:39]
         self.sizes[self.loaded] = ([tiles[i] * 16384 for i in (5, 6)],
                                    [tiles[4] * 16384])
@@ -77,6 +79,27 @@ def package(root, target):
                              '--target', target, '--output', str(dest)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return mil, dest, old.add_inputs(root), {'y': root / 'y.fp16'}
+
+
+def patch_register(data, address, value):
+    task_bytes = inspect_anec.HEADER.unpack_from(data)[3]
+    for task in split_h14_tasks(bytes(data[0x1000:0x1000 + task_bytes])):
+        start = data.index(task, 0x1000)
+        words = struct.unpack(f'<{len(task) // 4}I', task)
+        index = 9 if words[7] & 3 == 3 else 8
+        while index < len(words):
+            header = words[index]
+            base = (header & 0x7fff) * 4
+            addresses = ([base] + [base + (bit + 1) * 4 for bit in range(16)
+                                   if (header >> 15) & (1 << bit)]
+                         if header & 0x80000000 else
+                         [base + i * 4 for i in range(((header >> 15) & 0x3f) + 1)])
+            if address in addresses:
+                offset = start + (index + 1 + addresses.index(address)) * 4
+                struct.pack_into('<I', data, offset, value)
+                return
+            index += len(addresses) + 1
+    raise AssertionError(f'fixture has no register {address:#x}')
 
 
 class ResidentTests(unittest.TestCase):
@@ -219,7 +242,7 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(manifest['target'], 'H14')
 
     def test_h14_task_corruption_refused_before_load(self):
-        for corruption in ('size', 'register'):
+        for corruption in ('size', 'register', 'bar-high', 'stride', 'constant'):
             with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 mil, dest, inputs, outputs = package(root, 'H14')
@@ -227,6 +250,11 @@ class ResidentTests(unittest.TestCase):
                 data = bytearray(path.read_bytes())
                 if corruption == 'size':
                     struct.pack_into('<I', data, 0x1000, 0x7ff0000)
+                elif corruption in ('bar-high', 'stride'):
+                    address = 0x1114 if corruption == 'bar-high' else 0x1514
+                    patch_register(data, address, 0xffffffff)
+                elif corruption == 'constant':
+                    data[-1] ^= 1
                 else:
                     last_header = struct.unpack_from('<I', data, 0x1000 + 28)[0]
                     offset = 0x1000 + (36 if last_header & 3 == 3 else 32)

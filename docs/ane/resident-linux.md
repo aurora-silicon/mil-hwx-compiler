@@ -51,7 +51,12 @@ scratch, dependency and result metadata checks. H14 accepts
 with encoder `h14-oracle-parity`, whole fp16 surfaces and no scratch. Multi-program
 H14 graphs use the same dependency, layout and intermediate composition checks.
 The H14 path reuses `research/h13_td.py`'s aligned H14 parser and decoder,
-including scatter records and extended headers. It does not reinterpret H14
+including scatter records and extended headers. It also reconstructs the existing
+source template generator's descriptor and constant contracts, keyed by operation,
+operand kind and physical geometry. Both sections must match exactly; recognizing
+register addresses alone would not bound DMA offsets or strides. The source
+checkout's existing decoded oracle records must be present. This reconstruction
+is cached during preparation, outside graph calls. It does not reinterpret H14
 streams as H13. Other H14 encoders, composed chains and future targets fail
 closed. Extending those encoders requires their own shape and routing checks.
 

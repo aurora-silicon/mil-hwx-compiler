@@ -422,6 +422,13 @@ def validate_program(directory, program, tensors, target="H13", program_data=Non
     for index, item in enumerate(inputs, start=5):
         check_binding(item, index, tiles, layouts, tensors)
     check_binding(outputs[0], outputs[0]['index'], tiles, layouts, tensors)
+    if h14:
+        try:
+            from .h14_package_contract import validate_elementwise
+        except ImportError:
+            from h14_package_contract import validate_elementwise
+        validate_elementwise(program, data[HEADER_BYTES:HEADER_BYTES + task_size],
+                             data[HEADER_BYTES + offset:])
     if matmul and encoder not in (PARITY_MATVEC, PARITY_MATMUL,
                                   PARITY_BATCHED_MATMUL, PARITY_BATCHED_MATVEC):
         # The chunked encoder pads every surface to its 256- or 512-lane tile.
