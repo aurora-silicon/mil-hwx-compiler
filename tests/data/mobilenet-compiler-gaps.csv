@@ -1,0 +1,121 @@
+compiler_commit,batch,target,operation,input_shapes,output_shape,rc,diagnostic
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,stem,"{""x"":[1,3,224,224]}","[1, 32, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw1,"{""stem_relu6"":[1,32,112,112]}","[1, 32, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw1,"{""dw1_relu6"":[1,32,112,112]}","[1, 64, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw2,"{""pw1_relu6"":[1,64,112,112]}","[1, 64, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw2,"{""dw2_relu6"":[1,64,56,56]}","[1, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw3,"{""pw2_relu6"":[1,128,56,56]}","[1, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw3,"{""dw3_relu6"":[1,128,56,56]}","[1, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw4,"{""pw3_relu6"":[1,128,56,56]}","[1, 128, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw4,"{""dw4_relu6"":[1,128,28,28]}","[1, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw5,"{""pw4_relu6"":[1,256,28,28]}","[1, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw5,"{""dw5_relu6"":[1,256,28,28]}","[1, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw6,"{""pw5_relu6"":[1,256,28,28]}","[1, 256, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw6,"{""dw6_relu6"":[1,256,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw7,"{""pw6_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw7,"{""dw7_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw8,"{""pw7_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw8,"{""dw8_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw9,"{""pw8_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw9,"{""dw9_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw10,"{""pw9_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw10,"{""dw10_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw11,"{""pw10_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw11,"{""dw11_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw12,"{""pw11_relu6"":[1,512,14,14]}","[1, 512, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw12,"{""dw12_relu6"":[1,512,7,7]}","[1, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,dw13,"{""pw12_relu6"":[1,1024,7,7]}","[1, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,pw13,"{""dw13_relu6"":[1,1024,7,7]}","[1, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,mean,"{""pw13_relu6"":[1,1024,7,7]}","[1, 1024]",65,h13.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,linear,"{""mean"":[1,1024]}","[1, 1000]",0,pass
+927013f5480768b07c8e62a866e1514c41aba778,1,H13,softmax,"{""logits"":[1,1000]}","[1, 1000]",65,h13.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,stem,"{""x"":[1,3,224,224]}","[1, 32, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw1,"{""stem_relu6"":[1,32,112,112]}","[1, 32, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw1,"{""dw1_relu6"":[1,32,112,112]}","[1, 64, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw2,"{""pw1_relu6"":[1,64,112,112]}","[1, 64, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw2,"{""dw2_relu6"":[1,64,56,56]}","[1, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw3,"{""pw2_relu6"":[1,128,56,56]}","[1, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw3,"{""dw3_relu6"":[1,128,56,56]}","[1, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw4,"{""pw3_relu6"":[1,128,56,56]}","[1, 128, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw4,"{""dw4_relu6"":[1,128,28,28]}","[1, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw5,"{""pw4_relu6"":[1,256,28,28]}","[1, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw5,"{""dw5_relu6"":[1,256,28,28]}","[1, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw6,"{""pw5_relu6"":[1,256,28,28]}","[1, 256, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw6,"{""dw6_relu6"":[1,256,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw7,"{""pw6_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw7,"{""dw7_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw8,"{""pw7_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw8,"{""dw8_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw9,"{""pw8_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw9,"{""dw9_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw10,"{""pw9_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw10,"{""dw10_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw11,"{""pw10_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw11,"{""dw11_relu6"":[1,512,14,14]}","[1, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw12,"{""pw11_relu6"":[1,512,14,14]}","[1, 512, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw12,"{""dw12_relu6"":[1,512,7,7]}","[1, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,dw13,"{""pw12_relu6"":[1,1024,7,7]}","[1, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,pw13,"{""dw13_relu6"":[1,1024,7,7]}","[1, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,mean,"{""pw13_relu6"":[1,1024,7,7]}","[1, 1024]",65,h14.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,linear,"{""mean"":[1,1024]}","[1, 1000]",65,h14.linear-bias-unsupported
+927013f5480768b07c8e62a866e1514c41aba778,1,H14,softmax,"{""logits"":[1,1000]}","[1, 1000]",65,h14.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,stem,"{""x"":[8,3,224,224]}","[8, 32, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw1,"{""stem_relu6"":[8,32,112,112]}","[8, 32, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw1,"{""dw1_relu6"":[8,32,112,112]}","[8, 64, 112, 112]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw2,"{""pw1_relu6"":[8,64,112,112]}","[8, 64, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw2,"{""dw2_relu6"":[8,64,56,56]}","[8, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw3,"{""pw2_relu6"":[8,128,56,56]}","[8, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw3,"{""dw3_relu6"":[8,128,56,56]}","[8, 128, 56, 56]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw4,"{""pw3_relu6"":[8,128,56,56]}","[8, 128, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw4,"{""dw4_relu6"":[8,128,28,28]}","[8, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw5,"{""pw4_relu6"":[8,256,28,28]}","[8, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw5,"{""dw5_relu6"":[8,256,28,28]}","[8, 256, 28, 28]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw6,"{""pw5_relu6"":[8,256,28,28]}","[8, 256, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw6,"{""dw6_relu6"":[8,256,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw7,"{""pw6_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw7,"{""dw7_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw8,"{""pw7_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw8,"{""dw8_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw9,"{""pw8_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw9,"{""dw9_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw10,"{""pw9_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw10,"{""dw10_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw11,"{""pw10_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw11,"{""dw11_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw12,"{""pw11_relu6"":[8,512,14,14]}","[8, 512, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw12,"{""dw12_relu6"":[8,512,7,7]}","[8, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,dw13,"{""pw12_relu6"":[8,1024,7,7]}","[8, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,pw13,"{""dw13_relu6"":[8,1024,7,7]}","[8, 1024, 7, 7]",65,h13.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,mean,"{""pw13_relu6"":[8,1024,7,7]}","[8, 1024]",65,h13.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,linear,"{""mean"":[8,1024]}","[8, 1000]",0,pass
+927013f5480768b07c8e62a866e1514c41aba778,8,H13,softmax,"{""logits"":[8,1000]}","[8, 1000]",65,h13.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,stem,"{""x"":[8,3,224,224]}","[8, 32, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw1,"{""stem_relu6"":[8,32,112,112]}","[8, 32, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw1,"{""dw1_relu6"":[8,32,112,112]}","[8, 64, 112, 112]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw2,"{""pw1_relu6"":[8,64,112,112]}","[8, 64, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw2,"{""dw2_relu6"":[8,64,56,56]}","[8, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw3,"{""pw2_relu6"":[8,128,56,56]}","[8, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw3,"{""dw3_relu6"":[8,128,56,56]}","[8, 128, 56, 56]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw4,"{""pw3_relu6"":[8,128,56,56]}","[8, 128, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw4,"{""dw4_relu6"":[8,128,28,28]}","[8, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw5,"{""pw4_relu6"":[8,256,28,28]}","[8, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw5,"{""dw5_relu6"":[8,256,28,28]}","[8, 256, 28, 28]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw6,"{""pw5_relu6"":[8,256,28,28]}","[8, 256, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw6,"{""dw6_relu6"":[8,256,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw7,"{""pw6_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw7,"{""dw7_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw8,"{""pw7_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw8,"{""dw8_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw9,"{""pw8_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw9,"{""dw9_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw10,"{""pw9_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw10,"{""dw10_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw11,"{""pw10_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw11,"{""dw11_relu6"":[8,512,14,14]}","[8, 512, 14, 14]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw12,"{""pw11_relu6"":[8,512,14,14]}","[8, 512, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw12,"{""dw12_relu6"":[8,512,7,7]}","[8, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,dw13,"{""pw12_relu6"":[8,1024,7,7]}","[8, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,pw13,"{""dw13_relu6"":[8,1024,7,7]}","[8, 1024, 7, 7]",65,h14.conv-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,mean,"{""pw13_relu6"":[8,1024,7,7]}","[8, 1024]",65,h14.norm-outside-envelope
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,linear,"{""mean"":[8,1024]}","[8, 1000]",65,h14.linear-bias-unsupported
+927013f5480768b07c8e62a866e1514c41aba778,8,H14,softmax,"{""logits"":[8,1000]}","[8, 1000]",65,h14.norm-outside-envelope

@@ -25,12 +25,17 @@ reshape, squeeze, and expand_dims round out the set.
 A shape outside a backend's verified envelope is refused with a named error, such as `h13.conv-outside-envelope`.
 The compiler does not guess.
 
+The Aurora fork's [change inventory](docs/aurora-compiler-status.md) separates
+the existing H16G backend and branch work from the added SPEC-r3 validation
+and spatial CPU references. H16 bundles also emit [execute resource metadata](docs/h16-execute-resources.md), checked independently with
+`python3 tools/h16g_validate.py program-0.hwx --manifest manifest.json`.
+
 ## Supported targets
 
 | Target | Chip | Output | Device runs |
 | --- | --- | --- | --- |
 | H13 | M1 | ANEC package, or HWX with `--format hwx` | Runs on Linux M1 hardware through omarchy-ane. Eight elementwise programs built by this compiler ran on a 13-inch M1 and an M1 Max through omarchy-ane. Each was bit-exact on 64 of 64 lanes ([receipt](receipts/2026-10-11-h13-elementwise-m1/)). The compiler pins H13 matvec packages for K=N=256, 512 and 1024 (1, 1 and 5 programs); device runs for 256 and 512 through `ane-run --check matvec` failed before numerical comparison ([run record](receipts/2026-10-12-h13-matvec-m1/README.md)). The 512 program then passed on an M1 Max with a gate that reads its channel layout, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-13-h13-matvec-k512-m1max/README.md)). The 256 program is refused at load and the 1024 package has five programs; neither has run. |
-| H14 | M2 | ANEC package, or HWX with `--format hwx` | Matches decoded Apple output byte for byte. Eight elementwise programs built by this compiler ran on an M2 Max through omarchy-ane. Each was bit-exact on 512 of 512 lanes ([receipt](receipts/2026-10-10-h14-elementwise-m2/README.md)). Matvec programs at K = N of 256, 512 and 1024 also ran on an M2 Max, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-11-h14-matvec-m2/README.md)). So did the six non-square matvec shapes of 256, 512 and 1024 ([receipt](receipts/2026-10-13-h14-matvec-nonsquare-m2/README.md)). Matvec programs with 2, 8 and 64 rows ran too: 21 of 27 passed `ane-run`'s check and the six non-square 64-row shapes, which it refused, were compared off the device ([receipt](receipts/2026-10-13-h14-matvec-rows-m2/README.md)). Of 23 unary programs (abs, exp, gelu, leaky_relu, rsqrt, sigmoid, silu, sqrt, tanh), 21 met their preregistered accuracy bound and exp did not ([receipt](receipts/2026-10-13-h14-unary-m2/README.md)). Other larger H14 programs have not run from this backend |
+| H14 | M2 | ANEC package, or HWX with `--format hwx` | Matches decoded Apple output byte for byte. Eight elementwise programs built by this compiler ran on an M2 Max through omarchy-ane. Each was bit-exact on 512 of 512 lanes ([receipt](receipts/2026-10-10-h14-elementwise-m2/README.md)). Matvec programs at K = N of 256, 512 and 1024 also ran on an M2 Max, every lane inside a 2 ulp or 4 condition-unit band ([receipt](receipts/2026-10-11-h14-matvec-m2/README.md)). So did the six non-square matvec shapes of 256, 512 and 1024 ([receipt](receipts/2026-10-13-h14-matvec-nonsquare-m2/README.md)). Matvec programs with 2, 8 and 64 rows ran too: 21 of 27 passed `ane-run`'s check and the six non-square 64-row shapes, which it refused, were compared off the device ([receipt](receipts/2026-10-13-h14-matvec-rows-m2/README.md)). Of 23 unary programs (abs, exp, gelu, leaky_relu, rsqrt, sigmoid, silu, sqrt, tanh), 21 met their preregistered accuracy bound and exp did not ([receipt](receipts/2026-10-13-h14-unary-m2/README.md)). Formula-built conv and linked MobileNetV1 packages are now available ([field map and limits](docs/ane/h14-conv.md)); their M2 execution is pending. Other larger H14 programs have not run from this backend |
 | H16G | M4 | HWX object | Research compiler. Exercised by the macOS hardware tests in `tests/` |
 | H17 | A18, A18 Pro and M5 | HWX object, oracle-parity targets | Emits Apple's exact HWX for 165 decoded elementwise, unary and scalar-constant points and refuses every other shape by name. Byte parity only; not run on a device |
 | H18 | A19 and A19 Pro | HWX object, oracle-parity targets | Same as H17 for H18: 165 decoded points, named refusals, byte parity only; not run on a device |
@@ -110,7 +115,7 @@ H16G is the default target, so the flag is optional there.
 ```text
 usage: mil-hwxc --mil FILE --model-root DIR --output DIR
                 [--target H16G|H13|H14|H17|H18] [--format anec|hwx]
-                [--schedule per-op|chain]
+                [--schedule per-op|chain|spatial]
 ```
 
 `--target` picks the backend.
@@ -130,12 +135,20 @@ Roles are input, output, intermediate, or constant.
 It also lists the dispatch plan and each program's bindings.
 A runner can drive the package without parsing programs.
 
+For H13/H14 full-frame convolution, nearest/bilinear resize, concat and the
+MobileNetV1 head, select `--schedule spatial`. This emits the separate
+[spatial dispatch contract](docs/spatial-dispatch.md), with reusable ANEC
+kernels and bounded loops. `tools/spatial_package.py` validates and simulates
+these packages without a device; original per-op/chain readers retain their
+existing contracts. Spatial arithmetic uses fp16 dispatch boundaries and is
+checked against CPU references with explicit tolerances.
+
 | Operation | Accepted shapes |
 | --- | --- |
 | add, mul | Two matching fp16 tensors, or a tensor plus a fp16 constant. Rank-4 NCHW pairs also broadcast per channel, by space, by scalar, or by batch |
 | sub, real_div | One runtime input and one same-shape constant. The host folds the constant |
 | relu, clip | Any positive static shape. Clip takes fp16-exact finite `alpha` and `beta` |
-| conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. Decoded templates cover channels 64 to 1024 and space 1 to 64. On H13 a formula-built encoder takes dense and depthwise 1x1/3x3 convolutions at any spatial size, channels in multiples of 16, and stride-2 1x1 up to 128 outputs, as one program ([fused-conv.md](docs/ane/fused-conv.md)). A following relu folds into the same program |
+| conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. Decoded templates cover channels 64 to 1024 and space 1 to 64. On H13 and H14 a formula-built encoder takes dense and depthwise 1x1/3x3 convolutions at any spatial size, channels in multiples of 16, and stride-2 1x1 with at most 128 outputs per task, as one program ([fused-conv.md](docs/ane/fused-conv.md)). A following relu folds into the same program. H14 details: [h14-conv.md](docs/ane/h14-conv.md) |
 | matmul, linear | Constant weight `[K,N]` or `[N,K]`, or two runtime inputs in attention's shape, on the decoded grids |
 | softmax | Constant axis over covered flat, sequence, spatial, and attention-score shapes |
 | layer_norm | Constant axes, `epsilon` of 1e-5, no `gamma` or `beta` |
@@ -170,7 +183,8 @@ You can use it to make reference outputs without a device.
 | --- | --- |
 | `make test-h13` | H13 encoding, serialization, and the CLI, host-only |
 | `make test-h13-parity` | H13 output byte-equal to decoded Apple oracles. 891 cases at v0.1.0 |
-| `make test-h14-parity` | H14 output byte-equal to decoded Apple oracles. 718 cases at v0.1.0 |
+| `make test-h14-parity` | H14 output byte-equal to 722 decoded Apple oracles, plus formula/linked convolution checks |
+| `make test-h14-conv-portable` | C++ encoder audit without Foundation/GNUstep: 284 strict convolution parity cases and all 610 old/new convolution records |
 | `make test-h14-exp-model` | A model of the H14 `exp` program against saved M2 Max output. Needs NumPy, so it is not part of `make test` |
 | `make test-h17-parity`, `make test-h18-parity` | H17/H18 elementwise, unary and scalar-constant HWX byte-equal to decoded Apple oracles, plus named refusals. 165 cases each. Not device-run |
 | `scripts/verify-linux-compiler.sh all` | Build, software tests, emission, and hygiene on Linux |

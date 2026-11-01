@@ -39,7 +39,7 @@ tasks into one stream:
   of this branch had neither. Warm runs looked bit-exact, but a cold single run
   read stale scratch (rel. L2 0.22 to 0.43, first wrong at layer 16, dw 3x3 512
   @14x14), and it converged only after about 20 passes on the same input.
-- **Scratch DMA hints (host-matched, device retest pending).** Apple's
+- **Scratch DMA hints.** Apple's
   scratch traffic never uses the program-I/O DMA configs. Tasks that write
   scratch set bits 9:8 of the output DMA config (`0x17800` = 0x40003c1, all
   decoded scratch writers). Tasks that read scratch use CacheHintReuse =
@@ -47,7 +47,8 @@ tasks into one stream:
   on the first read after a TSE/TSR producer). The linker now emits the same
   values. They went in after the M1 Pro still showed a recoverable task
   error at pass 68 of a 5000-pass boost-on soak with the dependency bits
-  alone, and they have not run on the device yet.
+  alone (and another agent loading the CPU). With them, on a quiet machine,
+  10,000 boost-on passes ran with no task error (01/11/2026, ane692 kernel).
 - **A simple allocator.** Each intermediate gets its own tile-aligned region
   and no region is reused, so no task ever writes a region that an earlier
   task still reads. The only ordering the stream relies on is producer before
@@ -135,11 +136,30 @@ patterns and smooth noise, not photos, and they land in 10 different classes.
 2.30 ms and p99 2.32 ms with I/O (434 inf/s); exec only p50 2.25 ms, p99
 2.26 ms (445 inf/s); engine busy 2.24 ms. The barrier costs about nothing.
 
+With the scratch DMA configs as well (01/11/2026, quiet machine): 5000
+passes with I/O p50 2.27 ms, p99 2.30 ms (441 inf/s); 5000 exec only p50
+2.25 ms, p99 2.26 ms (445 inf/s); busy 2.23 ms; no task errors; cold runs
+still equal to per-layer; top-1 16/16.
+
 **Open hazard.** With the driver's CPU boost off (`boost_idle_ms=0`, slower
 fabric) the linked program raised a task error (-5) at pass 455 and the
-engine wedged. It did not happen in 1000 passes with boost on. It is not
-known yet whether the per-layer programs fail the same way at boost 0; until
-that is bisected, treat linked programs at low fabric clocks as unproven. Linking halves the wall time: it removes
+engine wedged. It did not happen in 1000 passes with boost on. The 28 per-layer programs ran 5000 passes clean at boost 0, and so did
+the linked 8-layer prefix, so the fault is in the longer linked stream. With the scratch DMA configs in place (01/11/2026, #692
+recovery kernel, so each error cost one -EIO and the engine recovered), the
+boost-0 error remains, as a -5 task error at a random pass:
+
+- clean over 5000 passes: linked prefixes 1-8, 1-16, 1-24, layer slices 5-25,
+  9-25, 13-25, 17-25, 21-25, 23-28, 25-28, and the 28 per-layer programs;
+- failing within 5000 passes: the full net, prefixes 1-25/26/27, slices 3-25,
+  4-25, 3-8 and 1-4.
+
+The dependency variants did not move it: every consumer task waiting, the
+program-input cache hints on scratch reads, and TSE+TSR on every task. Nor
+did the scratch address (up to 48 MB), the constant size (8.4 MB), the task
+count (40) or capping the L2 tile at 2 MiB. Every failing stream contains the
+112x112 layers 3 and 4 together with a long enough tail, but not every such
+stream fails in 5000 passes, so this is a rate, not a deterministic hazard.
+With the CPU boost on (the shipping configuration), 10,000 passes are clean. Linking halves the wall time: it removes
 27 submits (about 25 us each), the host copies, and about 0.7 ms of engine
 time per inference.
 
@@ -227,10 +247,76 @@ self-consistent.
 
 In MobileNetV1 these rules take two triplets at 14x14 (layers 15 to 17 and 19
 to 21). The 56x56 triplet does not fit in 2 MiB, and the others meet a
-multi-task or stride-2 layer. None of this has run on the device yet. The
-plan is one geometry at a time: pw-pw 8x8, conv-dw-pw 8x8, 16x16, with relu
-and bias, 512 channels at 14x14, then the whole net, checking `wedged` after
-each.
+multi-task or stride-2 layer. On the M1 Pro (01/11/2026) every step ran exact and cold against the
+per-layer programs, with no task error: pw-pw 8x8 (the pair that hung the
+first attempt), conv-dw-pw at 8x8 and 16x16, with relu and bias, and 512
+channels at 14x14. The 512-channel triplet takes 0.188 ms busy against
+0.228 ms with DRAM edges (-18 %). The whole real-weight MobileNetV1 with its
+two L2 triplets is exact cold, top-1 16/16, and 2.190 ms p50 exec against
+2.243 ms (-2.4 %) over 2000 passes.
+
+## L2 residency, round 2 (t-4020 rules)
+
+`linked-l2` now plans long resident runs, as Apple's compiler does:
+
+- **Edge phases.** A run starts with an initial alias edge (ResultCfg 0x500170
+  to SourceCfg 0x160) out of a producer that reads DRAM. It then alternates a
+  dependent edge (0x140 to 0x104) and a chained alias edge (0x140 to 0x144,
+  with DPC/SPC, channel-3 selectors and the disabled DMA geometry kept).
+- **Split consumers.** Only the first output-channel task takes the incoming
+  handoff. Later tasks reread the same resident input with SourceCfg 0x100,
+  input DMA 0x8880 with zero geometry and no handoff bits.
+- **Split producers.** In the dependent phase, a multi-task producer writes
+  one aggregate result (slice j of n at base + (n-1-j) * slice channels *
+  rowL2, full strides). The depthwise consumer reads it with SourceCfg 0x120.
+- **Ring placement.** Each edge spans the consumer's full input and starts
+  right after the live input, modulo 2 MiB. A task's live input never
+  overlaps its result or staging.
+- Common 0x24 bit 14 is set on depthwise tasks next to a resident edge. It
+  is not an edge mode.
+- **Spills to DRAM:** a dependent edge above 0x80800 bytes out of a single
+  task (Apple's 0x120 form there pairs with an unmapped 0x142 result config);
+  a tiled task next to an edge; a chained alias out of a split producer; and
+  anything that does not fit.
+
+Field parity (`make test-h13`) against Apple's decoded chains: the six-layer
+tails at 28x28/c256 (including the ring wrap) and 14x14/c512, the two-task
+aggregate producer, the 7x7 triplet and the round-1 8x8 pair and triplet.
+Cases where the open compiler splits layers differently from Apple (128-output
+stride-2 slices, the 1 MiB kernel budget) are not compared field by field.
+
+MobileNetV1 under these rules keeps 23 of 27 edges in L2, a continuous run
+from layer 8 to layer 27, and scratch drops from 17.9 MB to 6.9 MB. Some of
+the forms in that run are inferred rather than seen at the same shape: a
+chained alias into a split consumer, stride-2 split consumers reading L2, and
+a depthwise task after a 0x120 edge emitting a chained alias. They still
+need the device ladder.
+
+**On the M1 Pro (01/11/2026, kernel tt3 = aurora-wip with the #717 recovery and #718 boost
+fallback, real weights).** The ladder ran cold against the per-layer programs, each step exact:
+
+- the six-layer tails at 14x14 and 28x28;
+- the split-producer aggregate with 2 and 4 slices, after one fix (below);
+- MobileNet layers 8 to 13 and 8 to 27;
+- the whole network.
+
+Top-1 is 16/16 and top-5 5/5 against the CPU reference.
+
+| MobileNetV1 224 | p50 exec | p99 | inf/s | busy |
+| --- | ---: | ---: | ---: | ---: |
+| `linked` (DRAM edges), 1000 passes | 2.249 ms | 2.316 ms | 443 | 2.244 ms |
+| `linked-l2`, 1000 passes | 1.641 ms | 1.659 ms | 609 | 1.627 ms |
+| `linked-l2`, 5000 passes, boost on | 1.645 ms | 1.678 ms | 605 | 1.639 ms |
+| `linked-l2`, 5000 passes, boost_idle_ms=0 | 1.629 ms | 2.051 ms | 605 | 1.633 ms |
+
+That is 27 % faster than DRAM edges, with no task errors in either 5000-pass
+soak. The boost-0 error that the DRAM-chained net shows did not appear here.
+
+The one fix: Apple's decoded split-producer slices descend (slice 0 at the
+highest base). This encoder runs its slices in ascending channel order, and
+with descending bases the device output was wrong (cold rel. L2 1.15). Slice j
+now sits at base + j * slice channels * rowL2, and the parity check compares
+slice bases as a set.
 
 ## Remaining gap to macOS and next steps
 

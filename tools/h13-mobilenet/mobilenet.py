@@ -127,10 +127,12 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('out')
     ap.add_argument('--weights')
+    ap.add_argument('--target', choices=['H13', 'H14'], default='H13')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--head', choices=['ane', 'cpu'], default='ane')
     ap.add_argument('--no-perop', action='store_true')
     a = ap.parse_args()
+    os.environ['MILHWXC_TARGET'] = a.target
     if a.weights:
         from tflite_weights import mobilenet_v1_weights
         tfw = mobilenet_v1_weights(a.weights)

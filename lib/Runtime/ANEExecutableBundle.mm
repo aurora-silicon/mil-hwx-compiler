@@ -1,6 +1,7 @@
 #import "ANEExecutableBundle.h"
 
 #import "HWXImage.h"
+#import "HWXMachOFormat.h"
 
 static NSString *const ANEBundleErrorDomain = @"dev.maderix.ANEBundle";
 
@@ -64,6 +65,45 @@ static NSArray<NSString *> *sharedSurfaceIdentifiers(
     return [shared copy];
 }
 
+// Compile-time geometry only. The consumer must cross-check this against the
+// immutable HWX and supply owned mappings; VM aperture bases are never DVAs.
+static NSDictionary *h16ExecuteResources(NSData *image) {
+    // Parse the actual section layout: aperture order can interleave input and
+    // output surfaces, independently of the runtime binding array's order.
+    if (![HWXImage imageWithData:image error:nil]) return nil;
+    struct mach_header_64 header;
+    memcpy(&header, image.bytes, sizeof(header));
+    if (header.cpusubtype != 7) return nil;
+    const uint8_t *bytes = (const uint8_t *)image.bytes;
+    NSUInteger offset = sizeof(header), inputIndex = 0, outputIndex = 0;
+    NSMutableArray *buffers = [NSMutableArray array];
+    for (NSUInteger i = 0; i < header.ncmds; ++i) {
+        struct load_command command;
+        memcpy(&command, bytes + offset, sizeof(command));
+        if (command.cmd == LC_SEGMENT_64) {
+            struct segment_command_64 segment;
+            memcpy(&segment, bytes + offset, sizeof(segment));
+            if (strncmp(segment.segname, "__FVMLIB", 16) == 0) {
+                if (segment.initprot != 1 && segment.initprot != 2) return nil;
+                BOOL output = segment.initprot == 2;
+                [buffers addObject:@{
+                    @"apertureSlot": @(buffers.count),
+                    @"index": @(output ? outputIndex++ : inputIndex++),
+                    @"class": @(output ? 1 : 0), @"offsetBytes": @0,
+                    @"sizeBytes": @(segment.vmsize), @"mappingBytes": @(segment.vmsize),
+                }];
+            }
+        }
+        offset += command.cmdsize;
+    }
+    // The current writer emits no custom-BAR descriptions. Never reinterpret
+    // aperture records, embedded kernels or scratch as custom BAR records.
+    return @{@"version": @1, @"commandBytes": @0xca8,
+             @"bufferOffset": @0x60, @"bufferStride": @0x30,
+             @"customBarOffset": @0xca8, @"customBarStride": @0x18,
+             @"buffers": buffers, @"customBars": @[]};
+}
+
 @implementation ANEExecutableBundle
 - (instancetype)initWithTarget:(NSString *)target
                       artifacts:(NSArray<ANEHWXArtifact *> *)artifacts
@@ -117,12 +157,17 @@ static NSArray<NSString *> *sharedSurfaceIdentifiers(
                 @"batchStrideBytes": @(binding.batchStrideBytes),
             }];
         }
-        [artifactRecords addObject:@{
+        NSMutableDictionary *record = [@{
             @"file": fileName,
             @"bytes": @(artifact.image.length),
             @"bindings": bindings,
             @"operations": artifact.operations,
-        }];
+        } mutableCopy];
+        if ([self.target isEqualToString:@"H16G"]) {
+            NSDictionary *resources = h16ExecuteResources(artifact.image);
+            if (resources) record[@"h16Execute"] = resources;
+        }
+        [artifactRecords addObject:record];
     }
     NSDictionary *manifest = @{
         @"formatVersion": @2,

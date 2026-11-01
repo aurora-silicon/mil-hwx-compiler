@@ -4,6 +4,28 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H13/H14: add the explicit spatial schedule, using existing copy, convolution
+  and matrix kernels for halo dispatch, nearest/bilinear resize and concat.
+  Support the MobileNetV1 convolution/head geometries at batch 1/8, including
+  H14 biased linear. Add a versioned reusable-kernel dispatch contract,
+  structure checks and a software executor with CPU reference comparisons.
+  Existing per-op/chain packages retain their behavior. See
+  `docs/spatial-dispatch.md` for arithmetic and execution limits.
+- H16G: emit separate ordinary-buffer and custom-BAR resource metadata in
+  each bundle artifact. Validate its aperture/class/index mapping and the
+  `0x30`/`0x18` wire layouts, including full-width DVA/span arithmetic. The
+  current writer emits no custom BARs; extra records are refused. See
+  `docs/h16-execute-resources.md`.
+
+- Aurora: reuse the existing H16G backend and descriptor writer. Add an
+  independent SPEC-r3 fp16 container validator and source-generated owner
+  identity regression. Preserve the add-128 hash and require its H16 prologue
+  (u32 1 and twelve zero bytes), matching the corrected driver contract. Tighten H16 binding names, integer widths and
+  relocation identities; separate batch spans from allocation padding.
+- Aurora: CPU halo geometry and fp16 reference checks for spatial convolution,
+  resize and concat. These do not expand a hardware encoding envelope. See
+  `docs/aurora-compiler-status.md` for the branch audit and remaining coverage.
+
 ## 0.3.1 (2026-10-25)
 
 New since 0.3.0:

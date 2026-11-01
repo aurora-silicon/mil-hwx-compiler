@@ -206,7 +206,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
-$(BUILD)/mil-hwxc: tools/mil-hwxc.mm $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
@@ -283,6 +283,7 @@ test-h13-parity: $(BUILD)/mil-hwxc
 test-h14-parity: $(BUILD)/mil-hwxc
 	python3 research/generate_h14_templates.py --check
 	python3 tests/test_h14_parity.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_linked_reuse_oracles.py
 	python3 tests/test_h14_fixture_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_row_programs.py $(BUILD)/mil-hwxc
@@ -313,7 +314,24 @@ $(BUILD)/test_h13_anec: plugins/H13/H13ANEC.cpp tests/test_h13_anec.cpp plugins/
 test-hwx-inspection:
 	python3 tests/test_hwx_inspection.py
 
-test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection
+.PHONY: test-h16g-validation
+test-h16g-validation: $(BUILD)/prepare_alu
+	python3 tests/test_h16g_validation.py
+	python3 tests/test_h16g_owner.py $(BUILD)/prepare_alu
+
+.PHONY: test-spatial-reference
+test-spatial-reference:
+	python3 tests/test_spatial_reference.py
+
+.PHONY: test-spatial-compiler test-spatial-mobilenet
+# The numerical interpreter needs NumPy; these targets never open a device.
+test-spatial-compiler: $(BUILD)/mil-hwxc
+	python3 tests/test_spatial_compiler.py $(BUILD)/mil-hwxc
+
+test-spatial-mobilenet: $(BUILD)/mil-hwxc
+	python3 tests/test_spatial_compiler.py $(BUILD)/mil-hwxc --acceptance-only
+
+test: test-h13 test-h13-parity test-h13-reference test-h13-simulation test-h14-parity test-h17-parity test-h18-parity test-hwx-inspection test-h16g-validation test-spatial-reference
 
 .PHONY: test-h13-hardware
 test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec
@@ -323,6 +341,25 @@ test-h13-hardware: $(BUILD)/mil-hwxc $(BUILD)/h13_exec
 
 clean:
 	rm -rf $(BUILD)
+
+$(BUILD)/test_h14_conv_encoding: tests/test_h14_conv_encoding.cpp plugins/H14/H14Program.cpp plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) | $(BUILD)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -Iplugins/H14 -Iplugins/H13 -Iplugins/H17 -Iplugins/H18 tests/test_h14_conv_encoding.cpp plugins/H14/H14Program.cpp -o $@
+
+.PHONY: test-h14-conv
+test-h14-conv: $(BUILD)/test_h14_conv_encoding $(BUILD)/mil-hwxc
+	$(BUILD)/test_h14_conv_encoding
+	python3 tests/test_h14_conv_cli.py $(BUILD)/mil-hwxc
+
+# Every H14 parity run also exercises the formula encoder and linked emitter.
+test-h14-parity: test-h14-conv
+
+$(BUILD)/h14_conv_probe: tests/h14_conv_probe.cpp plugins/H14/H14Program.cpp plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) | $(BUILD)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -Iplugins/H14 -Iplugins/H13 -Iplugins/H17 -Iplugins/H18 tests/h14_conv_probe.cpp plugins/H14/H14Program.cpp -o $@
+
+.PHONY: test-h14-conv-portable
+test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
+	$(BUILD)/test_h14_conv_encoding
+	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
 
 H16_CONV_SOURCES := plugins/H16G/Encoding/H16ConvProgram.cpp
 $(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/H13Program.h | $(BUILD)
