@@ -3078,6 +3078,11 @@ struct L2Plan {
     std::vector<std::uint64_t> resultBytes;
     std::vector<std::uint64_t> sourceBase;   // layer i's Source1Base
     std::vector<std::uint64_t> stagingBase;  // layer i's DRAM-output staging base
+    std::vector<std::uint64_t> candidateBytes;
+    std::vector<std::string> spillReason;
+    // Exact decoded 56x56 pw/dw/pw terminal forms, not a general 0x142 rule.
+    std::vector<std::uint32_t> sourceRow;
+    bool terminal56 = false;
 };
 
 constexpr std::uint64_t kDep104MaxEdge = 0x80800;
@@ -3088,9 +3093,36 @@ L2Plan planL2(const std::vector<Program> &layers) {
     plan.edge.assign(n - 1, EdgeMode::Dram);
     plan.resultBase.assign(n, 0); plan.resultBytes.assign(n, 0);
     plan.sourceBase.assign(n, 0); plan.stagingBase.assign(n, 0);
+    plan.candidateBytes.assign(n, 0); plan.spillReason.resize(n);
+    plan.sourceRow.assign(n, 0);
     std::vector<LayerGeometry> g;
     for (const auto &layer : layers)
         g.push_back(layer.nativeDramLayer ? LayerGeometry{} : layerGeometry(layer));
+    // r2 pw_dw_pw_c128_s56: SourceCfg 0x120 is coupled to a
+    // terminal ResultCfg 0x142, padded result strides and TileDMA 0xc1.
+    // Keep this whitelist exact. Neither a scratch destination nor another
+    // resident successor for that terminal form has been decoded here.
+    if (n == 3 && !g[0].depthwise && g[0].kernel == 1 &&
+        g[1].depthwise && g[1].kernel == 3 &&
+        !g[2].depthwise && g[2].kernel == 1 &&
+        g[0].outChannels == 128) {
+        const auto channels = g[0].outChannels;
+        plan.terminal56 = true;
+        for (std::size_t j = 0; j < n; ++j)
+            plan.terminal56 = plan.terminal56 && g[j].tasks == 1 &&
+                layers[j].inputs[0].nchw[1] == channels &&
+                g[j].outChannels == channels && g[j].inHeight == 56 &&
+                g[j].inWidth == 56 && g[j].outHeight == 56 && g[j].outWidth == 56;
+        if (plan.terminal56) {
+            for (std::size_t j = 0; j < n; ++j) {
+                const std::uint32_t skew = j == 0 ? 0x50u : 0x30u;
+                plan.sourceRow[j] = g[j].sourceRow = channels * 0x70u + skew;
+            }
+            g[0].stagedInput = 56ull * g[0].sourceRow;
+            g[2].tileHeight = 56;
+            g[2].staging = static_cast<std::uint64_t>(g[2].tileHeight) * (channels * 0x80u + 0x40u);
+        }
+    }
     for (std::size_t i = 0; i < n; ++i) plan.stagingBase[i] = g[i].stagedInput;
     bool inL2 = false;            // layer i's input is resident
     bool nextIsDependent = false; // phase of the next edge in a resident run
@@ -3099,13 +3131,18 @@ L2Plan planL2(const std::vector<Program> &layers) {
         const auto &p = g[i];
         const auto &c = g[i + 1];
         const std::uint64_t edge = static_cast<std::uint64_t>(c.inHeight) * c.sourceRow;
+        plan.candidateBytes[i] = edge;
+        auto &reason = plan.spillReason[i];
+        reason = "unobserved-edge-form";
         EdgeMode mode = EdgeMode::Dram;
         // Every L2 task computes its whole output in one tile here: tiled
         // tasks next to a resident edge differ in Apple's result config
         // (0x142), which has not been mapped.
         const bool tilesOk = !layers[i].nativeDramLayer && !layers[i + 1].nativeDramLayer &&
-            p.tileHeight == p.outHeight && c.tileHeight == c.outHeight &&
+            p.tileHeight == p.outHeight &&
+            (c.tileHeight == c.outHeight || (plan.terminal56 && i == 1)) &&
             c.inHeight == p.outHeight && c.sourceRow && c.sourceRow % 16 == 0;
+        if (!tilesOk) reason = "unobserved-row-band-handoff";
         if (tilesOk) {
             if (!inL2) {
                 if (p.tasks == 1) mode = EdgeMode::AliasInit;
@@ -3113,10 +3150,12 @@ L2Plan planL2(const std::vector<Program> &layers) {
                 // A single-task producer's wide (0x120) edge only appears at
                 // 56x56 with a result config (0x142) and result strides on
                 // the final task that are not mapped yet, so it spills.
-                if (p.tasks == 1 && edge <= kDep104MaxEdge) mode = EdgeMode::Dep104;
+                if (plan.terminal56 && i == 1) mode = EdgeMode::Dep120;
+                else if (p.tasks == 1 && edge <= kDep104MaxEdge) mode = EdgeMode::Dep104;
                 else if (p.tasks > 1 && c.depthwise &&
                          p.sliceChannels * p.tasks == p.outChannels)
                     mode = EdgeMode::Dep120;
+                else reason = "unobserved-wide-dependent-consumer";
             } else {
                 if (p.tasks == 1) mode = EdgeMode::AliasChained;
             }
@@ -3128,17 +3167,26 @@ L2Plan planL2(const std::vector<Program> &layers) {
                 result = 0;
                 source = align16(edge);
                 if (source + p.stagedInput > kL2Bytes ||
-                    ringOverlap(result, edge, source, p.stagedInput)) mode = EdgeMode::Dram;
+                    ringOverlap(result, edge, source, p.stagedInput)) {
+                    mode = EdgeMode::Dram;
+                    reason = "full-edge-and-staged-input-exceed-l2";
+                }
             } else {
                 result = align16(inBase + inBytes) % kL2Bytes;
-                if (ringOverlap(result, edge, inBase, inBytes)) mode = EdgeMode::Dram;
+                if (ringOverlap(result, edge, inBase, inBytes)) {
+                    mode = EdgeMode::Dram;
+                    reason = "full-live-input-and-result-overlap";
+                }
             }
         }
         if (mode != EdgeMode::Dram) {
             // The consumer's own outgoing region (DRAM staging; a later
             // resident edge re-checks itself) goes right after its input.
             const std::uint64_t after = align16(result + edge) % kL2Bytes;
-            if (ringOverlap(after, c.staging, result, edge)) mode = EdgeMode::Dram;
+            if (ringOverlap(after, c.staging, result, edge)) {
+                mode = EdgeMode::Dram;
+                reason = "full-edge-and-consumer-staging-overlap";
+            }
         }
         if (mode == EdgeMode::Dram) {
             inL2 = false;
@@ -3146,6 +3194,7 @@ L2Plan planL2(const std::vector<Program> &layers) {
             continue;
         }
         plan.edge[i] = mode;
+        reason.clear();
         plan.resultBase[i] = result;
         plan.resultBytes[i] = edge;
         plan.sourceBase[i] = source;
@@ -3240,6 +3289,10 @@ Program linkConvChain(const std::vector<Program> &layers,
             entry.l2Source = inL2 ? l2.sourceBase[index] : 0;
             entry.l2Result = outL2 ? l2.resultBase[index] : 0;
             entry.l2ResultBytes = outL2 ? l2.resultBytes[index] : 0;
+            if (l2Resident) {
+                entry.candidateL2Bytes = l2.candidateBytes[index];
+                entry.l2SpillReason = l2.spillReason[index];
+            }
             layout->push_back(entry);
         }
         bool nativeBoundaryRead = false;
@@ -3252,6 +3305,8 @@ Program linkConvChain(const std::vector<Program> &layers,
                       program.task.begin() + static_cast<std::ptrdiff_t>(offset));
             auto &task = program.task;
             const std::size_t bytes = span.bytes;
+            if (l2Resident && l2.sourceRow[index])
+                putRegister(task, offset, bytes, 0x04810, l2.sourceRow[index]);
             // Linked-stream header, the form the generic multi-task
             // convolution already runs on the M1 Pro: task id with the
             // continuation bit after the first task and the end bit on the
@@ -3411,9 +3466,19 @@ Program linkConvChain(const std::vector<Program> &layers,
                     putRegister(task, offset, bytes, 0x13838, 0x01000000u);
                 }
                 if (!outL2) {
-                    putRegister(task, offset, bytes, 0x04830, 0x14a);
+                    const bool wide56 = l2.terminal56 && index == 2;
+                    putRegister(task, offset, bytes, 0x04830, wide56 ? 0x142u : 0x14au);
                     putRegister(task, offset, bytes, 0x04834,
                                 static_cast<std::uint32_t>(l2.stagingBase[index]));
+                    if (wide56) {
+                        const auto channels = layer.output.nchw[1];
+                        putRegister(task, offset, bytes, 0x00028, 56u);
+                        putRegister(task, offset, bytes, 0x04838, 0x80u);
+                        putRegister(task, offset, bytes, 0x0483c, channels * 0x80u + 0x40u);
+                        putRegister(task, offset, bytes, 0x04840, channels * 0x80u);
+                        putRegister(task, offset, bytes, 0x04844, channels * 0x80u);
+                        putRegister(task, offset, bytes, 0x17800, 0xc1u);
+                    }
                 }
             } else if (outL2) {
                 // DRAM-staged input of an L2 producer sits above its result.
@@ -3443,7 +3508,8 @@ Program linkConvChain(const std::vector<Program> &layers,
                 putRegister(task, offset, bytes, 0x04834,
                             static_cast<std::uint32_t>(sliceBase % kL2Bytes));
                 putRegister(task, offset, bytes, 0x04838, nextReg(0x0480c));
-                putRegister(task, offset, bytes, 0x0483c, nextReg(0x04810));
+                putRegister(task, offset, bytes, 0x0483c,
+                            l2.sourceRow[index + 1] ? l2.sourceRow[index + 1] : nextReg(0x04810));
                 putRegister(task, offset, bytes, 0x04840, nextReg(0x04814));
                 putRegister(task, offset, bytes, 0x04844, 0);
                 putRegister(task, offset, bytes, 0x17800, 0xc0);

@@ -273,7 +273,7 @@ two L2 triplets is exact cold, top-1 16/16, and 2.190 ms p50 exec against
   handoff. Later tasks reread the same resident input with SourceCfg 0x100,
   input DMA 0x8880 with zero geometry and no handoff bits.
 - **Split producers.** In the dependent phase, a multi-task producer writes
-  one aggregate result (slice j of n at base + (n-1-j) * slice channels *
+  one aggregate result (open encoder slice j at base + j * slice channels *
   rowL2, full strides). The depthwise consumer reads it with SourceCfg 0x120.
 - **Ring placement.** Each edge spans the consumer's full input and starts
   right after the live input, modulo 2 MiB. A task's live input never
@@ -281,7 +281,7 @@ two L2 triplets is exact cold, top-1 16/16, and 2.190 ms p50 exec against
 - Common 0x24 bit 14 is set on depthwise tasks next to a resident edge. It
   is not an edge mode.
 - **Spills to DRAM:** a dependent edge above 0x80800 bytes out of a single
-  task (Apple's 0x120 form there pairs with an unmapped 0x142 result config);
+  task (except the exact terminal 56x56 forms described below);
   a tiled task next to an edge; a chained alias out of a split producer; and
   anything that does not fit.
 
@@ -323,6 +323,54 @@ highest base). This encoder runs its slices in ascending channel order, and
 with descending bases the device output was wrong (cold rel. L2 1.15). Slice j
 now sits at base + j * slice channels * rowL2, and the parity check compares
 slice bases as a set.
+
+## Round 3: bounded 56x56 terminal forms and explicit spills
+
+The decoded round-2 facts do **not** describe spatially sliced inter-layer
+edges. A row-band compute task still produces a complete height edge. The
+56x56 c160 triplet has two 0xf5700-byte resident edges; c176 needs
+0x21b700 bytes for two edges, exceeds the 2 MiB ring, and spills. Reducing
+TileHeight does not change this decision. There is no decoded 112x112
+spatial handoff in that campaign.
+
+The planner now accepts exactly the three-layer, same-channel 56x56
+`pw -> dw -> pw` chain at c128. The second handoff uses SourceCfg
+0x120 together with the complete terminal ResultCfg 0x142 form: output
+C/R/D/G = `0x80 / (channels*0x80+0x40) / channels*0x80 / channels*0x80`,
+TileDMADst 0xc1, and TileHeight 56. Source row strides
+also follow that exact decoded case. The c160 case remains refused by the generic kernel encoder because its
+lane chunks have different widths. This form is restricted to a program
+output. Extending it to a scratch writer or a resident successor would
+combine fields that the supplied facts do not prove.
+
+Other DRAM edges now report `candidateL2Bytes` (the full consumer input span)
+and `l2SpillReason` in the manifest. These distinguish unsupported row-band
+handoffs, unsupported wide dependent consumers, and overlapping full spans.
+Unknown forms retain the existing DRAM schedule.
+
+`tests/test_h13_l2_residency.py` (part of `make test-h13-parity`) compares the
+new terminal forms with every decoded header/Common/L2/TileDMA field, apart
+from the existing per-layer Common 0x34 exclusion, ExeCycles, and binding
+number normalization. It separately checks four/eight-task Apple handoffs,
+the c176/c192/c256 spill boundary, and host scatter/gather transport through
+the emitted L2 tuples against the per-layer float64 reference. The transport
+tests include ring wrap, ascending output-channel assembly, bias and ReLU;
+kernel sections and numerical task registers must match the per-layer build.
+These host checks do not establish device arithmetic or execution safety.
+
+Rebuilding `main` at `86dcb19` and this branch gives **21/27** resident edges,
+45 tasks and 6,881,280 scratch bytes, rather than the 23/27 count recorded
+above. The DRAM producers are layers 1, 2, 3, 4, 6 and 26 (zero-based).
+The whole-network descriptor traffic estimate is unchanged: 24,924,160 bytes
+per inference, versus 53,825,536 for the per-layer DRAM programs. It sums
+enabled TileDMA extents and per-task kernel-DMA lengths; cache effects and
+DRAM transaction overhead are excluded. The terminal c128 probe has three
+tasks, no scratch and a 1,905,664-byte estimate.
+
+This bounded extension does not eliminate MobileNetV1's remaining DRAM
+edges. Use `tools/h13-mobilenet/l2_stats.py` for descriptor byte counts and
+`prepare_l2.py` for the real-weight device package. No new MobileNet latency
+is claimed before the lead runs the package.
 
 ## Remaining gap to macOS and next steps
 

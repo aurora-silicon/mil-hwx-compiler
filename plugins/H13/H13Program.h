@@ -391,6 +391,10 @@ struct LinkedLayer {
     std::uint64_t l2Source = 0;
     std::uint64_t l2Result = 0;
     std::uint64_t l2ResultBytes = 0;
+    /// Full consumer input span, even when compute uses row bands.
+    std::uint64_t candidateL2Bytes = 0;
+    /// Why an intermediate remains in DRAM (empty for a resident edge).
+    std::string l2SpillReason = {};
 };
 
 /// Links the per-layer programs of a straight-line convolution chain into

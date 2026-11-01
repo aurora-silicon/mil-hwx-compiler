@@ -298,6 +298,7 @@ test-h13-simulation: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_package_simulation.py
 .PHONY: test-h13-parity
 test-h13-parity: $(BUILD)/mil-hwxc
+	python3 tests/test_h13_l2_residency.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_fixture_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_matvec_programs.py $(BUILD)/mil-hwxc
