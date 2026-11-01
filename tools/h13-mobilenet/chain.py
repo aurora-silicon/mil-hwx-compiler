@@ -49,7 +49,10 @@ def compile_chain(milc, mil, root, out, schedule, generic=True):
     env = dict(os.environ)
     if generic:
         env['MILHWXC_H13_CONV_GENERIC'] = '1'
-    cmd = [milc, '--target', 'H13', '--mil', mil, '--model-root', root, '--output', out]
+    target = env.get('MILHWXC_TARGET', 'H13')
+    if target == 'H14':
+        env['MILHWXC_H14_CONV_GENERIC'] = '1'
+    cmd = [milc, '--target', target, '--mil', mil, '--model-root', root, '--output', out]
     if schedule:
         cmd += ['--schedule', schedule]
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
