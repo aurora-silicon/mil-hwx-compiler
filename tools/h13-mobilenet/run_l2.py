@@ -6,6 +6,7 @@ controller. This script never transports code or contacts another machine.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -35,8 +36,19 @@ def main():
     device = Path("/sys/class/accel/accel0/device")
 
     def snapshot(name):
+        counters = {}
         for attribute in ("ane_stats", "wedged"):
-            (args.output / f"{name}-{attribute}.txt").write_text((device / attribute).read_text())
+            text = (device / attribute).read_text()
+            (args.output / f"{name}-{attribute}.txt").write_text(text)
+            if attribute == "ane_stats":
+                for line in text.splitlines():
+                    fields = line.split()
+                    if len(fields) == 2:
+                        try:
+                            counters[fields[0].rstrip(':')] = int(fields[1], 0)
+                        except ValueError:
+                            pass
+        return counters
 
     def execute(name, programs, repeat, warmup=0, exec_only=False):
         output = args.output / (name + ".bin")
@@ -50,9 +62,19 @@ def main():
             raise RuntimeError(f"{name}: anechain exited {run.returncode}; see preserved stderr")
         return unpack(output.read_bytes(), lp["outputs"][0]["nchw"]), json.loads(run.stdout.strip().splitlines()[-1])
 
-    snapshot("before")
+    before = snapshot("before")
     rows = []
     try:
+        probe_command = [sys.executable, str(exe.with_name("coldcheck.py")),
+                         str(package / "probes/wide128"), "6"]
+        probe = subprocess.run(probe_command, capture_output=True, text=True, timeout=600,
+                               env=dict(os.environ, ANECHAIN=str(exe),
+                                        ANEBENCH_TMP=str(args.output / "wide128")))
+        (args.output / "wide128.stdout").write_text(probe.stdout)
+        (args.output / "wide128.stderr").write_text(probe.stderr)
+        (args.output / "wide128.command.json").write_text(json.dumps(probe_command) + "\n")
+        if probe.returncode:
+            raise RuntimeError(f"wide128 cold probe exited {probe.returncode}; see preserved logs")
         for i, x in enumerate(references["inputs"]):
             (args.output / "input.bin").write_bytes(pack(x, lp["inputs"][0]["nchw"], lp["inputs"][0]["allocationBytes"]))
             a, _ = execute(f"cold-{i}-linked", linked, 1)
@@ -67,7 +89,13 @@ def main():
             assert row["exact"] and row["finite"] and row["top1"] == row["referenceTop1"], row
         _, timing = execute("exec-only", linked, args.passes, 20, True)
         assert (device / "wedged").read_text().strip() == "0"
-        result = dict(coldExact=16, top1Agree=16, timing=timing, successfulTimedPasses=args.passes,
+        after = snapshot("after")
+        errors = {key: value - before[key] for key, value in after.items()
+                  if key in before and ("error" in key.lower() or "recover" in key.lower())}
+        assert all(delta == 0 for delta in errors.values()), errors
+        result = dict(wide128ColdExact=6, coldExact=16, top1Agree=16, timing=timing, successfulTimedPasses=args.passes,
+                      taskExecFailures=0, driverErrorCounterDeltas=errors,
+                      driverErrorCountersAvailable=bool(errors),
                       baselineP50Us=1641.0, p50Ratio=timing["p50_us"] / 1641.0)
         (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))

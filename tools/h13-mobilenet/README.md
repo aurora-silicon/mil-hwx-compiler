@@ -64,11 +64,18 @@ gcc -O2 -I"$LIBANE" -o tools/h13-mobilenet/anechain \
 python3 tools/h13-mobilenet/run_l2.py . --passes 5000 --output timing-r3
 ```
 
+The runner first checks `probes/wide128`, exercising the new terminal descriptor form before the whole
+network. It reuses real pointwise/depthwise weights in an artificial triplet;
+it is a transport probe, not a MobileNet accuracy result. Its six cold
+comparisons must pass before the runner continues to the whole network.
+
 The runner requires cold exact equality to the per-layer programs and top-1
 16/16, then invokes `anechain -w 20 -r 5000 -n` with the last reference input
 for exec-only timing against 1641 us. It preserves commands, stdout/stderr,
 outputs, cold results and before/after driver counters in a fresh directory.
 Any submission failure exits nonzero. The exact bounded 56x56 c128
-terminal chain is checked on the host; the whole MobileNet still retains its four
-DRAM edges because the supplied facts do not prove spatial handoffs for the
-oversized 112x112 tensors or the nonterminal wide 56x56 form.
+terminal chain is checked on the host. The actual current-main and branch
+manifests have six DRAM edges (21/27 resident), versus the four/23 count in
+the earlier summary. The supplied facts do not prove spatial handoffs for
+the oversized 112x112 tensors, the nonterminal wide 56x56 form, or a dependent
+edge from the split pointwise producer into the split dense classifier.

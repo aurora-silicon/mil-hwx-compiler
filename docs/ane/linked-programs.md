@@ -352,7 +352,16 @@ tests include ring wrap, ascending output-channel assembly, bias and ReLU;
 kernel sections and numerical task registers must match the per-layer build.
 These host checks do not establish device arithmetic or execution safety.
 
-This bounded extension does not eliminate MobileNetV1's four remaining DRAM
+Rebuilding `main` at `86dcb19` and this branch gives **21/27** resident edges,
+45 tasks and 6,881,280 scratch bytes, rather than the 23/27 count recorded
+above. The DRAM producers are layers 1, 2, 3, 4, 6 and 26 (zero-based).
+The whole-network descriptor traffic estimate is unchanged: 24,924,160 bytes
+per inference, versus 53,825,536 for the per-layer DRAM programs. It sums
+enabled TileDMA extents and per-task kernel-DMA lengths; cache effects and
+DRAM transaction overhead are excluded. The terminal c128 probe has three
+tasks, no scratch and a 1,905,664-byte estimate.
+
+This bounded extension does not eliminate MobileNetV1's remaining DRAM
 edges. Use `tools/h13-mobilenet/l2_stats.py` for descriptor byte counts and
 `prepare_l2.py` for the real-weight device package. No new MobileNet latency
 is claimed before the lead runs the package.
