@@ -194,6 +194,19 @@ class PreparedProgram:
         self.submit()
         return self.transfer_out()
 
+    def run_in_place(self):
+        """Submit the owned input buffers and read into owned output buffers.
+
+        Returned ctypes arrays belong to this handle and are overwritten by
+        the next run. Consumers must finish reading them before resubmitting.
+        This avoids the bytes allocation in transfer_out for resident users.
+        """
+        self.transfer_in()
+        self.submit()
+        for index, buffer in enumerate(self.output_buffers):
+            self.adapter._read(self.handle, buffer, index)
+        return self.output_buffers
+
     def close(self):
         handle, self.handle = self.handle, None
         if not handle:

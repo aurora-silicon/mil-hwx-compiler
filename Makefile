@@ -424,3 +424,9 @@ test-h17-conv-parity: $(BUILD)/h16_conv_dump
 	python3 tests/test_h16_h17_conv_parity.py $< H17
 
 test: test-h16g test-h17
+
+.PHONY: test-camera-prefixes
+test-camera-prefixes: $(BUILD)/mil-hwxc
+	python3 tests/test_camera_prefixes.py $(BUILD)/mil-hwxc
+
+test-h13: test-camera-prefixes

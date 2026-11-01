@@ -229,6 +229,24 @@ def test_prepared_program_run_transfer_read_close():
     assert adapter.freed == 1
 
 
+def test_prepared_program_in_place_reuses_owned_surfaces():
+    adapter = ScriptedAdapter(src_sizes=[4], dst_sizes=[8])
+    program = h13_run_linux.PreparedProgram(adapter, b"anec", [4 * b"a"], [8])
+    try:
+        program.input_buffers[0][:] = b"bcde"
+        outputs = program.run_in_place()
+        assert outputs is program.output_buffers
+        assert outputs[0].raw == b"A" + bytes(7)
+        outputs[0][0] = b"Z"
+        again = program.run_in_place()
+        assert again is outputs and again[0].raw[0:1] == b"A"
+        assert adapter.sent == [0, 0] and adapter.read == [0, 0]
+        assert adapter.exec_calls == 2
+    finally:
+        program.close()
+    assert adapter.freed == 1
+
+
 class Closable:
     def __init__(self, fail=False):
         self.closed = 0
