@@ -965,6 +965,10 @@ def conv_records(target: str) -> dict[tuple, dict[str, Any]]:
         parameters = record.get("parameters") or {}
         if "kernel" not in parameters or "weight_shape" not in parameters:
             continue
+        # The formula campaign's descriptor oracles (conv_desc_*) feed the
+        # H16G/H17 parity tests, not the H13 template tables.
+        if record.get("family") == "conv_descriptor":
+            continue
         record.setdefault("target", target)
         if not covered(record, allow_multi_task=
                        record["case"] in MULTI_TASK_CASES):

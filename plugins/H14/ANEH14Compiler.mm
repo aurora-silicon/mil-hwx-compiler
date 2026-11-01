@@ -861,12 +861,6 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         ![schedule isEqualToString:@"per-op"])
         return reject(diagnostics, @"H17 schedule must be 'per-op' outside convolution graphs",
                       nil, code(target, @"unsupported-schedule"));
-    if (![schedule isEqualToString:@"per-op"] &&
-        (!h14 || ![schedule isEqualToString:@"chain"]))
-        return reject(diagnostics, h14
-            ? @"H14 schedule must be 'per-op' or 'chain'"
-            : [NSString stringWithFormat:@"%@ schedule must be 'per-op'",
-                  target.name], nil, code(target, @"unsupported-schedule"));
 
     for (ANEGraphOperation *candidate in function.operations)
         if (candidate.results.count != 1)
