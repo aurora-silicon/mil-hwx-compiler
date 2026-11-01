@@ -21,7 +21,29 @@ int main(int argc, char **argv) {
             layers.push_back({{k,k,s,g,(number(6)&2)!=0,{ci,w,w},{co,wo,wo}},(number(6)&1)!=0});
         }
         std::vector<std::uint8_t> bytes;
-        if (mode=="describe") bytes=ane::h16::describe(gen,layers).stream;
+        // Read each layer's resolved fp16 weights (then bias) from stdin.
+        const auto readWeights=[](const ane::h16::ConvShape &s) {
+            const std::size_t size=std::size_t(s.output.channels)*s.input.channels/s.groups*s.kernel*s.kernel*2+
+                                   (s.bias ? std::size_t(s.output.channels)*2 : 0);
+            std::vector<std::uint8_t> w(size);
+            std::cin.read(reinterpret_cast<char *>(w.data()),w.size());
+            if (std::size_t(std::cin.gcount())!=size) throw std::invalid_argument("short weights on stdin");
+            return w;
+        };
+        const auto sparseChunks=[&](ane::h16::Layer &l) {
+            auto w=readWeights(l.shape);
+            if (l.shape.stride!=2) return;
+            const std::size_t ws=w.size()-(l.shape.bias ? std::size_t(l.shape.output.channels)*2 : 0);
+            ane::h16::packSparseStride2(l.shape,w.data(),l.shape.bias ? w.data()+ws : nullptr,l.kernelChunks);
+        };
+        if (mode=="exec" && layers.size()==1) {
+            sparseChunks(layers[0]);
+            bytes=ane::h16::describe(gen,layers,true).stream;
+        } else if (mode=="chain-dep" || mode=="chain-measured") {
+            for (auto &l:layers) sparseChunks(l);
+            bytes=ane::h16::describeDramChain(gen,layers,mode=="chain-dep" ? ane::h16::DramEdgeForm::DependencyOnly
+                                                                         : ane::h16::DramEdgeForm::Measured,0x200000).stream;
+        } else if (mode=="describe") bytes=ane::h16::describe(gen,layers).stream;
         else if (mode=="describe-dense") bytes=ane::h16::describe(gen,layers,false).stream;
         else if (mode.rfind("dram",0)==0) {
             const auto form=mode=="dram-measured" ? ane::h16::DramEdgeForm::Measured

@@ -12,6 +12,9 @@ using ConvShape = h13::ConvShape;
 struct Layer {
     ConvShape shape;
     bool relu = false;
+    // Kernel bytes per lane when they depend on the weights (sparse
+    // stride-2 sections); all zero derives them from the shape.
+    std::array<std::uint32_t,16> kernelChunks{};
 };
 struct Task {
     std::array<std::uint32_t, 9> header{};
@@ -43,6 +46,12 @@ Description describe(Generation generation, const std::vector<Layer> &layers,
                      bool sparseStride2 = true);
 // Packages only a measured stride-1 standalone form. Uses the established
 // stride-1 packer whose output is verified against every applicable hash.
+// Apple's zero-skipping stride-2 kernel section (3x3 depthwise C64..C512 and
+// the 3->32 stem), with the per-lane byte counts the descriptor needs.
+std::string sparseStride2Refusal(ConvShape shape);
+std::vector<std::uint8_t> packSparseStride2(ConvShape shape, const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes);
 // A chain of measured standalone tasks whose intermediates go through the
 // scratch BAR (slot 3) in DRAM, ping-ponging between two regions. Measured
 // uses the r2 DRAM-chain producer/consumer fields; DependencyOnly sets only
