@@ -1,5 +1,23 @@
 # Linked camera packages
 
+YuNet has a source-built one-program, 113-task package with package-MIL
+simulation passing on all 30 audited portraits. Build it with:
+
+```sh
+python3 tools/yunet_linked.py "$CAMERA_MODELS/yunet" --compiler build/mil-hwxc --output "$OUTPUT/yunet"
+```
+
+The lowering uses a phase-layout stem, nonnegative convolution max trees,
+channel padding, residual sums, native nearest resize and a compact readback.
+Image layout and score/head decode remain outside the program and count in
+device frame timing. Placement-only concat candidates emit no task only when
+the allocator proves an exclusive adjacent producer tree; otherwise they are
+refused. No unsupported copy kernel or CPU partition is substituted.
+
+The paired effects branch ships the audited package and host receipt under
+`examples/camera-effects/packages/`. It still requires lead device
+qualification; no ANE timing or speedup is claimed. Selfie remains on CPU.
+
 `tools/camera_linked.py` attempts the audited camera-effects MIL as **one
 H13 program and one dispatch**. It writes `camera-linked.json` only after
 the existing ANEC reader accepts the compiler output and the boundary
@@ -18,9 +36,9 @@ their internal tasks as generic convolution geometry. H14 routes generic
 convolution chains to the formula linker, and native graphs to the native
 linker. The ANEC header and channel contracts are unchanged.
 
-## Current model refusals
+## Original-export refusals and remaining selfie work
 
-The native layer extension does **not** yet cover either whole camera graph.
+The original exports do not compile directly as linked camera graphs.
 The original exports give these inventories (constants omitted):
 
 | Model | Operations | First linked refusal |
@@ -38,9 +56,13 @@ residual branches, a multi-head readback contract, and a qualified stem
 lowering. The 35x35 camera schedules fix the earlier island rewrite, not
 these whole-graph requirements.
 
-No device package, 30-portrait linked parity pass, or camera latency claim is
-made for either original export. An unsuccessful build directory must never
-be installed as a candidate package.
+The YuNet lowering above resolves its original-export gaps without host NN
+partitions. Selfie still requires additional qualified shape/operation support
+and numerical work. A host experiment rounding the original selfie arithmetic
+to fp16 boundaries passes 28/30 portraits, failing IoU on two, including the
+previously sensitive portrait. This diagnostic is not a linked-package parity
+result. The gate stays at 0.98 and blur stays on CPU. An unsuccessful build
+directory must never be installed as a candidate package.
 
 ## Runtime and qualification contract
 
