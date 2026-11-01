@@ -9,27 +9,57 @@ namespace {
 using U32 = std::uint32_t;
 struct Schedule {
     U32 cin, cout, width, kernel, stride, groups;
+    bool bias;
     U32 tileHeight, sourceSkew, common;
     bool direct;
+    // Output-channel group count; -1 derives log2(Cout/16) (depthwise: 0).
+    int ocg;
 };
 // Scheduler outputs, not extrapolated shape formulas. See h16-h17-conv.md.
+// Rows below the first block come from the round-2 corpus
+// (H16-H17-CONV-FIELDS-r2.md): MobileNetV1 widths 256..1024 and bias.
 constexpr Schedule schedules[] = {
-    {64,64,64,1,1,1,64,0,0x210000,true},
-    {32,64,112,1,1,1,112,0x50,0x231100,false},
-    {64,128,112,1,1,1,80,0x50,0x231100,false},
-    {64,128,56,1,1,1,56,0x50,0x240000,false},
-    {3,32,224,3,2,1,112,0,0x230000,false},
-    {64,64,112,3,1,1,112,0,0x200000,true},
-    {32,32,112,3,1,32,112,0x50,0x230000,false},
-    {64,64,112,3,2,64,56,0,0x210000,true},
-    {128,128,56,3,2,128,28,0x30,0x220000,true},
+    {64,64,64,1,1,1,false,64,0,0x210000,true,-1},
+    {32,64,112,1,1,1,false,112,0x50,0x231100,false,-1},
+    {64,128,112,1,1,1,false,80,0x50,0x231100,false,-1},
+    {64,128,56,1,1,1,false,56,0x50,0x240000,false,-1},
+    {3,32,224,3,2,1,false,112,0,0x230000,false,-1},
+    {64,64,112,3,1,1,false,112,0,0x200000,true,-1},
+    {32,32,112,3,1,32,false,112,0x50,0x230000,false,-1},
+    {64,64,112,3,2,64,false,56,0,0x210000,true,-1},
+    {128,128,56,3,2,128,false,28,0x30,0x220000,true,-1},
+    // round 2
+    {256,256,28,3,1,256,false,28,0x50,0x220000,true,-1},
+    {512,512,14,3,1,512,false,14,0x30,0x230000,true,-1},
+    {1024,1024,7,3,1,1024,false,7,0x30,0x244404,true,-1},
+    {256,256,28,3,2,256,false,14,0x20,0x230000,true,-1},
+    {512,512,14,3,2,512,false,7,0x20,0x244404,true,-1},
+    {128,256,28,1,1,1,false,28,0x50,0x220000,true,4},
+    {256,256,28,1,1,1,false,28,0x50,0x220000,true,4},
+    {256,512,14,1,1,1,false,14,0x30,0x230000,true,4},
+    {512,512,14,1,1,1,false,14,0x30,0x233300,true,4},
+    {512,1024,14,1,1,1,false,14,0x30,0x233300,true,4},
+    {512,1024,28,1,1,1,false,28,0x50,0x222200,true,4},
+    {512,1024,7,1,1,1,false,7,0x30,0x233304,true,5},
+    {512,1024,7,1,1,1,true,7,0x30,0x244404,true,5},
+    {1024,1024,7,1,1,1,false,7,0x30,0x244404,true,5},
+    // Provisional (no Apple oracle yet; nearest measured neighbour, pending
+    // device verification): the two MobileNetV1 layers at 56x56.
+    {128,128,56,3,1,128,false,56,0x50,0x220000,true,-1},
+    {128,128,56,1,1,1,false,56,0x50,0x240000,false,-1},
 };
 const Schedule *schedule(ConvShape s) {
+    const Schedule *plain = nullptr;
     for (const auto &p : schedules)
         if (s.input.channels == p.cin && s.output.channels == p.cout &&
             s.input.width == p.width && s.kernel == p.kernel &&
-            s.stride == p.stride && s.groups == p.groups) return &p;
-    return nullptr;
+            s.stride == p.stride && s.groups == p.groups) {
+            if (s.bias == p.bias) return &p;
+            if (!p.bias) plain = &p;
+        }
+    // A biased layer without its own measured row takes the plain row's
+    // schedule; only NE bit 0x10 and the kernel bytes change (provisional).
+    return s.bias ? plain : nullptr;
 }
 U32 align64(U32 n) { return (n + 63) & ~U32(63); }
 void word(std::vector<std::uint8_t> &out, U32 value) {
@@ -103,8 +133,8 @@ void pack(Task &t) {
     range(t,0x4900,0x4910); range(t,0x5110,0x5138);
     range(t,0x5900,0x592c);
     range(t,0x5510,0x5514,0x24000000);
-    range(t,0x4d10,0x4d14,0x23000000);
-    range(t,0x5108,0x510c,0x23800000);
+    range(t,0x4d10,0x4d14,t.sourceSlotFlags);
+    range(t,0x5108,0x510c,t.resultSlotFlags);
     range(t,0x4d00,0x4d00,0x22000000);
     range(t,0x5100,0x5100,0x22000000);
     // DMA address records are relocation operands, emitted separately from
@@ -113,21 +143,32 @@ void pack(Task &t) {
     t.header[0] = U32(t.bytes.size()/4)<<16 | (t.header[0]&0xffff);
     store(t.bytes,0,t.header[0]);
 }
-std::array<U32,16> chunks(ConvShape s) {
+// Kernel bytes per output lane. Dense sections (every stride-1 form, and
+// the dense stride-2 form an executable package uses) follow the packers:
+// depthwise lanes hold Cout/16 channels of taps (+1 bias row), regular
+// lanes hold Cout/16 columns of Cin*taps rows (+1 bias row), padded to 64.
+// The sparse stride-2 vectors reproduce Apple's zero-skipping sections for
+// the campaign's BLOBFILE view only (descriptor parity, never packaging).
+std::array<U32,16> chunks(ConvShape s, bool sparse) {
     std::array<U32,16> out{};
     const bool dw = s.groups == s.input.channels;
-    if (s.stride == 1) {
-        out.fill(align64(2*(dw ? 1 : s.input.channels)*s.kernel*s.kernel*
-                        (s.output.channels/16)));
+    const U32 taps = s.kernel*s.kernelWidth;
+    const U32 rows = (dw ? 1 : s.input.channels)*taps + (s.bias ? 1 : 0);
+    if (s.stride == 1 || !sparse) {
+        out.fill(align64(2*rows*(s.output.channels/16)));
     } else if (dw && s.input.channels == 64) out.fill(128);
     else if (dw && s.input.channels == 128) {
         for (unsigned i = 0; i < 16; ++i) out[i] = i < 7 ? 192 : 256;
-    } else {
+    } else if (dw && s.input.channels == 256) {
+        out.fill(0x1c0);
+        for (unsigned i : {1u,2u,4u,5u,6u}) out[i] = 0x180;
+    } else if (dw && s.input.channels == 512) out.fill(0x3c0);
+    else {
         out.fill(128); out[0] = 64;
     }
     return out;
 }
-Task task(Generation gen, Layer layer, unsigned stage, unsigned count,
+Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned count,
           U32 srcBase, U32 resultBase, U32 kernelBase, U32 residentRow,
           U32 residentStride) {
     const auto s = layer.shape;
@@ -155,15 +196,20 @@ Task task(Generation gen, Layer layer, unsigned stage, unsigned count,
     }
     if (dw) r[0x30]=0x14000;
     r[0x34]=p.tileHeight; r[0x3c]=p.common;
+    // Measured generation delta (r2): standalone depthwise C256 28->14.
+    if (!h17 && dw && s.stride==2 && s.input.channels==256) r[0x3c]=0x233300;
     if (linked && !first && !last) r[0x3c] |= 0x1100;
     if (h17 && s.kernel==3 && s.groups==1 && s.input.channels==64)
         r[0x3c] |= 1u<<27;
     U32 ocg=0;
-    if (!dw) for (U32 n=s.output.channels/16; n>1; n>>=1) ++ocg;
+    if (p.ocg >= 0) ocg=U32(p.ocg);
+    else if (!dw) for (U32 n=s.output.channels/16; n>1; n>>=1) ++ocg;
     if (ocg != 3) r[0x40]=ocg;
     r[0x4c]=h17 ? 0x200000 : 0x100000;
-    const U32 srcRow=first ? 2*(s.kernel==1 ? std::min(s.input.width,64u)
-                                                        : s.input.width) : residentRow;
+    // The L2 source row is the row's bytes rounded up to 16 (7 -> 16,
+    // 14 -> 32, 28 -> 64); 1x1 kernels cap the row at 64 pixels.
+    const U32 srcRow=first ? ((2*(s.kernel==1 ? std::min(s.input.width,64u)
+                                                : s.input.width)+15)&~15u) : residentRow;
     const U32 srcStride=first ? s.input.channels*srcRow+p.sourceSkew : residentStride;
     r[0x4104]=first ? 0x500172 : 0x120;
     if (first) r[0x4108]=0x500130;
@@ -184,8 +230,9 @@ Task task(Generation gen, Layer layer, unsigned stage, unsigned count,
         r[0x4150]=dstRow; r[0x4154]=s.output.channels*dstRow+skew;
         if (last) r[0x4158]=r[0x415c]=s.output.channels*dstRow;
     }
-    if (h17 || s.stride==2) r[0x4900]=(h17 ? 0x10000082 : 0x82) | (s.stride==2 ? 0x100 : 0);
-    r[0x4904]=0x103c00 | (layer.relu ? 0x10000 : 0);
+    const bool sparseKernel = s.stride==2 && sparse;
+    if (h17 || sparseKernel) r[0x4900]=(h17 ? 0x10000082 : 0x82) | (sparseKernel ? 0x100 : 0);
+    r[0x4904]=0x103c00 | (layer.relu ? 0x10000 : 0) | (s.bias ? 0x10 : 0);
     r[0x4910]=0x3c00;
     if (first) {
         r[0x4d00]=0x21; r[0x4d08]=0xce;
@@ -204,9 +251,9 @@ Task task(Generation gen, Layer layer, unsigned stage, unsigned count,
         if (linked) r[0x5908]=stage<<16 | 0xe0;
         r[0x5918]=0; r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
     }
-    r[0x5500]=(stage+1)<<16 | (last ? 0x2c0 : 0x240) | (s.stride==2 ? 0x20 : 0);
+    r[0x5500]=(stage+1)<<16 | (last ? 0x2c0 : 0x240) | (sparseKernel ? 0x20 : 0);
     r[0x5510]=kernelBase; r[0x5514]=0;
-    const auto sizes=chunks(s);
+    const auto sizes=chunks(s,sparse);
     U32 offset=0;
     for (unsigned i=0; i<16; ++i) {
         r[0x5520+4*i]=stage<<16 | 0x21;
@@ -218,7 +265,6 @@ Task task(Generation gen, Layer layer, unsigned stage, unsigned count,
 }
 }
 std::string convRefusal(ConvShape s) {
-    if (s.bias) return "bias packing and epilogue are not measured for H16G/H17";
     if (s.kernel!=s.kernelWidth || (s.kernel!=1 && s.kernel!=3))
         return "only measured square 1x1/3x3 kernels are supported";
     if (s.input.width!=s.input.height || s.output.width!=s.output.height ||
@@ -229,10 +275,11 @@ std::string convRefusal(ConvShape s) {
 }
 std::string executableRefusal(ConvShape s) {
     if (auto why=convRefusal(s); !why.empty()) return why;
-    if (s.stride!=1) return "H16G/H17 sparse kernel byte grammar is unknown; H13 sparse bytes cannot be reused";
+    // Stride 2 is packaged in the dense kernel form (KernelCfg without the
+    // sparse bit); Apple's zero-skipping stride-2 grammar is not modelled.
     return {};
 }
-Description describe(Generation gen, const std::vector<Layer> &layers) {
+Description describe(Generation gen, const std::vector<Layer> &layers, bool sparseStride2) {
     if (gen!=Generation::H16G && gen!=Generation::H17)
         throw std::invalid_argument("unsupported convolution generation");
     if (layers.empty() || layers.size()>3) throw std::invalid_argument("only measured one/two/three-task schedules are supported");
@@ -259,7 +306,7 @@ Description describe(Generation gen, const std::vector<Layer> &layers) {
         U32 result=0;
         if (i+1==count && i) result=source+s.input.height*residentStride;
         else if (i && count==3) result=0x188e00;
-        Task t=task(gen,layers[i],i,count,source,result,kernelBase,residentRow,residentStride);
+        Task t=task(gen,layers[i],sparseStride2,i,count,source,result,kernelBase,residentRow,residentStride);
         pack(t);
         // Capacity bound of the measured allocations, not a new scheduler.
         const auto &r=t.registers;
@@ -268,7 +315,7 @@ Description describe(Generation gen, const std::vector<Layer> &layers) {
         out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
         out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
         out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
-        U32 length=0; for (U32 n:chunks(s)) length+=n;
+        U32 length=0; for (U32 n:chunks(s,sparseStride2)) length+=n;
         kernelBase+=length;
         if (r.count(0x4150)) {residentRow=r.at(0x4150);residentStride=r.at(0x4154);}
         source=result;
@@ -277,11 +324,69 @@ Description describe(Generation gen, const std::vector<Layer> &layers) {
     out.kernelBytes=kernelBase;
     return out;
 }
-h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights, std::size_t size) {
+Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
+                              DramEdgeForm form, U32 scratchRegionBytes) {
+    if (gen!=Generation::H16G && gen!=Generation::H17)
+        throw std::invalid_argument("unsupported convolution generation");
+    if (layers.size()<2) throw std::invalid_argument("a DRAM chain needs two or more layers");
+    for (const auto &l:layers) if (auto why=convRefusal(l.shape); !why.empty()) throw std::invalid_argument(why);
+    const bool h17=gen==Generation::H17;
+    const unsigned count=static_cast<unsigned>(layers.size());
+    Description out;
+    out.stream.resize(16,0);
+    U32 kernelBase=0;
+    for (unsigned i=0;i<count;++i) {
+        const auto s=layers[i].shape;
+        const bool first=i==0,last=i+1==count;
+        // Each task keeps its measured standalone form (dense kernels) and
+        // gains the chain's ID, header and DRAM edge fields (r2, DRAM chain).
+        Task t=task(gen,layers[i],false,0,1,0,0,kernelBase,0,0);
+        auto &r=t.registers;
+        t.header={i,0,(first ? 0x68u : 0u) | (last ? 0x04000000u : 0u),0,
+                  first ? 0x00fff868u : (last ? 0x00fff860u : (h17 ? 0x00fff800u : 0x00fff820u)),
+                  0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
+        r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240);
+        for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
+        const U32 region=scratchRegionBytes;
+        if (!first) {
+            const U32 low=form==DramEdgeForm::Measured ? 0x41 : 0x21;
+            r[0x4d00]=(form==DramEdgeForm::None ? 0u : 0x20000000u) | i<<16 | low;
+            if (form==DramEdgeForm::Measured) r[0x4d08]=0x4e;
+            r[0x4d10]=((i-1)%2)*region;
+            t.sourceSlotFlags=0x21800000;
+        }
+        r[0x5100]=(r[0x5100]&0xff00ffffu) | i<<16;
+        if (!last) {
+            if (form!=DramEdgeForm::None) r[0x5100]=(r[0x5100]&~0xffu) | (h17 ? 0xe1 : 0xf1);
+            r[0x5108]=(i%2)*region;
+            t.resultSlotFlags=0x21800000;
+            for (U32 a:{0x5900u,0x5904u,0x5908u,0x5918u,0x5928u,0x592cu}) r.erase(a);
+        } else {
+            r[0x5908]=i<<16 | 0xe0;
+        }
+        pack(t);
+        out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
+        out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
+        out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
+        U32 length=0; for (U32 n:chunks(s,false)) length+=n;
+        kernelBase+=length;
+        out.tasks.push_back(std::move(t));
+    }
+    out.kernelBytes=kernelBase;
+    return out;
+}
+h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights, std::size_t size,
+                        const std::uint8_t *bias, std::size_t biasBytes) {
     if (auto why=executableRefusal(s); !why.empty()) throw std::invalid_argument(why);
-    auto d=describe(gen,{{s,false}});
-    auto constants=h13::packConvWeights(s,weights,size);
-    if (constants.size()!=d.kernelBytes) throw std::logic_error("stride-1 packer disagrees with H16 chunk formulas");
+    auto d=describe(gen,{{s,false}},false);
+    // The dense section does not depend on the stride: pack a strided
+    // regular conv through the stride-1 packer (H13's strided packer is the
+    // zero-skipping 1x1 form, a different grammar).
+    ConvShape packing=s; packing.stride=1;
+    packing.output=s.input;
+    packing.output.channels=s.output.channels;
+    auto constants=h13::packConvWeights(packing,weights,size,bias,biasBytes);
+    if (constants.size()!=d.kernelBytes) throw std::logic_error("dense packer disagrees with H16 chunk formulas");
     h13::Program p;
     p.task=std::move(d.stream); p.constants=std::move(constants);
     p.firstTaskBytes=p.task.size(); p.taskCount=1;
