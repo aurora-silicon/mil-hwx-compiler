@@ -15,6 +15,11 @@ FRAMEWORKS := $(shell GNUSTEP_CONFIG_FILE=$(GNUSTEP_PREFIX)/etc/GNUstep/GNUstep.
 endif
 BUILD := build
 
+# GNUstep supplies Objective-C-only flags. Keep them on mixed/Objective-C++
+# commands, while pure C++ targets must not receive unused language options.
+PURE_CXXFLAGS = $(filter-out -fobjc-arc -fobjc-exceptions -fobjc-runtime=% -fconstant-string-class=%,$(CXXFLAGS))
+INPUT_CXXFLAGS = $(if $(filter %.mm,$^),$(CXXFLAGS),$(PURE_CXXFLAGS))
+
 SUPPORT_SOURCES := lib/Support/ANEDiagnostic.mm
 MIL_LEXER_SOURCES := lib/MIL/MILLexer.mm
 MIL_PARSER_SOURCES := lib/MIL/MILSyntax.mm lib/MIL/MILParser.mm lib/MIL/MILPrinter.mm
@@ -48,166 +53,166 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/test_diagnostics: tests/test_diagnostics.mm $(SUPPORT_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_benchmark_stats: tests/test_benchmark_stats.cpp lib/Runtime/ANEBenchmarkStats.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $^ -o $@
 
 $(BUILD)/test_mil_lexer: tests/test_mil_lexer.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_mil_parser: tests/test_mil_parser.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_graph_import: tests/test_graph_import.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_operation_graph: tests/test_operation_graph.mm $(SUPPORT_SOURCES) lib/IR/ANEGraphIR.mm $(OP_GRAPH_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_graph_transforms: tests/test_graph_transforms.mm $(SUPPORT_SOURCES) lib/IR/ANEGraphIR.mm $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR -Ilib/Transform $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR -Ilib/Transform $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_structural_fusion: tests/test_structural_fusion.mm $(SUPPORT_SOURCES) lib/IR/ANEGraphIR.mm $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR -Ilib/Transform -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR -Ilib/Transform -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_h16g_legalization: tests/test_h16g_legalization.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_hwx_planning: tests/test_hwx_planning.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_structured_td_encoding: tests/test_structured_td_encoding.mm $(SUPPORT_SOURCES) lib/HWX/HWXImage.mm plugins/H16G/H16GTarget.mm $(STRUCTURED_TD_SOURCES) $(TASK_ENCODING_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_program_partition: tests/test_program_partition.mm lib/Planning/ANEProgramPartition.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/Planning $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/Planning $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_program_composition: tests/test_program_composition.mm plugins/H16G/H16GTarget.mm $(STRUCTURED_TD_SOURCES) $(TASK_ENCODING_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_hwx_object_writer: tests/test_hwx_object_writer.mm lib/HWX/HWXImage.mm $(OBJECT_WRITER_SOURCES) $(STRUCTURED_TD_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_h16g_constant_packing: tests/test_h16g_constant_packing.mm $(CONSTANT_PACKER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_staged_conv_compiler: tests/test_staged_conv_compiler.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_pass_manager: tests/test_pass_manager.mm $(SUPPORT_SOURCES) $(PASS_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/Pass $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/Pass $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_plugin_registry: tests/test_plugin_registry.mm $(SUPPORT_SOURCES) $(PLUGIN_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/Plugin $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/Plugin $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/h13_exec: tests/hardware/run_h13.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/conv_exec: tests/hardware/run_conv_relu.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/layout_exec: tests/hardware/run_layout.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/layout_conv_exec: tests/hardware/run_layout_conv.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/depthwise_exec: tests/hardware/run_depthwise.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/regular_conv_exec: tests/hardware/run_regular_conv.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/matmul_exec: tests/hardware/run_matmul.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/alu_exec: tests/hardware/run_alu.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/unary_exec: tests/hardware/run_unary.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/reduce_exec: tests/hardware/run_reduce.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/broadcast_alu_exec: tests/hardware/run_broadcast_alu.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/online_reduction_exec: tests/hardware/run_online_reduction.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/affine_scan_exec: tests/hardware/run_affine_scan.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/chunked_deltanet_exec: tests/hardware/run_chunked_deltanet.mm tests/hardware/ANEAppleBaselineRuntime.mm $(BENCHMARK_STATS_SOURCES) $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) -Itests/hardware $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) -Itests/hardware $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/matmul_gelu_exec: tests/hardware/run_matmul_gelu.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/compiler_ab_benchmark: tests/hardware/benchmark_compiler_ab.mm tests/hardware/ANEAppleBaselineRuntime.mm $(BENCHMARK_STATS_SOURCES) $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) -Itests/hardware $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) -Itests/hardware $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/profile_program_chain: tests/hardware/profile_program_chain.mm $(BENCHMARK_STATS_SOURCES) $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/scalar_fold_exec: tests/hardware/run_scalar_fold.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/prepare_broadcast_alu: tests/hardware/prepare_broadcast_alu.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/HWX/HWXObjectWriter.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm plugins/H16G/Encoding/H16GTDWriter.mm plugins/H16G/Encoding/H16GConvChainEncoder.mm plugins/H16G/Encoding/H16GBroadcastALUEncoder.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Ilib/Runtime -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/HWX -Ilib/IR -Ilib/Runtime -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_layout: tests/hardware/prepare_layout.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_layout_conv: tests/hardware/prepare_layout_conv.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_depthwise: tests/hardware/prepare_depthwise.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_regular_conv: tests/hardware/prepare_regular_conv.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_matmul: tests/hardware/prepare_matmul.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_alu: tests/hardware/prepare_alu.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_unary: tests/hardware/prepare_unary.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_reduce: tests/hardware/prepare_reduce.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/attention_exec: tests/hardware/run_attention.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/w8a8_exec: tests/hardware/run_w8a8.mm $(RUNTIME_BUNDLE_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $(RUNTIME_INCLUDES) $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 $(BUILD)/prepare_w8a8_model: tests/hardware/prepare_w8a8_model.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_clean_conv: tests/hardware/prepare_clean_conv.mm lib/HWX/ANEHWXArtifact.mm lib/Runtime/ANEExecutableBundle.mm lib/HWX/HWXImage.mm $(OBJECT_WRITER_SOURCES) $(STRUCTURED_TD_SOURCES) $(CONSTANT_PACKER_SOURCES) lib/IR/ANEGraphIR.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Ilib/Runtime -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/HWX -Ilib/IR -Ilib/Runtime -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_staged_conv: tests/hardware/prepare_staged_conv.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_staged_w8a8: tests/hardware/prepare_staged_w8a8.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/LayerOps.h plugins/LayerGraph.h plugins/NativeLayerPlan.h plugins/NativeLayerTemplates.inc plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
 	bash tests/test_cli.sh
@@ -216,7 +221,7 @@ test-no-pattern-shortcuts: $(BUILD)/mil-hwxc
 	bash tests/test_no_pattern_shortcuts.sh
 
 $(BUILD)/test_runtime_contract: tests/test_runtime_contract.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm $(RUNTIME_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR -Ilib/HWX -Ilib/Runtime $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
+	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR -Ilib/HWX -Ilib/Runtime $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
 test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_lexer $(BUILD)/test_mil_parser $(BUILD)/test_graph_import $(BUILD)/test_operation_graph $(BUILD)/test_graph_transforms $(BUILD)/test_structural_fusion $(BUILD)/test_h16g_legalization $(BUILD)/test_hwx_planning $(BUILD)/test_structured_td_encoding $(BUILD)/test_program_partition $(BUILD)/test_program_composition $(BUILD)/test_hwx_object_writer $(BUILD)/test_h16g_constant_packing $(BUILD)/test_staged_conv_compiler $(BUILD)/test_pass_manager $(BUILD)/test_plugin_registry $(BUILD)/test_compiler_e2e $(BUILD)/test_runtime_contract test-cli test-no-pattern-shortcuts
 	$(BUILD)/test_diagnostics
