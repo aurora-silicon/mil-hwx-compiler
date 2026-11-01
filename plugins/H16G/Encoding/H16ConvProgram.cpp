@@ -45,8 +45,11 @@ constexpr Schedule schedules[] = {
     {1024,1024,7,1,1,1,false,7,0x30,0x244404,true,5},
     // Provisional (no Apple oracle yet; nearest measured neighbour, pending
     // device verification): the two MobileNetV1 layers at 56x56.
-    {128,128,56,3,1,128,false,56,0x50,0x220000,true,-1},
-    {128,128,56,1,1,1,false,56,0x50,0x240000,false,-1},
+    {128,128,56,3,1,128,false,56,0x50,0x220000,true,-1},   // device-verified 01/11
+    // Provisional: depthwise 64 at 112 (stride-1 form of the s2 layer), from
+    // the measured depthwise 32 at 112.
+    {64,64,112,3,1,64,false,112,0x50,0x230000,false,-1},
+    {128,128,56,1,1,1,false,56,0x50,0x240000,false,-1},    // device-verified 01/11
 };
 const Schedule *schedule(ConvShape s) {
     const Schedule *plain = nullptr;
