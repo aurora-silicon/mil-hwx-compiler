@@ -2115,8 +2115,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }
 
     ane::layers::Plan native{};
-    if (ane::layers::plan(operation, false, &native)) {
-        program = ane::layers::encodeH13(native.operation, native.shape);
+    if (ane::layers::plan(operation, false, &native, gLinkedScheduleForcesGenericConv)) {
+        program = native.placementOnly ? ane::layers::placementConcatH13(native.shape) :
+            ane::layers::encodeH13(native.operation, native.shape);
         *inputsOut = native.inputs;
         *constantInputOut = nil;
         *constantDataOut = nil;
@@ -3051,7 +3052,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             NSString *kind = candidate.operationName;
             BOOL conv = [kind isEqualToString:@"conv"];
             ane::layers::Plan native{};
-            BOOL layer = ane::layers::plan(candidate, false, &native);
+            BOOL layer = ane::layers::plan(candidate, false, &native, linkedSchedule);
             const BOOL firstConcat = candidate == sourceOperations.firstObject && layer &&
                 native.operation == ane::layers::Operation::Concat && native.inputs.count == function.inputs.count &&
                 [native.inputs isEqualToArray:function.inputs];
@@ -3208,7 +3209,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         ANEGraphOperation *nativeCandidate = [[ANEGraphOperation alloc]
             initWithOperationName:name results:@[nativeResult] arguments:arguments
             attributes:candidate.attributes range:candidate.range];
-        if (ane::layers::plan(nativeCandidate, false, &native)) {
+        if (ane::layers::plan(nativeCandidate, false, &native, linkedSchedule)) {
             [operations addObject:nativeCandidate];
             [manifestValues addObject:nativeCandidate.results[0]];
             [loweredValues setObject:nativeCandidate.results[0] forKey:candidate.results[0]];
@@ -4067,7 +4068,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         ? boolean(operation.arguments[@"transpose_y"], YES) : YES,
                     runtimeWeight, !chainSchedule, nullptr);
             ane::layers::Plan nativePlan{};
-            BOOL nativeLayer = ane::layers::plan(operation, false, &nativePlan);
+            BOOL nativeLayer = ane::layers::plan(operation, false, &nativePlan, linkedSchedule);
             H13ParityPlan operationPlan{};
             H13NormPlan normalizationPlan{};
             H13BroadcastPlan broadcastPlanned{};
@@ -4302,7 +4303,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         ane::h13::PostOperation::Relu);
                     manifestOperation = @"conv+relu";
                 }
-                std::vector<std::uint8_t> anec = ane::h13::encodeANEC(program);
+                std::vector<std::uint8_t> anec;
+                if (program.taskCount) anec = ane::h13::encodeANEC(program);
+                else if (!linkedSchedule) throw std::logic_error("placement concat escaped linked scheduling");
                 NSMutableArray *inputRecords =
                     [NSMutableArray arrayWithCapacity:inputs.count];
                 NSMutableDictionary *constantInputs = [NSMutableDictionary dictionary];
@@ -4372,7 +4375,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 if (intermediateOutput) outputRecord[@"role"] = @"intermediate";
                 NSUInteger programIndex = programRecords.count;
                 NSData *payload = nil;
-                if (hwx) {
+                if (!program.taskCount) payload = [NSData data];
+                else if (hwx) {
                     payload = encodeHWX(program, anec, error);
                     if (!payload) return NO;
                 } else {

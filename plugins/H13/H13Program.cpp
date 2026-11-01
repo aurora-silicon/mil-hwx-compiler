@@ -3558,7 +3558,11 @@ Program linkLayerGraph(const std::vector<Program> &layers,
             fail("graph layer has no qualified DRAM routing");
         for (std::size_t j=0;j<p.inputs.size();++j)
             if (p.inputs[j].index!=5+j || p.inputs[j].elementSize!=2) fail("invalid graph input role");
-        spans.push_back(taskSpans(p));
+        if (!p.taskCount) {
+            if (!connections[i].concat || !plan.zeroCopy[i] || !p.task.empty() || !p.constants.empty())
+                fail("placement-only concat requires exclusive adjacent producers");
+            spans.emplace_back();
+        } else spans.push_back(taskSpans(p));
         if (!plan.zeroCopy[i]) for (const auto &span:spans.back()) sizes.push_back(span.bytes);
     }
     if (sizes.empty() || sizes.size()>65535) fail("native graph task budget exceeded");

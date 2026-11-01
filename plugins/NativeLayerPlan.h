@@ -10,6 +10,7 @@ struct Plan {
     Operation operation;
     Shape shape;
     NSArray<ANEGraphValue *> *inputs;
+    bool placementOnly = false;
 };
 
 static inline ANEGraphArgument *literal(ANEGraphArgument *arg) {
@@ -73,7 +74,7 @@ static inline bool surface(ANEGraphValue *value, Shape *shape) {
     return true;
 }
 
-static inline bool plan(ANEGraphOperation *op, bool h14, Plan *out) {
+static inline bool plan(ANEGraphOperation *op, bool h14, Plan *out, bool allowPlacement = false) {
     if (op.results.count != 1) return false;
     NSString *name = op.operationName;
     Shape input{}, output{};
@@ -124,7 +125,16 @@ static inline bool plan(ANEGraphOperation *op, bool h14, Plan *out) {
     }
     const unsigned scale = p.operation == Operation::Nearest2x || p.operation == Operation::BilinearHalf2x ? 2 : 1;
     if (output.channels != input.channels + input.otherChannels || output.height != input.height * scale ||
-        output.width != input.width * scale || !supports(h14, p.operation, input)) return false;
+        output.width != input.width * scale) return false;
+    if (!supports(h14, p.operation, input)) {
+        // This is a view candidate, never a substitute copy kernel. The graph
+        // allocator must prove exclusive adjacent producer placement before
+        // the empty program can disappear from the linked task stream.
+        if (!allowPlacement || h14 || p.operation != Operation::Concat ||
+            input.channels%16 || input.otherChannels%16 || output.channels>4096 ||
+            input.height>4096 || input.width>4096) return false;
+        p.placementOnly = true;
+    }
     for (ANEGraphValue *value in p.inputs)
         if ([value.producer.operationName isEqualToString:@"const"]) return false;
     p.shape = input;

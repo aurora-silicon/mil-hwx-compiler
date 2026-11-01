@@ -84,7 +84,8 @@ GraphPlan planGraph(const std::vector<Program> &programs,
         if (!connections[i].concat || plan.inputs[i].size()!=2) continue;
         const auto a=plan.inputs[i][0],b=plan.inputs[i][1];
         if (a.boundary || b.boundary || a.index==b.index || uses[a.index]!=1 || uses[b.index]!=1 ||
-            programs[a.index].taskCount!=1 || programs[b.index].taskCount!=1) continue;
+            !(programs[a.index].taskCount==1 || (connections[a.index].concat && plan.zeroCopy[a.index])) ||
+            !(programs[b.index].taskCount==1 || (connections[b.index].concat && plan.zeroCopy[b.index]))) continue;
         const auto &x=programs[a.index].output;
         const auto &z=programs[b.index].output;
         const auto &y=programs[i].output;

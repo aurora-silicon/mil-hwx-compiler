@@ -164,6 +164,22 @@ void bindH14(std::vector<std::uint8_t> &bytes, bool linux) {
 
 bool supports(bool h14, Operation operation, Shape shape) { return find(h14, operation, shape); }
 
+h13::Program placementConcatH13(Shape s) {
+    if (!s.channels || !s.otherChannels || !s.height || !s.width ||
+        s.channels%16 || s.otherChannels%16 || s.channels>4096 ||
+        s.otherChannels>4096-s.channels || s.height>4096 || s.width>4096)
+        throw std::invalid_argument("h13.linked-outside-envelope: invalid placement concat shape");
+    h13::Program out;
+    out.inputs = {surface<h13::TensorLayout>(5,s.channels,s.height,s.width),
+                  surface<h13::TensorLayout>(6,s.otherChannels,s.height,s.width)};
+    out.output = surface<h13::TensorLayout>(4,s.channels+s.otherChannels,s.height,s.width);
+    out.taskCount = 0;
+    out.firstTaskBytes = out.constantOffsetBytes = 0;
+    out.taskSurfaceChannels = {5,4,6,7};
+    out.nativeDramLayer = true;
+    return out;
+}
+
 h13::Program encodeH13(Operation operation, Shape shape) {
     const auto *source = find(false, operation, shape);
     if (!source) throw std::invalid_argument("h13.layer-outside-envelope: no decoded native layer geometry");

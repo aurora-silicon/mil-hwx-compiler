@@ -396,5 +396,11 @@ test-camera-linked:
 
 test: test-camera-linked
 
+.PHONY: test-placement
+test-placement: $(BUILD)/mil-hwxc
+	python3 tests/test_placement_cli.py $(BUILD)/mil-hwxc
+
+test-h13: test-placement
+
 # Hash assertions are shared by all platform-independent software tests.
 $(BUILD)/test_h16g_constant_packing $(BUILD)/test_compiler_e2e $(BUILD)/test_structured_td_encoding $(BUILD)/test_staged_conv_compiler $(BUILD)/test_program_composition: tests/sha256_compat.h

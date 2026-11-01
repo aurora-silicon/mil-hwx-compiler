@@ -16,6 +16,8 @@ struct Shape {
 /// channel-axis, two operands with equal N/H/W and no interleaving.
 bool supports(bool h14, Operation operation, Shape shape);
 h13::Program encodeH13(Operation operation, Shape shape);
+/// No task is emitted. Linking must prove a zero-copy producer placement.
+h13::Program placementConcatH13(Shape shape);
 h14::Program encodeH14(Operation operation, Shape shape);
 /// DRAM-linked, one-input native layers. Internal L2 tasks remain inside
 /// their layer. The BAR scratch slot follows the decoded H14 resource form.
