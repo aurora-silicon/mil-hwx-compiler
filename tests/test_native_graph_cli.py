@@ -13,6 +13,7 @@ sys.path.insert(0,str(ROOT/"research"))
 from layer_graph_cases import graph_case
 from h13_l2_edge_parity import tasks
 from h13_td import split_h14_tasks,decode_task
+from inspect_anec import load_package
 
 
 def main():
@@ -30,6 +31,9 @@ def main():
                 capture_output=True,text=True,timeout=120)
             assert run.returncode==0,(args.target,shared,consumer,run.stderr)
             m=json.loads((root/"out/manifest.json").read_text());p=m["programs"][0]
+            if args.target=="H13":
+                checked,_=load_package(root/"out")
+                assert checked==m
             assert len(m["programs"])==1 and m["dispatchPlan"]==[0] and p["taskDescriptors"]==count
             assert m["intermediates"]==[]
             assert len(p["inputs"])==(2 if two else 1)

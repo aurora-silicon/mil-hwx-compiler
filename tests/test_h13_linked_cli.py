@@ -29,6 +29,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "research"))
+import inspect_anec
 
 from timeouts import scaled_timeout  # noqa: E402
 
@@ -122,7 +124,19 @@ def compile_case(case, schedule="linked", success=True, diagnostic=None):
             assert diagnostic in run.stderr, (case.name, run.stderr)
         return None, None
     assert run.returncode == 0, (case.name, run.stderr)
-    return json.loads((out / "manifest.json").read_text()), out
+    manifest = json.loads((out / "manifest.json").read_text())
+    if schedule in ('linked', 'linked-l2'):
+        checked, _ = inspect_anec.load_package(out)
+        assert checked == manifest
+        bad = json.loads(json.dumps(manifest))
+        bad['scratch']['bytes'] += 16384
+        try:
+            inspect_anec.validate_linked_metadata(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('reader accepted inconsistent linked scratch allocation')
+    return manifest, out
 
 
 def words(anec, offset, count):

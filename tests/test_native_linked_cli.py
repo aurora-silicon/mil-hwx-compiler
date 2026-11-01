@@ -16,6 +16,7 @@ from h13_l2_edge_parity import tasks
 from h13_td import decode_task, split_h14_tasks
 from mint_layer_probes import hardswish_arithmetic_case, resize_case, concat_case
 from mint_conv_probes import conv_case
+from inspect_anec import load_package
 
 
 def activation_chain():
@@ -76,6 +77,9 @@ def main():
                                  capture_output=True,text=True,timeout=120)
             assert run.returncode==0,(name,run.stderr)
             m=json.loads((root/"out/manifest.json").read_text())
+            if args.target=="h13":
+                checked,_=load_package(root/"out")
+                assert checked==m
             assert len(m["programs"])==1 and m["dispatchPlan"]==[0]
             p=m["programs"][0]
             anec=(root/"out"/p["file"]).read_bytes()

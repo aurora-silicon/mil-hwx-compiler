@@ -24,6 +24,7 @@ PARITY_BROADCAST = 'apple-parity-broadcast'
 TILE_BYTES = 0x4000
 PARITY_ORACLE = 'h13-oracle-parity'
 CHAIN_ENCODER = 'composed-chain'
+LINKED_ENCODERS = ('h13-linked-conv', 'h13-linked-native-graph')
 
 
 def h13_task_registers(task):
@@ -91,7 +92,7 @@ def validate_chain_routing(program, tasks):
             'composed chain relu must apply only to the final accumulation task')
 
 
-def validate_task_headers(program, tasks, tiles):
+def validate_task_headers(program, tasks, tiles, linked_regions=None):
     """Validate the request NID and each enabled DMA surface selector."""
     for index, task in enumerate(tasks):
         words = struct.unpack(f'<{len(task) // 4}I', task)
@@ -99,12 +100,25 @@ def validate_task_headers(program, tasks, tiles):
                 f'H13 task[{index}] NID is not the Linux request NID')
         registers = h13_task_registers(task)
         for address, shift in H13_DMA_SELECTORS:
+            linked = program.get('encoder') in LINKED_ENCODERS
+            config = registers.get(address, H13_DMA_DISABLED)
+            if linked and not config & 1:
+                # Qualified L2 handoffs keep geometry but disable DRAM DMA.
+                continue
             if registers.get(address, H13_DMA_DISABLED) == H13_DMA_DISABLED:
                 continue
             channel = (words[8] >> shift) & 0x1f
             if channel == 0:
                 continue
             if channel == 1:
+                if linked:
+                    require(address in (0x13800, 0x13804) and program.get('constantBytes', 0) > 0,
+                            'linked constant read has no constant allocation')
+                    source = 0 if address == 0x13800 else 1
+                    require(registers.get(0x13808+source*0x34, 0) +
+                            registers.get(0x13814+source*0x34, 0) <= program['constantBytes'],
+                            'linked constant DMA exceeds its section')
+                    continue
                 if program.get('encoder') in (PARITY_BATCHED_MATMUL,
                                               PARITY_BATCHED_MATVEC):
                     require(address in (0x13800, 0x13804) and
@@ -148,6 +162,25 @@ def validate_task_headers(program, tasks, tiles):
                     f'H13 task[{index}] selects noncanonical channel {channel}')
             require(tiles[channel] > 0,
                     f'H13 task[{index}] selects unallocated channel {channel}')
+            if linked:
+                base_reg, span_reg = {0x13800:(0x13808,0x13814),
+                                      0x13804:(0x1383c,0x13848),
+                                      0x17800:(0x17804,None)}[address]
+                if address == 0x17800:
+                    layer = next(v for v in program['layers'] if
+                        v['firstTask'] <= index < v['firstTask']+v['taskDescriptors'])
+                    require(channel != 3 or isinstance(linked_regions, dict) and layer['result'] in linked_regions,
+                            'linked scratch writer has no region')
+                    layout = (linked_regions[layer['result']]['nchw'] if channel == 3 else
+                              program['outputs'][0]['nchw'])
+                    # Same source-qualified write span as H13Program.cpp:
+                    # output channel-plane stride times this task's Cout.
+                    span = layout[4]*registers.get(0x10, 0)
+                    require(span > 0, 'linked writer has no output channel span')
+                else:
+                    span = registers.get(span_reg, 0)
+                require(registers.get(base_reg, 0) + span <= tiles[channel]*TILE_BYTES,
+                        'linked DMA span exceeds its channel allocation')
 
 
 PROGRAM_FIELDS = (
@@ -314,15 +347,15 @@ def check_binding(binding, index, tiles, layouts, tensors):
     return physical_elements
 
 
-def validate_program(directory, program, tensors):
+def validate_program(directory, program, tensors, linked_regions=None):
     require(isinstance(program, dict), 'program must be an object')
     operation = program.get('operation')
-    require(operation in ('chain', 'add', 'mul', 'maximum', 'minimum', 'sub',
+    require(operation in ('chain', 'linked', 'add', 'mul', 'maximum', 'minimum', 'sub',
                           'real_div',
                           'matmul', 'abs', 'exp', 'gelu', 'leaky_relu', 'relu',
                           'rsqrt', 'sigmoid', 'silu', 'sqrt', 'tanh',
                           'softmax', 'layer_norm', 'reduce_sum', 'reduce_max',
-                          'reduce_mean', 'conv',
+                          'reduce_mean', 'conv', 'conv+relu',
                           'less', 'floor', 'select', 'floor_div',
                           'tile'),
             'unsupported operation')
@@ -364,6 +397,9 @@ def validate_program(directory, program, tensors):
         require(program.get('encoder') == CHAIN_ENCODER,
                 'chain program must use the composed encoder')
         validate_chain_routing(program, tasks)
+    if operation == 'linked':
+        require(program.get('encoder') in LINKED_ENCODERS,
+                'linked program must use a supported linked encoder')
     tiles, layouts = fields[7:39], fields[39:]
     require(tiles[0] == (size + TILE_BYTES - 1) // TILE_BYTES,
             'incorrect command allocation')
@@ -388,7 +424,7 @@ def validate_program(directory, program, tensors):
                     'unexpected tensor channel')
             if index not in (0, 3):
                 require(tiles[index] == 0, 'unexpected channel allocation')
-    validate_task_headers(program, tasks, tiles)
+    validate_task_headers(program, tasks, tiles, linked_regions)
     encoder = program.get('encoder')
     require(isinstance(encoder, str) and encoder, 'program needs an encoder name')
     for index, item in enumerate(inputs, start=5):
@@ -417,13 +453,13 @@ def validate_program(directory, program, tensors):
         require(math.prod(outputs[0]['shape']) >= math.prod(inputs[0]['shape']) and
                 math.prod(outputs[0]['shape']) % math.prod(inputs[0]['shape']) == 0,
                 'a tile output replicates its input')
-    if operation not in ('matmul', 'chain', 'tile') and not inputs:
+    if operation not in ('matmul', 'chain', 'linked', 'tile', 'conv', 'conv+relu') and not inputs:
         # Only the blob-x floor twin folds its whole operand: the operand
         # rides the constant section, so there is no runtime shape to check.
         require(operation == 'floor' and encoder == PARITY_BOOLEAN and
                 program.get('constantBytes', 0) > 0,
                 'a program with no inputs must be the blob-x floor twin')
-    if operation not in ('matmul', 'chain', 'tile') and inputs:
+    if operation not in ('matmul', 'chain', 'linked', 'tile', 'conv', 'conv+relu') and inputs:
         output_is_returned_alias = any(
             tensor.get('aliasOf') == outputs[0]['name'] and
             tensor['role'] == 'output' and tensor['shape'] == outputs[0]['shape']
@@ -542,6 +578,70 @@ def check_result_metadata(manifest, tensors, produced_outputs):
             'physicalOutputs must exactly match produced and referenced outputs')
 
 
+def validate_linked_metadata(manifest):
+    programs = manifest['programs']
+    require(len(programs) == 1 and manifest['dispatchPlan'] == [0] and
+            programs[0].get('operation') == 'linked' and
+            programs[0].get('encoder') in LINKED_ENCODERS and manifest['intermediates'] == [],
+            'linked schedule requires one program with internal intermediates')
+    program = programs[0]
+    layers, tasks = program.get('layers'), manifest.get('tasks')
+    require(isinstance(layers, list) and len(layers) >= 2 and manifest.get('layers') == layers and
+            isinstance(tasks, list) and len(tasks) == program['taskDescriptors'],
+            'linked layer/task metadata is incomplete')
+    cursor, names = 0, set()
+    edges = ('dram', 'l2-alias', 'l2-chained-alias', 'l2-dependent', 'l2-dependent-wide')
+    for index, layer in enumerate(layers):
+        require(isinstance(layer, dict) and type(layer.get('firstTask')) is int and
+                layer['firstTask'] == cursor and type(layer.get('taskDescriptors')) is int and
+                layer['taskDescriptors'] >= 0 and isinstance(layer.get('result'), str) and
+                layer['result'] and layer['result'] not in names and
+                isinstance(layer.get('operation'), str) and layer['operation'] not in ('', 'const') and
+                layer.get('inputEdge') in edges and layer.get('outputEdge') in edges,
+                'invalid linked layer metadata')
+        if manifest['schedule'] == 'linked':
+            require(layer['inputEdge'] == layer['outputEdge'] == 'dram',
+                    'DRAM linked schedule declares an L2 edge')
+        names.add(layer['result'])
+        for task_index in range(cursor, cursor+layer['taskDescriptors']):
+            require(task_index < len(tasks) and tasks[task_index] ==
+                    dict(index=task_index, layer=index, operation=layer['operation']),
+                    'linked task ownership differs from its layer')
+        cursor += layer['taskDescriptors']
+    require(cursor == len(tasks), 'linked layers do not cover the task stream')
+    scratch = manifest.get('scratch')
+    require(isinstance(scratch, dict) and set(scratch) == {'bytes', 'channel', 'regions'} and
+            scratch['channel'] == 3 and type(scratch['bytes']) is int and
+            scratch['bytes'] == program.get('scratchBytes') and scratch['bytes'] >= 0 and
+            isinstance(scratch['regions'], dict), 'invalid linked scratch allocation')
+    owners = []
+    regions = scratch['regions']
+    for name, region in regions.items():
+        require(name in names and isinstance(region, dict) and
+                set(region) in ({'offset','bytes','nchw'}, {'offset','bytes','nchw','aliasOf'}) and
+                type(region['offset']) is int and region['offset'] >= 0 and
+                type(region['bytes']) is int and region['bytes'] > 0 and
+                region['offset']+region['bytes'] <= scratch['bytes'],
+                'linked scratch region exceeds its allocation')
+        layout = region['nchw']
+        require(isinstance(layout, list) and len(layout) == 6 and
+                all(type(v) is int and v > 0 for v in layout) and
+                layout == surface_layout(layout[:4]) and
+                layout[0]*layout[1]*layout[4] <= region['bytes'],
+                'invalid linked scratch surface')
+        if 'aliasOf' in region:
+            owner = regions.get(region['aliasOf'])
+            require(isinstance(owner, dict) and 'aliasOf' not in owner and
+                    owner['offset'] <= region['offset'] and
+                    region['offset']+region['bytes'] <= owner['offset']+owner['bytes'],
+                    'linked scratch alias escapes its owner')
+        else:
+            owners.append((region['offset'], region['offset']+region['bytes']))
+    owners.sort()
+    require(all(a[1] <= b[0] for a,b in zip(owners,owners[1:])),
+            'linked scratch owners overlap')
+
+
 def load_package(directory):
     directory = Path(directory).resolve()
     manifest = json.loads(local_file(directory, 'manifest.json', 64 << 20))
@@ -589,6 +689,7 @@ def load_package(directory):
                 'multi-program packages must omit legacy top-level program fields')
 
     chain = manifest.get('schedule') == 'chain'
+    linked = manifest.get('schedule') in ('linked', 'linked-l2')
     if chain:
         require(len(programs) == 1 and dispatch == [0] and
                 programs[0].get('operation') == 'chain',
@@ -616,12 +717,15 @@ def load_package(directory):
                     region['bytes'] == tensors[name]['logicalBytes'] and
                     region['offset'] + region['bytes'] <= scratch_bytes,
                     'chain scratch region exceeds its allocation')
+    elif linked:
+        validate_linked_metadata(manifest)
     else:
         require('schedule' not in manifest and 'tasks' not in manifest and
                 'scratch' not in manifest,
                 'per-operation packages must omit chain metadata')
 
-    allocations = [validate_program(directory, program, tensors) for program in programs]
+    allocations = [validate_program(directory, program, tensors,
+                   manifest['scratch']['regions'] if linked else None) for program in programs]
     storage_intermediates = [] if chain else [
         name for name in intermediates if name not in alias_names]
     storage_outputs = [name for name, tensor in tensors.items()
