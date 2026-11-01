@@ -163,7 +163,7 @@ def conv_covered(oracle, target):
     oracle = dict(oracle, target=target)
     return mint_conv_probes.covered(
         oracle,
-        allow_multi_task=oracle["case"] in mint_conv_probes.MULTI_TASK_CASES)
+        allow_multi_task=oracle["case"] in mint_conv_probes.MULTI_TASK_CASES or mint_conv_probes.native_camera_multi(oracle))
 
 
 def encoder(oracle):
@@ -236,7 +236,9 @@ def write_weights(oracle, root):
             offset += len(payload)
         (root / "weights.bin").write_bytes(bytes(blob))
         return
-    if description["value"] == "distinct":
+    if description["value"] == "indexed_finite":
+        payload = mint_conv_probes.finite_index_payload(elements, description["seed"])
+    elif description["value"] == "distinct":
         # The known-weight convolution probes carry one distinct fp16 pattern
         # per element, which is what proves the packing permutation.
         payload = mint_conv_probes.known_weights(elements)

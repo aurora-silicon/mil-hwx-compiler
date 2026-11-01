@@ -156,6 +156,17 @@ def bit_planes(elements: int) -> int:
     return max(1, (elements - 1).bit_length())
 
 
+def finite_index_payload(elements: int, seed: int = 3991) -> bytes:
+    """Reproducible, nonzero finite fp16 values varying across every tap/core."""
+    out = bytearray()
+    state = seed
+    for _ in range(elements):
+        state = (1664525 * state + 1013904223) & 0xffffffff
+        bits = ((state >> 16) & 0x8000) | ((8 + (state >> 26) % 7) << 10) | ((state >> 11) & 1023)
+        out += struct.pack("<H", bits)
+    return bytes(out)
+
+
 def known_weights(elements: int, plane: int | None = None) -> bytes:
     """One bit-plane probe payload.
 
@@ -347,6 +358,33 @@ def pack_dense(reduction: int, outputs: int, chunks: list[int],
     return bytes(packed)
 
 
+def pack_small_dense(reduction: int, outputs: int, weights: bytes, bias: bytes | None) -> bytes:
+    """Balance adjacent output channels over up to 16 active cores.
+
+    At c24, cores 0..7 interleave two consecutive channels each and cores
+    8..15 carry one channel each. Each core is independently padded to 64.
+    """
+    cores = min(16, outputs)
+    rows = reduction + (bias is not None)
+    out = bytearray()
+    first = 0
+    for core in range(cores):
+        lanes = outputs // cores + (core < outputs % cores)
+        plane = bytearray(align(rows * lanes * 2, 64))
+        for lane in range(lanes):
+            cursor = lane * 2
+            if bias is not None:
+                plane[cursor:cursor+2] = bias[(first+lane)*2:(first+lane+1)*2]
+                cursor += lanes * 2
+            for row in range(reduction):
+                source = ((first+lane)*reduction+row)*2
+                plane[cursor:cursor+2] = weights[source:source+2]
+                cursor += lanes * 2
+        out += plane
+        first += lanes
+    return bytes(out)
+
+
 def pack_dense_colgroups(reduction: int, outputs: int,
                          weights: bytes) -> bytes:
     """The captured F1 in-projection section (k1x1 g1 valid, 2048 outputs,
@@ -522,12 +560,13 @@ def pack_depthwise(taps: int, outputs: int, weights: bytes,
     channels back to back with no padding between them, the lane padded to 64
     bytes. A bias precedes each channel's taps."""
     lanes = min(16, outputs)
-    slots = outputs // lanes
     rows = taps + (bias is not None)
-    lane_bytes = align(slots * rows * 2, 64)
-    packed = bytearray(lane_bytes * lanes)
+    lane_bytes = [align(((outputs - lane + lanes - 1) // lanes) * rows * 2, 64)
+                  for lane in range(lanes)]
+    lane_bases = [sum(lane_bytes[:lane]) for lane in range(lanes)]
+    packed = bytearray(sum(lane_bytes))
     for column in range(outputs):
-        cursor = (column % lanes) * lane_bytes + (column // lanes) * rows * 2
+        cursor = lane_bases[column % lanes] + (column // lanes) * rows * 2
         if bias is not None:
             packed[cursor:cursor + 2] = bias[column * 2:column * 2 + 2]
             cursor += 2
@@ -610,6 +649,18 @@ def conv_constants(parameters: dict[str, Any], weights: bytes,
     groups = parameters["groups"]
     taps = weight_taps(parameters)
     reduction = (inputs // groups) * taps
+    if (parameters["kernel"], inputs, outputs, parameters["spatial"],
+        parameters["stride"], groups, parameters.get("pad_type")) in (
+            (3,128,512,35,1,1,"same"),(3,512,128,35,1,1,"same")) and taps == 9 and \
+            tuple(parameters.get("input_shape", ())) == (1,inputs,35,35) and \
+            tuple(parameters.get("output_shape", ())) == (1,outputs,35,35):
+        # Native 35x35 schedules write the upper output slice first (256+256
+        # for gather, 32+96 for mix), each in a contiguous core section.
+        parts = ((256,256),(0,256)) if outputs==512 else ((96,32),(0,96))
+        return b"".join(pack_small_dense(reduction,count,
+            weights[first*reduction*2:(first+count)*reduction*2],
+            bias[first*2:(first+count)*2] if bias is not None else None)
+            for first,count in parts)
     if groups == inputs and groups == outputs:
         weight_shape = parameters.get("weight_shape")
         if not bias and taps == 1 and weight_shape and \
@@ -630,6 +681,8 @@ def conv_constants(parameters: dict[str, Any], weights: bytes,
         else:
             section = pack_depthwise(taps, outputs, weights, bias)
     elif parameters["stride"] > 1:
+        if outputs % 16:
+            raise ValueError("small dense outputs have no qualified strided packing")
         chunks = lane_chunks(outputs, lane_cap(parameters["spatial"]))
         if groups != 1 or taps != 1 or max(chunks) > 8:
             raise ValueError(
@@ -643,6 +696,8 @@ def conv_constants(parameters: dict[str, Any], weights: bytes,
                              [lanes] * (outputs // lanes // 16),
                              weights, bias, True)
     else:
+        if outputs % 16:
+            return pack_small_dense(reduction, outputs, weights, bias)
         chunks = lane_chunks(outputs, lane_cap(max(
             parameters["spatial"],
             parameters.get("spatial_width", parameters["spatial"]))))
@@ -737,8 +792,11 @@ def case_weights(record: dict[str, Any]) -> tuple[bytes, bytes | None]:
                 f"{record['case']} payload regions cover {len(flat)} bytes, "
                 f"the description records {elements * 2}")
         return _split_payload(parameters, bytes(flat))
-    payload = known_weights(elements) if description["value"] == "distinct" \
-        else om.half_payload(elements)
+    if description["value"] == "indexed_finite":
+        payload = finite_index_payload(elements, description["seed"])
+    else:
+        payload = known_weights(elements) if description["value"] == "distinct" \
+            else om.half_payload(elements)
     resolved = blob_view(payload, elements)
     taps = weight_taps(parameters)
     weight_elements = outputs * \
@@ -824,10 +882,14 @@ def stream_words(record: dict[str, Any]) -> list[int]:
                     f"{record['case']} task {index} link is invalid")
             words.extend([0] * (next_offset // 4 - len(words)))
         return words
-    if len(tasks) != 1:
-        raise ValueError(f"{record['case']} emits {len(tasks)} tasks")
-    words = rebuild(tasks[0])
-    stream = [0] * (H14_STREAM_PREFIX_BYTES // 4) + words
+    stream = [0] * (H14_STREAM_PREFIX_BYTES // 4)
+    for index, task in enumerate(tasks):
+        rebuilt = rebuild(task)
+        if decode_task(struct.pack(f"<{len(rebuilt)}I", *rebuilt), target) != task:
+            raise ValueError(f"{record['case']} H14 task {index} does not round-trip")
+        stream.extend(rebuilt)
+        if index + 1 < len(tasks):
+            stream.extend([0] * ((-len(stream)) % 4))
     declared = record["program_descriptor"]["text_words"]
     if len(stream) != declared:
         raise ValueError(f"{record['case']} assembled {len(stream)} text "
@@ -958,6 +1020,14 @@ def covered(record: dict[str, Any], allow_multi_task: bool = False) -> bool:
         record["constant_section"]["sha256"]
 
 
+def native_camera_multi(record):
+    p = record.get("parameters", {})
+    geometry = (p.get("kernel"),p.get("input_channels"),p.get("output_channels"),
+                p.get("spatial"),p.get("stride"),p.get("groups"),p.get("pad_type"))
+    return record["case"].startswith("layer_conv") and geometry in (
+        (3,128,512,35,1,1,"same"),(3,512,128,35,1,1,"same"))
+
+
 def conv_records(target: str) -> dict[tuple, dict[str, Any]]:
     selected: dict[tuple, dict[str, Any]] = {}
     for path in sorted((ROOT / "research/oracles" / target).glob("*.json")):
@@ -967,7 +1037,7 @@ def conv_records(target: str) -> dict[tuple, dict[str, Any]]:
             continue
         record.setdefault("target", target)
         if not covered(record, allow_multi_task=
-                       record["case"] in MULTI_TASK_CASES):
+                       record["case"] in MULTI_TASK_CASES or native_camera_multi(record)):
             continue
         key = template_key(record)
         previous = selected.setdefault(key, record)
@@ -1028,11 +1098,19 @@ def conv_row(record: dict[str, Any], symbol: str, words: list[int]) -> str:
                 f"{{{out_channels}, {out_height}, {out_width}}}")
     if record["target"] == "h13":
         scratch = check_surfaces(record, surfaces)
+        padding=parameters.get("pad") or []
+        if parameters.get("pad_type")=="custom" and padding:
+            top,left=(padding[0],padding[2]) if len(padding)==4 else (0,padding[0])
+        elif parameters.get("pad_type")=="valid": top,left=0,0
+        else:
+            top=max(0,(out_height-1)*parameters["stride"]+weight_shape[2]-height)//2
+            left=max(0,(out_width-1)*parameters["stride"]+weight_shape[3]-width)//2
+        native=str(record["case"].startswith("layer_conv")).lower()
         return (f"    {{{geometry}, {symbol}, std::size({symbol}), "
                 f"{(descriptor['task_words_minus_one'] + 1) * 4}, "
                 f"{descriptor['task_count']}, "
                 f"{constant_offset(record, words)}, "
-                f"{len(section)}, {scratch}}},  // {record['case']}")
+                f"{len(section)}, {scratch}, {top}, {left}, {native}}},  // {record['case']}")
     check_tensors(record, surfaces)
     trailer = descriptor["trailing_words"]
     offset = int(descriptor["constant_address"], 16) - \

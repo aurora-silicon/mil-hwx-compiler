@@ -1,3 +1,4 @@
+#include "../NativeLayerPlan.h"
 #import "ANEH13Compiler.h"
 
 #import "ANEBlobResolver.h"
@@ -1729,6 +1730,9 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H13ConvPlan *plan) {
     if (bias && (!fp16Tensor(bias) || bias.type.shape.count != 1 ||
                  bias.type.shape[0].unsignedIntValue !=
                      candidate.shape.output.channels)) return NO;
+    if (declaredPads && ane::h13::supportsConvParity(candidate.shape) &&
+        !ane::h13::convParityLeadingPaddingMatches(candidate.shape,
+            static_cast<std::uint32_t>(padding[0]),static_cast<std::uint32_t>(padding[2]))) return NO;
     if (!ane::h13::supportsConvParity(candidate.shape) || forceGenericConv()) {
         // No decoded template: the formula-built encoder takes the geometry
         // when it is a symmetric same/valid pad it can express.
@@ -2104,6 +2108,16 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         program = ane::h13::encodeNormParity(normalization.operation,
                                              normalization.shape);
         *inputsOut = @[x];
+        *constantInputOut = nil;
+        *constantDataOut = nil;
+        *manifestOperationOut = name;
+        return YES;
+    }
+
+    ane::layers::Plan native{};
+    if (ane::layers::plan(operation, false, &native)) {
+        program = ane::layers::encodeH13(native.operation, native.shape);
+        *inputsOut = native.inputs;
         *constantInputOut = nil;
         *constantDataOut = nil;
         *manifestOperationOut = name;
@@ -2979,6 +2993,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     for (ANEGraphOperation *candidate in function.operations)
         if (![candidate.operationName isEqualToString:@"const"])
             [sourceOperations addObject:candidate];
+    NSArray<ANEGraphValue *> *nativeReturns = function.returnValues;
+    sourceOperations = ane::layers::fuseHardSwish(sourceOperations, &nativeReturns);
+    function = [[ANEGraphFunction alloc] initWithName:function.name opset:function.opset
+        inputs:function.inputs operations:sourceOperations returnValues:nativeReturns];
     if (!sourceOperations.count)
         return reject(diagnostics, @"H13 requires at least one operation");
 
@@ -3019,8 +3037,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }
 
     BOOL chainSchedule = [schedule isEqualToString:@"chain"];
+    BOOL linkedGraph = NO;
     if (linkedSchedule) {
-        if (function.inputs.count != 1 || function.returnValues.count != 1)
+        BOOL hasConcat=NO;
+        for (ANEGraphOperation *op in sourceOperations) hasConcat=hasConcat || [op.operationName isEqualToString:@"concat"];
+        if (!function.inputs.count || function.inputs.count > 2 || function.returnValues.count != 1)
             return reject(diagnostics,
                 @"H13 linked scheduling needs one boundary input and one result",
                 sourceOperations[0], @"h13.linked-outside-envelope");
@@ -3029,12 +3050,20 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         for (ANEGraphOperation *candidate in sourceOperations) {
             NSString *kind = candidate.operationName;
             BOOL conv = [kind isEqualToString:@"conv"];
-            if ((!conv && ![kind isEqualToString:@"relu"]) ||
-                candidate.operands[@"x"].value != current)
-                return reject(diagnostics,
-                    @"H13 linked scheduling needs a straight-line chain of conv and relu operations",
-                    candidate, @"h13.linked-outside-envelope");
-            if (conv) ++convolutions;
+            ane::layers::Plan native{};
+            BOOL layer = ane::layers::plan(candidate, false, &native);
+            const BOOL firstConcat = candidate == sourceOperations.firstObject && layer &&
+                native.operation == ane::layers::Operation::Concat && native.inputs.count == function.inputs.count &&
+                [native.inputs isEqualToArray:function.inputs];
+            if (!conv && !layer && ![kind isEqualToString:@"relu"])
+                return reject(diagnostics,@"H13 linked requires qualified native layers",candidate,@"h13.linked-outside-envelope");
+            if ([kind isEqualToString:@"relu"]) {
+                ANEGraphOperation *consumer=nil;
+                if (!convReluOperation(sourceOperations,candidate.operands[@"x"].value.producer,function.returnValues,&consumer) || consumer!=candidate)
+                    return reject(diagnostics,@"H13 linked relu must fuse into its convolution",candidate,@"h13.linked-outside-envelope");
+            }
+            if (!firstConcat && (candidate.operands[@"x"].value!=current || (layer && native.inputs.count!=1))) linkedGraph=YES;
+            if (conv || layer) ++convolutions;
             if (![current isEqual:function.inputs[0]] &&
                 [function.returnValues containsObject:current])
                 return reject(diagnostics,
@@ -3042,6 +3071,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     candidate, @"h13.linked-outside-envelope");
             current = candidate.results[0];
         }
+        if (linkedGraph && (!hasConcat || linkedL2))
+            return reject(diagnostics,@"H13 branching linked graphs require a native concat and DRAM scheduling",nil,@"h13.linked-outside-envelope");
         if (convolutions < 2 || current != function.returnValues[0])
             return reject(diagnostics,
                 @"H13 linked scheduling needs two or more convolutions ending in the function result",
@@ -3169,6 +3200,18 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 [valueBaseOffsets setObject:
                     @(baseOffset + index * plan.resultElements) forKey:alias];
             }
+            continue;
+        }
+        ane::layers::Plan native{};
+        ANEGraphValue *nativeResult = [[ANEGraphValue alloc]
+            initWithName:candidate.results[0].name type:candidate.results[0].type];
+        ANEGraphOperation *nativeCandidate = [[ANEGraphOperation alloc]
+            initWithOperationName:name results:@[nativeResult] arguments:arguments
+            attributes:candidate.attributes range:candidate.range];
+        if (ane::layers::plan(nativeCandidate, false, &native)) {
+            [operations addObject:nativeCandidate];
+            [manifestValues addObject:nativeCandidate.results[0]];
+            [loweredValues setObject:nativeCandidate.results[0] forKey:candidate.results[0]];
             continue;
         }
         if ([name isEqualToString:@"concat"])
@@ -4023,6 +4066,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     runtimeWeight
                         ? boolean(operation.arguments[@"transpose_y"], YES) : YES,
                     runtimeWeight, !chainSchedule, nullptr);
+            ane::layers::Plan nativePlan{};
+            BOOL nativeLayer = ane::layers::plan(operation, false, &nativePlan);
             H13ParityPlan operationPlan{};
             H13NormPlan normalizationPlan{};
             H13BroadcastPlan broadcastPlanned{};
@@ -4047,7 +4092,14 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 [operation.operationName isEqualToString:@"slice_by_index"] &&
                 sliceParityShapes(operation, operation.operands[@"x"].value,
                     operation.results[0], &sliceIn, &sliceOut);
-            if (tiled) {
+            if (nativeLayer) {
+                NSUInteger inputElements = 0, outputElements = 0;
+                if (!tensorElementCount(nativePlan.inputs[0], &inputElements) ||
+                    !tensorElementCount(operation.results[0], &outputElements))
+                    return reject(diagnostics, @"H13 native layer has an invalid surface", operation);
+                inputSliceElements = inputPhysicalElements = inputElements;
+                outputSliceElements = outputPhysicalElements = outputElements;
+            } else if (tiled) {
                 // The tile program reads its whole input surface and writes
                 // its whole output surface in one program, so both slice
                 // spans are the whole-tensor element counts.
@@ -4217,7 +4269,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     }
                 } else if (batched) {
                     inputOffset = outputOffset = 0;
-                } else if (parity || broadcast || normalization || convolution) {
+                } else if (nativeLayer || parity || broadcast || normalization || convolution) {
                     outputOffset =
                         [[outputBaseOffsets objectForKey:operation] unsignedIntegerValue];
                 } else if (!tiled && !booleanLowered && !linearParity &&
@@ -4269,7 +4321,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     // A broadcast and a runtime-operand matmul read each
                     // operand whole, and the operands differ in size, so the
                     // program-wide slice counts do not apply to them.
-                    const BOOL wholeOperand = broadcast || runtimeWeight;
+                    const BOOL wholeOperand = nativeLayer || broadcast || runtimeWeight;
                     NSUInteger sliceElements =
                         wholeOperand ? fullElements : inputSliceElements;
                     NSUInteger physicalElements =
@@ -4331,7 +4383,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 NSDictionary *record = @{
                     @"file": file, @"bytes": @(payload.length),
                     @"taskDescriptors": @(program.taskCount),
-                    @"encoder": batched
+                    @"encoder": nativeLayer ? @"h13-native-layer" : batched
                         ? (runtimeWeight ? @"apple-parity-batched-matmul"
                                          : @"apple-parity-batched-matvec")
                         : linearParity
@@ -4353,7 +4405,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         : (normalization ? @"apple-parity-norm"
                         : (convolution ? (program.formulaBuilt
                                               ? @"h13-generic-conv"
-                                              : @"apple-parity-conv")
+                                              : program.nativeDramLayer ? @"h13-native-conv" : @"apple-parity-conv")
                         : (parity ? @"h13-oracle-parity" : @"h13-source-qualified")))),
                     @"operation": manifestOperation,
                     @"inputs": inputRecords, @"constantInputs": constantInputs,
@@ -4375,12 +4427,29 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 throw std::logic_error(
                     "h13.linked-outside-envelope: linked program bookkeeping is inconsistent");
             for (NSDictionary *record in programRecords)
-                if (![record[@"encoder"] isEqualToString:@"h13-generic-conv"])
+                if (![record[@"encoder"] isEqualToString:@"h13-generic-conv"] &&
+                    ![record[@"encoder"] isEqualToString:@"h13-native-conv"] &&
+                    ![record[@"encoder"] isEqualToString:@"h13-native-layer"])
                     throw std::invalid_argument(
                         "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
             std::vector<ane::h13::LinkedLayer> layout;
-            ane::h13::Program combined =
-                ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
+            ane::layers::GraphPlan graphPlacement;
+            std::vector<ane::layers::Connection> connections;
+            std::vector<std::string> boundaries;
+            if (linkedGraph) {
+                for (ANEGraphValue *input in function.inputs) boundaries.emplace_back(input.name.UTF8String);
+                for (NSDictionary *record in programRecords) {
+                    ane::layers::Connection c;
+                    c.output=std::string([[record[@"outputs"] firstObject][@"name"] UTF8String]);
+                    c.concat=[record[@"operation"] isEqualToString:@"concat"];
+                    for (NSDictionary *input in record[@"inputs"]) c.inputs.emplace_back([input[@"name"] UTF8String]);
+                    connections.push_back(std::move(c));
+                }
+            }
+            ane::h13::Program combined = linkedGraph
+                ? ane::h13::linkLayerGraph(chainPrograms,connections,boundaries,
+                    function.returnValues[0].name.UTF8String,&graphPlacement,&layout)
+                : ane::h13::linkConvChain(chainPrograms,&layout,linkedL2);
             std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
@@ -4416,12 +4485,26 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     [intermediateNames removeObject:result];
                     [intermediateStorageNames removeObject:result];
                 }
+                if (linkedGraph) {
+                    layerRecord[@"zeroCopy"]=@(static_cast<bool>(graphPlacement.zeroCopy[index]));
+                    layerRecord[@"surfaceOwner"]=[programRecords[graphPlacement.outputs[index].owner][@"outputs"] firstObject][@"name"];
+                    layerRecord[@"writeOffset"]=@(graphPlacement.outputs[index].offset);
+                    if (![result isEqualToString:function.returnValues[0].name]) {
+                        [tensors removeObjectForKey:result];[intermediateNames removeObject:result];
+                        [intermediateStorageNames removeObject:result];
+                    }
+                }
                 [layers addObject:layerRecord];
                 if (layout[index].writesScratch) {
                     regions[result] = @{
                         @"offset": @(layout[index].writeOffset),
                         @"bytes": [record[@"outputs"] firstObject][@"allocationBytes"],
                         @"nchw": [record[@"outputs"] firstObject][@"nchw"]};
+                    if (linkedGraph && graphPlacement.outputs[index].owner!=index) {
+                        NSMutableDictionary *view=[regions[result] mutableCopy];
+                        view[@"aliasOf"]=[programRecords[graphPlacement.outputs[index].owner][@"outputs"] firstObject][@"name"];
+                        regions[result]=view;
+                    }
                     [tensors removeObjectForKey:result];
                     [intermediateNames removeObject:result];
                     [intermediateStorageNames removeObject:result];
@@ -4431,12 +4514,15 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         @"channel": @3, @"regions": regions};
             NSDictionary *firstRecord = programRecords.firstObject;
             NSDictionary *lastRecord = programRecords.lastObject;
+            NSMutableArray *graphInputs=[NSMutableArray array];
+            if (linkedGraph) for (NSUInteger i=0;i<function.inputs.count;++i)
+                [graphInputs addObject:binding(function.inputs[i],function.inputs[i].type.shape,combined.inputs[i])];
             NSString *file = [NSString stringWithFormat:@"program-0.%@", format];
             NSDictionary *combinedRecord = @{
                 @"file": file, @"bytes": @(combinedPayload.length),
                 @"taskDescriptors": @(combined.taskCount),
-                @"encoder": @"h13-linked-conv", @"operation": @"linked",
-                @"inputs": firstRecord[@"inputs"], @"constantInputs": @{},
+                @"encoder": linkedGraph?@"h13-linked-native-graph":@"h13-linked-conv", @"operation": @"linked",
+                @"inputs": linkedGraph?graphInputs:firstRecord[@"inputs"], @"constantInputs": @{},
                 @"outputs": lastRecord[@"outputs"],
                 @"constantOffset": @(combined.constantOffsetBytes),
                 @"constantBytes": @(combined.constants.size()),

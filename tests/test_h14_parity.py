@@ -69,6 +69,8 @@ def write_weights(oracle, root):
         size = description["payload_bytes"]
         payload = (pattern * ((size + len(pattern) - 1) // len(pattern)))[:size]
         assert hashlib.sha256(payload).hexdigest() == description["dense_sha256"]
+    elif description.get("value") == "indexed_finite":
+        payload = mint_conv_probes.finite_index_payload(description["payload_bytes"] // 2, description["seed"])
     elif description.get("value") == "distinct":
         # The known-weight convolution probes carry one distinct fp16 pattern
         # per element, which is what proves the packing permutation.
@@ -362,7 +364,8 @@ def conv_oracles():
     for path in sorted((ROOT / "research/oracles/h14").glob("*conv*.json")):
         oracle = json.loads(path.read_text())
         if oracle["family"] in CONV_FAMILIES and \
-                mint_conv_probes.covered(dict(oracle, target="h14")):
+                mint_conv_probes.covered(dict(oracle, target="h14"),
+                    allow_multi_task=mint_conv_probes.native_camera_multi(oracle)):
             selected.append(oracle)
     return selected
 
@@ -482,8 +485,11 @@ def main():
                     for reduction in probes.GRID_SIDES
                     for columns in probes.GRID_SIDES}, sorted(grid)
     conv = conv_oracles()
-    assert len(conv) == 284, \
-        f"expected 284 covered H14 convolution oracles, found {len(conv)}"
+    original_conv = [oracle for oracle in conv if not oracle["case"].startswith("layer_")]
+    assert len(original_conv) == 284, \
+        f"expected 284 original covered H14 convolution oracles, found {len(original_conv)}"
+    native_conv = [oracle for oracle in conv if oracle["case"].startswith("layer_")]
+    assert len(native_conv) >= 250, f"native convolution campaign lost coverage: {len(native_conv)}"
     exp_chain = exp_chain_oracles()
     assert sorted(oracle["parameters"]["shape"][1] for oracle in exp_chain) == [64, 512], \
         f"expected the 64 and 512 channel scaled exp chains, found {len(exp_chain)}"

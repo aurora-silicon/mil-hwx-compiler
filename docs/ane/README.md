@@ -22,6 +22,8 @@ The labels measure evidence, not importance. Private interfaces and binary forma
 9. [Memory model and common myths](memory-model.md)
 10. [Glossary](glossary.md)
 11. [Annotated bibliography](bibliography.md)
+12. [Native H13/H14 resize, concat, activation and convolution layers](native-layers.md)
+13. [35×35 camera gather/mix reproducer](camera-046-reproducer.md)
 
 ## Scope
 

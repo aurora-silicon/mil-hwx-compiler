@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+namespace ane::layers { struct Connection; struct GraphPlan; }
 namespace ane::h13 {
 constexpr std::size_t anecHeaderBytes = 0x1000;
 
@@ -128,6 +129,9 @@ struct Program {
     /// Built by `encodeConvGeneric` from the per-register formulas rather
     /// than replayed from a decoded template.
     bool formulaBuilt = false;
+    /// A newly qualified decoded layer with the same DRAM routing contract
+    /// as generic conv. This does not imply L2-edge qualification.
+    bool nativeDramLayer = false;
     /// A formula-built depthwise convolution (the linker picks the L2 edge
     /// form from it; the task words alone do not say it).
     bool depthwiseConv = false;
@@ -302,6 +306,9 @@ bool supportsNormParity(NormOperation operation, NormShape shape);
 Program encodeNormParity(NormOperation operation, NormShape shape);
 /// True when the decoded Apple corpus covers this convolution as one program.
 bool supportsConvParity(ConvShape shape);
+/// Leading padding is part of a decoded program's semantic envelope even
+/// when different custom pad vectors produce the same output dimensions.
+bool convParityLeadingPaddingMatches(ConvShape shape,std::uint32_t top,std::uint32_t left);
 /// Apple's constant-section layout for a convolution weight. `weights` is the
 /// MIL `[Cout, Cin / groups, kh, kw]` row-major fp16 constant, exactly the
 /// bytes the blob resolves to, and `bias` holds one fp16 value per output
@@ -398,6 +405,10 @@ struct LinkedLayer {
 Program linkConvChain(const std::vector<Program> &layers,
                       std::vector<LinkedLayer> *layout = nullptr,
                       bool l2Resident = false);
+Program linkLayerGraph(const std::vector<Program> &programs,
+    const std::vector<ane::layers::Connection> &connections,
+    const std::vector<std::string> &boundaries,const std::string &result,
+    ane::layers::GraphPlan *placement=nullptr,std::vector<LinkedLayer> *layout=nullptr);
 
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);
@@ -423,4 +434,3 @@ bool supportsTileOp(H13TileShape shape);
 ane::h13::Program encodeTileOp(H13TileShape shape);
 
 }
-

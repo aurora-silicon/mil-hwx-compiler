@@ -1,5 +1,11 @@
 # H13 convolutions as one program per layer
 
+The subsequent [native layer extension](native-layers.md) adds decoded
+small-channel and 5×5 points for H13/H14. The exact 35×35, 128→512 and
+512→128 dense schedules are covered by the
+[camera reproducer](camera-046-reproducer.md). Those changes have host
+parity coverage; device numerical checks are pending.
+
 This page explains why a 64-channel 64x64 1x1 conv plus relu used to compile to
 4097 H13 programs, and what the compiler does now. It also lists the register
 formulas the new encoder uses, the M1 Pro measurements, and what is still unknown.

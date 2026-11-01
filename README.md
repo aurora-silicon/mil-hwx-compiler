@@ -135,8 +135,10 @@ Roles are input, output, intermediate, or constant.
 It also lists the dispatch plan and each program's bindings.
 A runner can drive the package without parsing programs.
 
-For H13/H14 full-frame convolution, nearest/bilinear resize, concat and the
-MobileNetV1 head, select `--schedule spatial`. This emits the separate
+H13/H14 whole-layer convolution, resize, concat and activations use the
+default `per-op` schedule or `--schedule linked` on the
+[native layer grid](docs/ane/native-layers.md).
+The separate `--schedule spatial` implementation emits the
 [spatial dispatch contract](docs/spatial-dispatch.md), with reusable ANEC
 kernels and bounded loops. `tools/spatial_package.py` validates and simulates
 these packages without a device; original per-op/chain readers retain their
@@ -148,12 +150,18 @@ checked against CPU references with explicit tolerances.
 | add, mul | Two matching fp16 tensors, or a tensor plus a fp16 constant. Rank-4 NCHW pairs also broadcast per channel, by space, by scalar, or by batch |
 | sub, real_div | One runtime input and one same-shape constant. The host folds the constant |
 | relu, clip | Any positive static shape. Clip takes fp16-exact finite `alpha` and `beta` |
-| conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. Decoded templates cover channels 64 to 1024 and space 1 to 64. On H13 and H14 a formula-built encoder takes dense and depthwise 1x1/3x3 convolutions at any spatial size, channels in multiples of 16, and stride-2 1x1 with at most 128 outputs per task, as one program ([fused-conv.md](docs/ane/fused-conv.md)). A following relu folds into the same program. H14 details: [h14-conv.md](docs/ane/h14-conv.md) |
+| conv | Rank-4 NCHW. Decoded H13/H14 small-channel and kernel-5 points use the [native layer grid](docs/ane/native-layers.md). Both targets also support formula-built dense/depthwise 1×1/3×3 families and 128-output splits for wide stride-2 1×1 layers ([fused-conv.md](docs/ane/fused-conv.md), [h14-conv.md](docs/ane/h14-conv.md)). Unqualified layouts are refused. A following relu folds into the same program |
 | matmul, linear | Constant weight `[K,N]` or `[N,K]`, or two runtime inputs in attention's shape, on the decoded grids |
 | softmax | Constant axis over covered flat, sequence, spatial, and attention-score shapes |
 | layer_norm | Constant axes, `epsilon` of 1e-5, no `gamma` or `beta` |
 | reduce_sum, reduce_max, reduce_mean | Constant axes, `keep_dims` either way, never over the batch axis |
 | reshape, squeeze, expand_dims | Constant shapes with equal element counts. Emits no program |
+| resize, channel concat, sigmoid, hardswish | H13/H14 whole-layer encodings on the [native layer grid](docs/ane/native-layers.md). Nearest/bilinear 2× resize and sigmoid take one task. Concat uses two copies or places exclusive producers into adjacent output channel slices |
+
+The [native layer grid](docs/ane/native-layers.md) also adds small-channel
+and kernel-5 convolution points. Linked programs can contain these layers
+and channel-concat branches. Its [35×35 dense reproducer](docs/ane/camera-046-reproducer.md)
+prepares procedural inputs and float64 references for device checks.
 
 Anything else fails with a named `*-outside-envelope` error.
 The decoded grids that define each envelope live in `plugins/H13/` and `plugins/H14/`.

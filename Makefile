@@ -37,7 +37,7 @@ RUNTIME_SOURCES := lib/Runtime/ANEProvisionedRuntime.mm
 RUNTIME_BUNDLE_SOURCES := lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm $(RUNTIME_SOURCES)
 RUNTIME_INCLUDES := -Ilib/IR -Ilib/HWX -Ilib/Runtime
 BENCHMARK_STATS_SOURCES := lib/Runtime/ANEBenchmarkStats.cpp
-H13_SOURCES := plugins/H13/ANEH13Compiler.mm plugins/H13/H13Program.cpp plugins/H13/H13ANEC.cpp
+H13_SOURCES := plugins/H14LayerLink.cpp plugins/LayerOps.cpp plugins/H13/ANEH13Compiler.mm plugins/H13/H13Program.cpp plugins/H13/H13ANEC.cpp
 H14_SOURCES := plugins/H14/ANEH14Compiler.mm plugins/H14/H14Program.cpp
 
 .PHONY: all test clean test-cli test-no-pattern-shortcuts
@@ -206,7 +206,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
-$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/LayerOps.h plugins/LayerGraph.h plugins/NativeLayerPlan.h plugins/NativeLayerTemplates.inc plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
@@ -259,6 +259,12 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	python3 tests/test_h13_norm_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_conv_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_generic_conv_cli.py $(BUILD)/mil-hwxc
+	python3 tests/test_h13_camera_conv_cli.py $(BUILD)/mil-hwxc
+	python3 research/generate_layer_templates.py --check
+	python3 tests/test_layer_oracle_policy.py --target h13
+	python3 tests/test_native_layer_cli.py $(BUILD)/mil-hwxc --target h13
+	python3 tests/test_native_linked_cli.py $(BUILD)/mil-hwxc --target h13
+	python3 tests/test_native_graph_cli.py $(BUILD)/mil-hwxc --target H13
 	python3 tests/test_h13_linked_cli.py $(BUILD)/mil-hwxc
 	python3 research/h13_l2_edge_parity.py $(BUILD)/mil-hwxc research/oracles/h13-l2-edges/*.json
 	python3 tests/test_h13_select_envelope_cli.py $(BUILD)/mil-hwxc
@@ -266,6 +272,10 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	python3 tests/test_h13_transpose_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_slice_cli.py $(BUILD)/mil-hwxc
 	python3 research/mint_conv_probes.py --check
+.PHONY: test-layer-reference
+test-layer-reference:
+	python3 tests/test_layer_reference.py
+
 .PHONY: test-h13-reference
 test-h13-reference: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_reference.py $(BUILD)/mil-hwxc
@@ -281,6 +291,12 @@ test-h13-parity: $(BUILD)/mil-hwxc
 	python3 tests/test_libane_overrun.py $(BUILD)/mil-hwxc
 .PHONY: test-h14-parity
 test-h14-parity: $(BUILD)/mil-hwxc
+	python3 tests/test_layer_oracle_policy.py --target h14
+	python3 tests/test_h13_camera_conv_cli.py $(BUILD)/mil-hwxc --target H14
+	python3 research/generate_layer_templates.py --check
+	python3 tests/test_native_layer_cli.py $(BUILD)/mil-hwxc --target h14
+	python3 tests/test_native_linked_cli.py $(BUILD)/mil-hwxc --target h14
+	python3 tests/test_native_graph_cli.py $(BUILD)/mil-hwxc --target H14
 	python3 research/generate_h14_templates.py --check
 	python3 tests/test_h14_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_linked_reuse_oracles.py
@@ -304,7 +320,7 @@ test-h18-parity: $(BUILD)/mil-hwxc
 	python3 research/generate_h14_templates.py --check
 	python3 tests/test_h17_parity.py $(BUILD)/mil-hwxc H18
 
-$(BUILD)/test_h13_encoding: plugins/H13/H13Program.cpp tests/test_h13_encoding.cpp plugins/H13/H13Program.h | $(BUILD)
+$(BUILD)/test_h13_encoding: plugins/H13/H13Program.cpp tests/test_h13_encoding.cpp plugins/H13/H13Program.h plugins/LayerGraph.h | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $(filter %.cpp,$^) -o $@
 
 $(BUILD)/test_h13_anec: plugins/H13/H13ANEC.cpp tests/test_h13_anec.cpp plugins/H13/H13Program.h | $(BUILD)
