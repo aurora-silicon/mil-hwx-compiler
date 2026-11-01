@@ -79,6 +79,14 @@ def main():
             assert len(m["programs"])==1 and m["dispatchPlan"]==[0]
             p=m["programs"][0]
             anec=(root/"out"/p["file"]).read_bytes()
+            if args.target=="h13":
+                # Main's r2 scheduler must not reinterpret native internal L2
+                # tasks as generic convolution edges after the branch merge.
+                l2 = subprocess.run([compiler,"--target","H13","--schedule","linked-l2",
+                    "--mil",str(root/"model.mil"),"--model-root",tmp,"--output",str(root/"l2")],
+                    capture_output=True,text=True,timeout=120)
+                assert l2.returncode==0,(name,l2.stderr)
+                assert (root/"l2"/p["file"]).read_bytes()==anec,name
             if args.target=="h14":
                 size=struct.unpack_from("<Q",anec,16)[0]
                 decoded=[decode_task(t,"h14") for t in split_h14_tasks(anec[0x1000:0x1000+size])]

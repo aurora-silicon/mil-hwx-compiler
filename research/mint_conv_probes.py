@@ -1121,7 +1121,8 @@ def conv_row(record: dict[str, Any], symbol: str, words: list[int]) -> str:
     return (f"    {{{geometry}, {symbol}, std::size({symbol}), "
             f"{descriptor['task_count']}, {len(section)}, "
             f"0x{int(trailer[20], 16):08x}, 0x{int(trailer[28], 16):08x}, "
-            f"0x{int(trailer[18], 16):08x}}},  // {record['case']}")
+            f"0x{int(trailer[18], 16):08x}, "
+            f"{str(record['case'].startswith('layer_conv')).lower()}}},  // {record['case']}")
 
 
 def emit(target: str) -> str:

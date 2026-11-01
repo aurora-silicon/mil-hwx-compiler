@@ -8107,560 +8107,560 @@ static constexpr std::uint32_t kH14ConvText555[] = {
     0x00000000, 0x00000000,
 };
 static constexpr OracleConvTemplate kConvTasks[] = {
-    {1, 1, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText0, std::size(kH14ConvText0), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n32_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText1, std::size(kH14ConvText1), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c3_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText2, std::size(kH14ConvText2), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c3_n32_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText3, std::size(kH14ConvText3), 1, 1024, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k1_c3_n32_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText4, std::size(kH14ConvText4), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n32_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText5, std::size(kH14ConvText5), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c8_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText6, std::size(kH14ConvText6), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c8_n32_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText7, std::size(kH14ConvText7), 1, 1024, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k1_c8_n32_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText8, std::size(kH14ConvText8), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c11_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText9, std::size(kH14ConvText9), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n3_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText10, std::size(kH14ConvText10), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n8_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText11, std::size(kH14ConvText11), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText12, std::size(kH14ConvText12), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n24_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText13, std::size(kH14ConvText13), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n32_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText14, std::size(kH14ConvText14), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n3_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText15, std::size(kH14ConvText15), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n8_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText16, std::size(kH14ConvText16), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText17, std::size(kH14ConvText17), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n24_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText18, std::size(kH14ConvText18), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText19, std::size(kH14ConvText19), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n3_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText20, std::size(kH14ConvText20), 1, 512, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n8_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText21, std::size(kH14ConvText21), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n16_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText22, std::size(kH14ConvText22), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c16_n24_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText23, std::size(kH14ConvText23), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c16_n32_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText24, std::size(kH14ConvText24), 1, 192, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k1_c16_n3_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText25, std::size(kH14ConvText25), 1, 512, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k1_c16_n8_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText26, std::size(kH14ConvText26), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k1_c16_n16_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText27, std::size(kH14ConvText27), 1, 1024, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k1_c16_n24_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText28, std::size(kH14ConvText28), 1, 1024, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k1_c16_n32_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText29, std::size(kH14ConvText29), 1, 2048, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c24_n32_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText30, std::size(kH14ConvText30), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c24_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText31, std::size(kH14ConvText31), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c24_n32_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText32, std::size(kH14ConvText32), 1, 2048, 0x00000011, 0x0000000d, 0x00000000},  // layer_conv_k1_c24_n32_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText33, std::size(kH14ConvText33), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c32_n32_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText34, std::size(kH14ConvText34), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c32_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText35, std::size(kH14ConvText35), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c32_n32_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText36, std::size(kH14ConvText36), 1, 2048, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k1_c32_n32_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText37, std::size(kH14ConvText37), 1, 3072, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c48_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText38, std::size(kH14ConvText38), 1, 4096, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c56_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText39, std::size(kH14ConvText39), 1, 8192, 0x00000011, 0x00000000, 0x00000000},  // conv_probe_k1_c64_n64_s1_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 8, 8}, {64, 8, 8}, kH14ConvText40, std::size(kH14ConvText40), 1, 8192, 0x00000011, 0x00000002, 0x00000000},  // conv_probe_k1_c64_n64_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 8, 8}, {256, 8, 8}, kH14ConvText41, std::size(kH14ConvText41), 1, 32768, 0x00000011, 0x00000005, 0x00000000},  // env_conv_k1_c64_n256_s8_st1_g1_bias0
-    {1, 1, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText42, std::size(kH14ConvText42), 1, 4096, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c64_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText43, std::size(kH14ConvText43), 1, 8192, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k1_c64_n64_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText44, std::size(kH14ConvText44), 1, 16384, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c64_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText45, std::size(kH14ConvText45), 1, 32768, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k1_c64_n256_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {512, 16, 16}, kH14ConvText46, std::size(kH14ConvText46), 1, 65536, 0x00000011, 0x00000013, 0x00000000},  // conv_known_k1_c64_n512_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {768, 16, 16}, kH14ConvText47, std::size(kH14ConvText47), 1, 98304, 0x00000011, 0x0000001b, 0x00000000},  // conv_known_k1_c64_n768_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 16, 16}, {1024, 16, 16}, kH14ConvText48, std::size(kH14ConvText48), 1, 131072, 0x00000011, 0x00000024, 0x00000000},  // conv_known_k1_c64_n1024_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 32, 32}, {64, 32, 32}, kH14ConvText49, std::size(kH14ConvText49), 1, 8192, 0x00000011, 0x00000007, 0x00000000},  // conv_probe_k1_c64_n64_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 64, 64}, {64, 64, 64}, kH14ConvText50, std::size(kH14ConvText50), 1, 8192, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c64_n64_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {64, 112, 112}, {64, 112, 112}, kH14ConvText51, std::size(kH14ConvText51), 1, 8192, 0x00000011, 0x0000006b, 0x00000000},  // layer_conv_k1_c64_n64_s112_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {96, 16, 16}, {24, 16, 16}, kH14ConvText52, std::size(kH14ConvText52), 1, 4608, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_indexed_k1_c96_n24_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {96, 16, 16}, {32, 16, 16}, kH14ConvText53, std::size(kH14ConvText53), 1, 6144, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_indexed_k1_c96_n32_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {96, 16, 16}, {128, 16, 16}, kH14ConvText54, std::size(kH14ConvText54), 1, 24576, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_indexed_k1_c96_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText55, std::size(kH14ConvText55), 1, 16384, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c128_n64_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText56, std::size(kH14ConvText56), 1, 32768, 0x00000011, 0x00000008, 0x00000000},  // conv_probe_k1_c128_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {128, 16, 16}, {256, 16, 16}, kH14ConvText57, std::size(kH14ConvText57), 1, 65536, 0x00000011, 0x0000000d, 0x00000000},  // conv_probe_k1_c128_n256_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {128, 16, 16}, {512, 16, 16}, kH14ConvText58, std::size(kH14ConvText58), 1, 131072, 0x00000011, 0x00000017, 0x00000000},  // conv_probe_k1_c128_n512_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {128, 16, 16}, {1024, 16, 16}, kH14ConvText59, std::size(kH14ConvText59), 1, 262144, 0x00000011, 0x0000002a, 0x00000000},  // conv_probe_k1_c128_n1024_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 1, 1}, {256, 1, 1}, kH14ConvText60, std::size(kH14ConvText60), 1, 131072, 0x00000011, 0x00000004, 0x00000000},  // conv_probe_k1_c256_n256_s1_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 8, 8}, {256, 8, 8}, kH14ConvText61, std::size(kH14ConvText61), 1, 131072, 0x00000011, 0x0000000b, 0x00000000},  // conv_probe_k1_c256_n256_s8_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText62, std::size(kH14ConvText62), 1, 32768, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k1_c256_n64_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 16, 16}, {128, 16, 16}, kH14ConvText63, std::size(kH14ConvText63), 1, 65536, 0x00000011, 0x0000000d, 0x00000000},  // conv_probe_k1_c256_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText64, std::size(kH14ConvText64), 1, 131072, 0x00000011, 0x00000013, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 16, 16}, {512, 16, 16}, kH14ConvText65, std::size(kH14ConvText65), 1, 262144, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c256_n512_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 16, 16}, {1024, 16, 16}, kH14ConvText66, std::size(kH14ConvText66), 1, 524288, 0x00000011, 0x00000035, 0x00000000},  // conv_probe_k1_c256_n1024_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 32, 32}, {256, 32, 32}, kH14ConvText67, std::size(kH14ConvText67), 1, 131072, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k1_c256_n256_s32_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {256, 64, 64}, {256, 64, 64}, kH14ConvText68, std::size(kH14ConvText68), 1, 131072, 0x00000011, 0x0000007e, 0x00000000},  // conv_probe_k1_c256_n256_s64_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {512, 16, 16}, {64, 16, 16}, kH14ConvText69, std::size(kH14ConvText69), 1, 65536, 0x00000011, 0x00000013, 0x00000000},  // conv_probe_k1_c512_n64_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {512, 16, 16}, {128, 16, 16}, kH14ConvText70, std::size(kH14ConvText70), 1, 131072, 0x00000011, 0x00000017, 0x00000000},  // conv_probe_k1_c512_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {512, 16, 16}, {256, 16, 16}, kH14ConvText71, std::size(kH14ConvText71), 1, 262144, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c512_n256_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText72, std::size(kH14ConvText72), 1, 524288, 0x00000011, 0x0000002e, 0x00000000},  // conv_probe_k1_c512_n512_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {512, 16, 16}, {1024, 16, 16}, kH14ConvText73, std::size(kH14ConvText73), 1, 1048576, 0x00000011, 0x0000004c, 0x00000000},  // conv_probe_k1_c512_n1024_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {1024, 16, 16}, {64, 16, 16}, kH14ConvText74, std::size(kH14ConvText74), 1, 131072, 0x00000011, 0x00000024, 0x00000000},  // conv_probe_k1_c1024_n64_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {1024, 16, 16}, {128, 16, 16}, kH14ConvText75, std::size(kH14ConvText75), 1, 262144, 0x00000011, 0x0000002a, 0x00000000},  // conv_probe_k1_c1024_n128_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {1024, 16, 16}, {256, 16, 16}, kH14ConvText76, std::size(kH14ConvText76), 1, 524288, 0x00000011, 0x00000035, 0x00000000},  // conv_probe_k1_c1024_n256_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, false, {1024, 16, 16}, {512, 16, 16}, kH14ConvText77, std::size(kH14ConvText77), 1, 1048576, 0x00000011, 0x0000004c, 0x00000000},  // conv_probe_k1_c1024_n512_s16_st1_g1_bias0_same
-    {1, 1, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText78, std::size(kH14ConvText78), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n32_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText79, std::size(kH14ConvText79), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c3_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText80, std::size(kH14ConvText80), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c3_n32_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText81, std::size(kH14ConvText81), 1, 1024, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k1_c3_n32_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText82, std::size(kH14ConvText82), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n32_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText83, std::size(kH14ConvText83), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c8_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText84, std::size(kH14ConvText84), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c8_n32_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText85, std::size(kH14ConvText85), 1, 1024, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k1_c8_n32_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText86, std::size(kH14ConvText86), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c11_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText87, std::size(kH14ConvText87), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n3_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText88, std::size(kH14ConvText88), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n8_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText89, std::size(kH14ConvText89), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText90, std::size(kH14ConvText90), 1, 1536, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n24_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText91, std::size(kH14ConvText91), 1, 2048, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n32_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText92, std::size(kH14ConvText92), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n3_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText93, std::size(kH14ConvText93), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n8_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText94, std::size(kH14ConvText94), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText95, std::size(kH14ConvText95), 1, 1536, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n24_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText96, std::size(kH14ConvText96), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText97, std::size(kH14ConvText97), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n3_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText98, std::size(kH14ConvText98), 1, 512, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n8_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText99, std::size(kH14ConvText99), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n16_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText100, std::size(kH14ConvText100), 1, 1536, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c16_n24_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText101, std::size(kH14ConvText101), 1, 2048, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c16_n32_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText102, std::size(kH14ConvText102), 1, 192, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k1_c16_n3_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText103, std::size(kH14ConvText103), 1, 512, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k1_c16_n8_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText104, std::size(kH14ConvText104), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k1_c16_n16_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText105, std::size(kH14ConvText105), 1, 1536, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k1_c16_n24_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText106, std::size(kH14ConvText106), 1, 2048, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k1_c16_n32_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText107, std::size(kH14ConvText107), 1, 2048, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c24_n32_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText108, std::size(kH14ConvText108), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c24_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText109, std::size(kH14ConvText109), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c24_n32_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText110, std::size(kH14ConvText110), 1, 2048, 0x00000011, 0x0000000d, 0x00000000},  // layer_conv_k1_c24_n32_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText111, std::size(kH14ConvText111), 1, 3072, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c32_n32_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText112, std::size(kH14ConvText112), 1, 3072, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c32_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText113, std::size(kH14ConvText113), 1, 3072, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c32_n32_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText114, std::size(kH14ConvText114), 1, 3072, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k1_c32_n32_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText115, std::size(kH14ConvText115), 1, 4096, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c56_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText116, std::size(kH14ConvText116), 1, 9216, 0x00000011, 0x00000000, 0x00000000},  // conv_probe_k1_c64_n64_s1_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 8, 8}, {64, 8, 8}, kH14ConvText117, std::size(kH14ConvText117), 1, 9216, 0x00000011, 0x00000002, 0x00000000},  // conv_probe_k1_c64_n64_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText118, std::size(kH14ConvText118), 1, 9216, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k1_c64_n64_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText119, std::size(kH14ConvText119), 1, 17408, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c64_n128_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText120, std::size(kH14ConvText120), 1, 33792, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k1_c64_n256_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {512, 16, 16}, kH14ConvText121, std::size(kH14ConvText121), 1, 66560, 0x00000011, 0x00000013, 0x00000000},  // conv_known_k1_c64_n512_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {768, 16, 16}, kH14ConvText122, std::size(kH14ConvText122), 1, 100352, 0x00000011, 0x0000001b, 0x00000000},  // conv_known_k1_c64_n768_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 16, 16}, {1024, 16, 16}, kH14ConvText123, std::size(kH14ConvText123), 1, 133120, 0x00000011, 0x00000024, 0x00000000},  // conv_known_k1_c64_n1024_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 32, 32}, {64, 32, 32}, kH14ConvText124, std::size(kH14ConvText124), 1, 9216, 0x00000011, 0x00000007, 0x00000000},  // conv_probe_k1_c64_n64_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {64, 64, 64}, {64, 64, 64}, kH14ConvText125, std::size(kH14ConvText125), 1, 9216, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c64_n64_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {96, 16, 16}, {24, 16, 16}, kH14ConvText126, std::size(kH14ConvText126), 1, 5632, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_indexed_k1_c96_n24_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {96, 16, 16}, {32, 16, 16}, kH14ConvText127, std::size(kH14ConvText127), 1, 7168, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_indexed_k1_c96_n32_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {96, 16, 16}, {128, 16, 16}, kH14ConvText128, std::size(kH14ConvText128), 1, 25600, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_indexed_k1_c96_n128_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText129, std::size(kH14ConvText129), 1, 17408, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c128_n64_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 1, 1}, {256, 1, 1}, kH14ConvText130, std::size(kH14ConvText130), 1, 132096, 0x00000011, 0x00000004, 0x00000000},  // conv_probe_k1_c256_n256_s1_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 8, 8}, {256, 8, 8}, kH14ConvText131, std::size(kH14ConvText131), 1, 132096, 0x00000011, 0x0000000b, 0x00000000},  // conv_probe_k1_c256_n256_s8_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText132, std::size(kH14ConvText132), 1, 33792, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k1_c256_n64_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText133, std::size(kH14ConvText133), 1, 132096, 0x00000011, 0x00000013, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 32, 32}, {256, 32, 32}, kH14ConvText134, std::size(kH14ConvText134), 1, 132096, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k1_c256_n256_s32_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {256, 64, 64}, {256, 64, 64}, kH14ConvText135, std::size(kH14ConvText135), 1, 132096, 0x00000011, 0x0000007e, 0x00000000},  // conv_probe_k1_c256_n256_s64_st1_g1_bias1_same
-    {1, 1, 1, 1, true, {768, 1, 1}, {768, 1, 1}, kH14ConvText136, std::size(kH14ConvText136), 1, 1181696, 0x00000011, 0x00000025, 0x00000000},  // env_conv_k1_c768_n768_s1_st1_g1_bias1
-    {1, 1, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText137, std::size(kH14ConvText137), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s8_st1_g3_bias0_same
-    {1, 1, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText138, std::size(kH14ConvText138), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s16_st1_g3_bias0_same
-    {1, 1, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText139, std::size(kH14ConvText139), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s32_st1_g3_bias0_same
-    {1, 1, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText140, std::size(kH14ConvText140), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c3_n3_s64_st1_g3_bias0_same
-    {1, 1, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText141, std::size(kH14ConvText141), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s8_st1_g3_bias1_same
-    {1, 1, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText142, std::size(kH14ConvText142), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s16_st1_g3_bias1_same
-    {1, 1, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText143, std::size(kH14ConvText143), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c3_n3_s32_st1_g3_bias1_same
-    {1, 1, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText144, std::size(kH14ConvText144), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c3_n3_s64_st1_g3_bias1_same
-    {1, 1, 1, 4, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText145, std::size(kH14ConvText145), 1, 4096, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k1_c64_n64_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText146, std::size(kH14ConvText146), 1, 4096, 0x00000011, 0x00000005, 0x00000000},  // conv_known_k1_c64_n128_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText147, std::size(kH14ConvText147), 1, 8192, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c64_n256_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText148, std::size(kH14ConvText148), 1, 4096, 0x00000011, 0x00000005, 0x00000000},  // conv_known_k1_c128_n64_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText149, std::size(kH14ConvText149), 1, 8192, 0x00000011, 0x00000007, 0x00000000},  // conv_probe_k1_c128_n128_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText150, std::size(kH14ConvText150), 1, 8192, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c256_n64_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText151, std::size(kH14ConvText151), 1, 32768, 0x00000011, 0x00000010, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText152, std::size(kH14ConvText152), 1, 131072, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k1_c512_n512_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText153, std::size(kH14ConvText153), 1, 524288, 0x00000011, 0x0000004c, 0x00000000},  // conv_probe_k1_c1024_n1024_s16_st1_g4_bias0_same
-    {1, 1, 1, 4, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText154, std::size(kH14ConvText154), 1, 4096, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k1_c64_n64_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText155, std::size(kH14ConvText155), 1, 8192, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c64_n128_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText156, std::size(kH14ConvText156), 1, 12288, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c64_n256_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText157, std::size(kH14ConvText157), 1, 8192, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k1_c128_n64_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText158, std::size(kH14ConvText158), 1, 12288, 0x00000011, 0x00000008, 0x00000000},  // conv_probe_k1_c128_n128_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText159, std::size(kH14ConvText159), 1, 12288, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c256_n64_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText160, std::size(kH14ConvText160), 1, 36864, 0x00000011, 0x00000010, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText161, std::size(kH14ConvText161), 1, 135168, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k1_c512_n512_s16_st1_g4_bias1_same
-    {1, 1, 1, 4, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText162, std::size(kH14ConvText162), 1, 528384, 0x00000011, 0x0000004c, 0x00000000},  // conv_probe_k1_c1024_n1024_s16_st1_g4_bias1_same
-    {1, 1, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText163, std::size(kH14ConvText163), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s8_st1_g8_bias0_same
-    {1, 1, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText164, std::size(kH14ConvText164), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s16_st1_g8_bias0_same
-    {1, 1, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText165, std::size(kH14ConvText165), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s32_st1_g8_bias0_same
-    {1, 1, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText166, std::size(kH14ConvText166), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c8_n8_s64_st1_g8_bias0_same
-    {1, 1, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText167, std::size(kH14ConvText167), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s8_st1_g8_bias1_same
-    {1, 1, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText168, std::size(kH14ConvText168), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s16_st1_g8_bias1_same
-    {1, 1, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText169, std::size(kH14ConvText169), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c8_n8_s32_st1_g8_bias1_same
-    {1, 1, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText170, std::size(kH14ConvText170), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c8_n8_s64_st1_g8_bias1_same
-    {1, 1, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText171, std::size(kH14ConvText171), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s8_st1_g16_bias0_same
-    {1, 1, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText172, std::size(kH14ConvText172), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s16_st1_g16_bias0_same
-    {1, 1, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText173, std::size(kH14ConvText173), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n16_s32_st1_g16_bias0_same
-    {1, 1, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText174, std::size(kH14ConvText174), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k1_c16_n16_s64_st1_g16_bias0_same
-    {1, 1, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText175, std::size(kH14ConvText175), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s8_st1_g16_bias1_same
-    {1, 1, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText176, std::size(kH14ConvText176), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c16_n16_s16_st1_g16_bias1_same
-    {1, 1, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText177, std::size(kH14ConvText177), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c16_n16_s32_st1_g16_bias1_same
-    {1, 1, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText178, std::size(kH14ConvText178), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k1_c16_n16_s64_st1_g16_bias1_same
-    {1, 1, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText179, std::size(kH14ConvText179), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c24_n24_s8_st1_g24_bias0_same
-    {1, 1, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText180, std::size(kH14ConvText180), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c24_n24_s16_st1_g24_bias0_same
-    {1, 1, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText181, std::size(kH14ConvText181), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c24_n24_s32_st1_g24_bias0_same
-    {1, 1, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText182, std::size(kH14ConvText182), 1, 1024, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k1_c24_n24_s64_st1_g24_bias0_same
-    {1, 1, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText183, std::size(kH14ConvText183), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c24_n24_s8_st1_g24_bias1_same
-    {1, 1, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText184, std::size(kH14ConvText184), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c24_n24_s16_st1_g24_bias1_same
-    {1, 1, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText185, std::size(kH14ConvText185), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c24_n24_s32_st1_g24_bias1_same
-    {1, 1, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText186, std::size(kH14ConvText186), 1, 1024, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k1_c24_n24_s64_st1_g24_bias1_same
-    {1, 1, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText187, std::size(kH14ConvText187), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c32_n32_s8_st1_g32_bias0_same
-    {1, 1, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText188, std::size(kH14ConvText188), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c32_n32_s16_st1_g32_bias0_same
-    {1, 1, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText189, std::size(kH14ConvText189), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c32_n32_s32_st1_g32_bias0_same
-    {1, 1, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText190, std::size(kH14ConvText190), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k1_c32_n32_s64_st1_g32_bias0_same
-    {1, 1, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText191, std::size(kH14ConvText191), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k1_c32_n32_s8_st1_g32_bias1_same
-    {1, 1, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText192, std::size(kH14ConvText192), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k1_c32_n32_s16_st1_g32_bias1_same
-    {1, 1, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText193, std::size(kH14ConvText193), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k1_c32_n32_s32_st1_g32_bias1_same
-    {1, 1, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText194, std::size(kH14ConvText194), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k1_c32_n32_s64_st1_g32_bias1_same
-    {1, 1, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText195, std::size(kH14ConvText195), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k1_c48_n48_s16_st1_g48_bias0_same
-    {1, 1, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText196, std::size(kH14ConvText196), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k1_c64_n64_s16_st1_g64_bias0_same
-    {1, 1, 1, 64, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText197, std::size(kH14ConvText197), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // conv_probe_k1_c64_n64_s16_st1_g64_bias1_same
-    {1, 1, 1, 128, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText198, std::size(kH14ConvText198), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // conv_known_k1_c128_n128_s16_st1_g128_bias0_same
-    {1, 1, 1, 128, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText199, std::size(kH14ConvText199), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // conv_probe_k1_c128_n128_s16_st1_g128_bias1_same
-    {1, 1, 1, 256, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText200, std::size(kH14ConvText200), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g256_bias0_same
-    {1, 1, 1, 256, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText201, std::size(kH14ConvText201), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // conv_probe_k1_c256_n256_s16_st1_g256_bias1_same
-    {1, 1, 1, 512, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText202, std::size(kH14ConvText202), 1, 1024, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c512_n512_s16_st1_g512_bias0_same
-    {1, 1, 1, 512, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText203, std::size(kH14ConvText203), 1, 2048, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k1_c512_n512_s16_st1_g512_bias1_same
-    {1, 1, 1, 1024, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText204, std::size(kH14ConvText204), 1, 2048, 0x00000011, 0x0000003d, 0x00000000},  // conv_probe_k1_c1024_n1024_s16_st1_g1024_bias0_same
-    {1, 1, 1, 1024, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText205, std::size(kH14ConvText205), 1, 4096, 0x00000011, 0x0000003d, 0x00000000},  // conv_probe_k1_c1024_n1024_s16_st1_g1024_bias1_same
-    {1, 1, 2, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText206, std::size(kH14ConvText206), 1, 11136, 0x00000011, 0x00000000, 0x00000000},  // conv_probe_k1_c64_n64_s1_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {64, 8, 8}, {64, 4, 4}, kH14ConvText207, std::size(kH14ConvText207), 1, 11136, 0x00000011, 0x00000001, 0x00000000},  // conv_probe_k1_c64_n64_s8_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {64, 16, 16}, {64, 8, 8}, kH14ConvText208, std::size(kH14ConvText208), 1, 11136, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k1_c64_n64_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {64, 16, 16}, {128, 8, 8}, kH14ConvText209, std::size(kH14ConvText209), 1, 21376, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k1_c64_n128_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {64, 32, 32}, {64, 16, 16}, kH14ConvText210, std::size(kH14ConvText210), 1, 11136, 0x00000011, 0x00000006, 0x00000000},  // conv_probe_k1_c64_n64_s32_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {64, 64, 64}, {64, 32, 32}, kH14ConvText211, std::size(kH14ConvText211), 1, 11136, 0x00000011, 0x00000013, 0x00000000},  // conv_probe_k1_c64_n64_s64_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {128, 16, 16}, {64, 8, 8}, kH14ConvText212, std::size(kH14ConvText212), 1, 21376, 0x00000011, 0x00000005, 0x00000000},  // conv_known_k1_c128_n64_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {128, 16, 16}, {128, 8, 8}, kH14ConvText213, std::size(kH14ConvText213), 1, 41856, 0x00000011, 0x00000006, 0x00000000},  // conv_probe_k1_c128_n128_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {256, 16, 16}, {64, 8, 8}, kH14ConvText214, std::size(kH14ConvText214), 1, 41856, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c256_n64_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {256, 16, 16}, {128, 8, 8}, kH14ConvText215, std::size(kH14ConvText215), 1, 82816, 0x00000011, 0x0000000c, 0x00000000},  // conv_probe_k1_c256_n128_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {512, 16, 16}, {64, 8, 8}, kH14ConvText216, std::size(kH14ConvText216), 1, 82816, 0x00000011, 0x00000012, 0x00000000},  // conv_probe_k1_c512_n64_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {512, 16, 16}, {128, 8, 8}, kH14ConvText217, std::size(kH14ConvText217), 1, 164736, 0x00000011, 0x00000016, 0x00000000},  // conv_probe_k1_c512_n128_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {1024, 16, 16}, {64, 8, 8}, kH14ConvText218, std::size(kH14ConvText218), 1, 164736, 0x00000011, 0x00000024, 0x00000000},  // conv_probe_k1_c1024_n64_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, false, {1024, 16, 16}, {128, 8, 8}, kH14ConvText219, std::size(kH14ConvText219), 1, 328576, 0x00000011, 0x0000002a, 0x00000000},  // conv_probe_k1_c1024_n128_s16_st2_g1_bias0_same
-    {1, 1, 2, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText220, std::size(kH14ConvText220), 1, 11136, 0x00000011, 0x00000000, 0x00000000},  // conv_probe_k1_c64_n64_s1_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {64, 8, 8}, {64, 4, 4}, kH14ConvText221, std::size(kH14ConvText221), 1, 11136, 0x00000011, 0x00000001, 0x00000000},  // conv_probe_k1_c64_n64_s8_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {64, 16, 16}, {64, 8, 8}, kH14ConvText222, std::size(kH14ConvText222), 1, 11136, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k1_c64_n64_s16_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {64, 16, 16}, {128, 8, 8}, kH14ConvText223, std::size(kH14ConvText223), 1, 21376, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k1_c64_n128_s16_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {64, 32, 32}, {64, 16, 16}, kH14ConvText224, std::size(kH14ConvText224), 1, 11136, 0x00000011, 0x00000006, 0x00000000},  // conv_probe_k1_c64_n64_s32_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {64, 64, 64}, {64, 32, 32}, kH14ConvText225, std::size(kH14ConvText225), 1, 11136, 0x00000011, 0x00000013, 0x00000000},  // conv_probe_k1_c64_n64_s64_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {128, 16, 16}, {64, 8, 8}, kH14ConvText226, std::size(kH14ConvText226), 1, 21376, 0x00000011, 0x00000005, 0x00000000},  // conv_known_k1_c128_n64_s16_st2_g1_bias1_same
-    {1, 1, 2, 1, true, {256, 16, 16}, {64, 8, 8}, kH14ConvText227, std::size(kH14ConvText227), 1, 41856, 0x00000011, 0x00000009, 0x00000000},  // conv_known_k1_c256_n64_s16_st2_g1_bias1_same
-    {3, 3, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText228, std::size(kH14ConvText228), 1, 2048, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n32_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText229, std::size(kH14ConvText229), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c3_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText230, std::size(kH14ConvText230), 1, 2048, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c3_n32_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText231, std::size(kH14ConvText231), 1, 2048, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k3_c3_n32_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText232, std::size(kH14ConvText232), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n32_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText233, std::size(kH14ConvText233), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k3_c8_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText234, std::size(kH14ConvText234), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c8_n32_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText235, std::size(kH14ConvText235), 1, 5120, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k3_c8_n32_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText236, std::size(kH14ConvText236), 1, 7168, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c11_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText237, std::size(kH14ConvText237), 1, 960, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n3_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText238, std::size(kH14ConvText238), 1, 2560, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n8_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText239, std::size(kH14ConvText239), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText240, std::size(kH14ConvText240), 1, 7168, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n24_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText241, std::size(kH14ConvText241), 1, 9216, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n32_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText242, std::size(kH14ConvText242), 1, 960, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n3_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText243, std::size(kH14ConvText243), 1, 2560, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n8_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText244, std::size(kH14ConvText244), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n16_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText245, std::size(kH14ConvText245), 1, 7168, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n24_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText246, std::size(kH14ConvText246), 1, 9216, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText247, std::size(kH14ConvText247), 1, 960, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n3_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText248, std::size(kH14ConvText248), 1, 2560, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n8_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText249, std::size(kH14ConvText249), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c16_n16_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText250, std::size(kH14ConvText250), 1, 7168, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c16_n24_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText251, std::size(kH14ConvText251), 1, 9216, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c16_n32_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText252, std::size(kH14ConvText252), 1, 960, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k3_c16_n3_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText253, std::size(kH14ConvText253), 1, 2560, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k3_c16_n8_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText254, std::size(kH14ConvText254), 1, 5120, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k3_c16_n16_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText255, std::size(kH14ConvText255), 1, 7168, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k3_c16_n24_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText256, std::size(kH14ConvText256), 1, 9216, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k3_c16_n32_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText257, std::size(kH14ConvText257), 1, 14336, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c24_n32_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText258, std::size(kH14ConvText258), 1, 14336, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c24_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText259, std::size(kH14ConvText259), 1, 14336, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c24_n32_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText260, std::size(kH14ConvText260), 1, 14336, 0x00000011, 0x0000000d, 0x00000000},  // layer_conv_k3_c24_n32_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText261, std::size(kH14ConvText261), 1, 18432, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c32_n32_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText262, std::size(kH14ConvText262), 1, 18432, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c32_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText263, std::size(kH14ConvText263), 1, 18432, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k3_c32_n32_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText264, std::size(kH14ConvText264), 1, 18432, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k3_c32_n32_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText265, std::size(kH14ConvText265), 1, 27648, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c48_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText266, std::size(kH14ConvText266), 1, 32768, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c56_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText267, std::size(kH14ConvText267), 1, 73728, 0x00000011, 0x00000002, 0x00000000},  // conv_probe_k3_c64_n64_s1_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 8, 8}, {64, 6, 6}, kH14ConvText268, std::size(kH14ConvText268), 1, 73728, 0x00000011, 0x00000003, 0x00000000},  // conv_probe_k3_c64_n64_s8_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 8, 8}, {64, 8, 8}, kH14ConvText269, std::size(kH14ConvText269), 1, 73728, 0x00000011, 0x00000004, 0x00000000},  // conv_probe_k3_c64_n64_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText270, std::size(kH14ConvText270), 1, 36864, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c64_n32_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {64, 14, 14}, kH14ConvText271, std::size(kH14ConvText271), 1, 73728, 0x00000011, 0x00000005, 0x00000000},  // conv_probe_k3_c64_n64_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText272, std::size(kH14ConvText272), 1, 73728, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c64_n64_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {128, 14, 14}, kH14ConvText273, std::size(kH14ConvText273), 1, 147456, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c64_n128_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText274, std::size(kH14ConvText274), 1, 147456, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k3_c64_n128_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {256, 14, 14}, kH14ConvText275, std::size(kH14ConvText275), 1, 294912, 0x00000011, 0x00000011, 0x00000000},  // conv_probe_k3_c64_n256_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText276, std::size(kH14ConvText276), 1, 294912, 0x00000011, 0x00000012, 0x00000000},  // conv_known_k3_c64_n256_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {512, 14, 14}, kH14ConvText277, std::size(kH14ConvText277), 1, 589824, 0x00000011, 0x00000020, 0x00000000},  // conv_probe_k3_c64_n512_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 16, 16}, {512, 16, 16}, kH14ConvText278, std::size(kH14ConvText278), 1, 589824, 0x00000011, 0x00000022, 0x00000000},  // conv_known_k3_c64_n512_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 16, 16}, {768, 16, 16}, kH14ConvText279, std::size(kH14ConvText279), 1, 884736, 0x00000011, 0x00000032, 0x00000000},  // conv_known_k3_c64_n768_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 32, 32}, {64, 30, 30}, kH14ConvText280, std::size(kH14ConvText280), 1, 73728, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c64_n64_s32_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 32, 32}, {64, 32, 32}, kH14ConvText281, std::size(kH14ConvText281), 1, 73728, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c64_n64_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {64, 64, 64}, {64, 62, 62}, kH14ConvText282, std::size(kH14ConvText282), 1, 73728, 0x00000011, 0x00000020, 0x00000000},  // conv_probe_k3_c64_n64_s64_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {64, 64, 64}, {64, 64, 64}, kH14ConvText283, std::size(kH14ConvText283), 1, 73728, 0x00000011, 0x00000020, 0x00000000},  // conv_probe_k3_c64_n64_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 16, 16}, {64, 14, 14}, kH14ConvText284, std::size(kH14ConvText284), 1, 147456, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c128_n64_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText285, std::size(kH14ConvText285), 1, 147456, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k3_c128_n64_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 16, 16}, {128, 14, 14}, kH14ConvText286, std::size(kH14ConvText286), 1, 294912, 0x00000011, 0x0000000f, 0x00000000},  // conv_probe_k3_c128_n128_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText287, std::size(kH14ConvText287), 1, 294912, 0x00000011, 0x00000010, 0x00000000},  // conv_probe_k3_c128_n128_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 16, 16}, {256, 14, 14}, kH14ConvText288, std::size(kH14ConvText288), 1, 589824, 0x00000011, 0x0000001b, 0x00000000},  // conv_probe_k3_c128_n256_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {128, 16, 16}, {256, 16, 16}, kH14ConvText289, std::size(kH14ConvText289), 1, 589824, 0x00000011, 0x0000001c, 0x00000000},  // conv_probe_k3_c128_n256_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 32, 32}, {256, 32, 32}, kH14ConvText290, std::size(kH14ConvText290), 1, 589824, 0x00000011, 0x00000028, 0x00000000},  // layer_conv_k3_c128_n256_s32_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 33, 33}, {256, 33, 33}, kH14ConvText291, std::size(kH14ConvText291), 1, 589824, 0x00000011, 0x00000040, 0x00000000},  // layer_conv_k3_c128_n256_s33_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 34, 34}, {256, 34, 34}, kH14ConvText292, std::size(kH14ConvText292), 1, 589824, 0x00000011, 0x00000042, 0x00000000},  // layer_conv_k3_c128_n256_s34_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 35, 35}, {256, 35, 35}, kH14ConvText293, std::size(kH14ConvText293), 1, 589824, 0x00000011, 0x00000043, 0x00000000},  // layer_conv_k3_c128_n256_s35_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 35, 35}, {512, 35, 35}, kH14ConvText294, std::size(kH14ConvText294), 2, 1179648, 0x00000022, 0x00000043, 0x00000000},  // layer_conv_indexed_k3_c128_n512_s35_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 36, 36}, {256, 36, 36}, kH14ConvText295, std::size(kH14ConvText295), 1, 589824, 0x00000011, 0x00000045, 0x00000000},  // layer_conv_k3_c128_n256_s36_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 40, 40}, {256, 40, 40}, kH14ConvText296, std::size(kH14ConvText296), 1, 589824, 0x00000011, 0x0000004a, 0x00000000},  // layer_conv_k3_c128_n256_s40_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 48, 48}, {256, 48, 48}, kH14ConvText297, std::size(kH14ConvText297), 1, 589824, 0x00000011, 0x00000056, 0x00000000},  // layer_conv_k3_c128_n256_s48_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {128, 64, 64}, {256, 64, 64}, kH14ConvText298, std::size(kH14ConvText298), 1, 589824, 0x00000011, 0x00000098, 0x00000000},  // layer_conv_k3_c128_n256_s64_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {256, 1, 1}, {256, 1, 1}, kH14ConvText299, std::size(kH14ConvText299), 1, 1179648, 0x00000011, 0x00000023, 0x00000000},  // conv_probe_k3_c256_n256_s1_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {256, 8, 8}, {256, 6, 6}, kH14ConvText300, std::size(kH14ConvText300), 1, 1179648, 0x00000011, 0x00000029, 0x00000000},  // conv_probe_k3_c256_n256_s8_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {256, 8, 8}, {256, 8, 8}, kH14ConvText301, std::size(kH14ConvText301), 1, 1179648, 0x00000011, 0x0000002a, 0x00000000},  // conv_probe_k3_c256_n256_s8_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {256, 16, 16}, {64, 14, 14}, kH14ConvText302, std::size(kH14ConvText302), 1, 294912, 0x00000011, 0x00000012, 0x00000000},  // conv_probe_k3_c256_n64_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText303, std::size(kH14ConvText303), 1, 294912, 0x00000011, 0x00000012, 0x00000000},  // conv_known_k3_c256_n64_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {256, 16, 16}, {128, 14, 14}, kH14ConvText304, std::size(kH14ConvText304), 1, 589824, 0x00000011, 0x0000001c, 0x00000000},  // conv_probe_k3_c256_n128_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {256, 16, 16}, {128, 16, 16}, kH14ConvText305, std::size(kH14ConvText305), 1, 589824, 0x00000011, 0x0000001c, 0x00000000},  // conv_probe_k3_c256_n128_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {512, 16, 16}, {64, 14, 14}, kH14ConvText306, std::size(kH14ConvText306), 1, 589824, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k3_c512_n64_s16_st1_g1_bias0_valid
-    {3, 3, 1, 1, false, {512, 16, 16}, {64, 16, 16}, kH14ConvText307, std::size(kH14ConvText307), 1, 589824, 0x00000011, 0x00000022, 0x00000000},  // conv_probe_k3_c512_n64_s16_st1_g1_bias0_same
-    {3, 3, 1, 1, false, {512, 35, 35}, {128, 35, 35}, kH14ConvText308, std::size(kH14ConvText308), 2, 1179648, 0x00000022, 0x00000055, 0x00000000},  // layer_conv_indexed_k3_c512_n128_s35_st1_g1_bias0_same
-    {3, 3, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText309, std::size(kH14ConvText309), 1, 2048, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n32_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText310, std::size(kH14ConvText310), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c3_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText311, std::size(kH14ConvText311), 1, 2048, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c3_n32_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText312, std::size(kH14ConvText312), 1, 2048, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k3_c3_n32_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText313, std::size(kH14ConvText313), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n32_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText314, std::size(kH14ConvText314), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k3_c8_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText315, std::size(kH14ConvText315), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c8_n32_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText316, std::size(kH14ConvText316), 1, 5120, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k3_c8_n32_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText317, std::size(kH14ConvText317), 1, 7168, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c11_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText318, std::size(kH14ConvText318), 1, 960, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n3_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText319, std::size(kH14ConvText319), 1, 2560, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n8_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText320, std::size(kH14ConvText320), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText321, std::size(kH14ConvText321), 1, 7680, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n24_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText322, std::size(kH14ConvText322), 1, 10240, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n32_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText323, std::size(kH14ConvText323), 1, 960, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n3_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText324, std::size(kH14ConvText324), 1, 2560, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n8_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText325, std::size(kH14ConvText325), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n16_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText326, std::size(kH14ConvText326), 1, 7680, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n24_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText327, std::size(kH14ConvText327), 1, 10240, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText328, std::size(kH14ConvText328), 1, 960, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n3_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText329, std::size(kH14ConvText329), 1, 2560, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n8_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText330, std::size(kH14ConvText330), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c16_n16_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText331, std::size(kH14ConvText331), 1, 7680, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c16_n24_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText332, std::size(kH14ConvText332), 1, 10240, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c16_n32_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText333, std::size(kH14ConvText333), 1, 960, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k3_c16_n3_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText334, std::size(kH14ConvText334), 1, 2560, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k3_c16_n8_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText335, std::size(kH14ConvText335), 1, 5120, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k3_c16_n16_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText336, std::size(kH14ConvText336), 1, 7680, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k3_c16_n24_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText337, std::size(kH14ConvText337), 1, 10240, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k3_c16_n32_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText338, std::size(kH14ConvText338), 1, 14336, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c24_n32_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText339, std::size(kH14ConvText339), 1, 14336, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c24_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText340, std::size(kH14ConvText340), 1, 14336, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c24_n32_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText341, std::size(kH14ConvText341), 1, 14336, 0x00000011, 0x0000000d, 0x00000000},  // layer_conv_k3_c24_n32_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText342, std::size(kH14ConvText342), 1, 19456, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c32_n32_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText343, std::size(kH14ConvText343), 1, 19456, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c32_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText344, std::size(kH14ConvText344), 1, 19456, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k3_c32_n32_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText345, std::size(kH14ConvText345), 1, 19456, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k3_c32_n32_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText346, std::size(kH14ConvText346), 1, 32768, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c56_n32_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText347, std::size(kH14ConvText347), 1, 74752, 0x00000011, 0x00000002, 0x00000000},  // conv_probe_k3_c64_n64_s1_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 8, 8}, {64, 6, 6}, kH14ConvText348, std::size(kH14ConvText348), 1, 74752, 0x00000011, 0x00000003, 0x00000000},  // conv_probe_k3_c64_n64_s8_st1_g1_bias1_valid
-    {3, 3, 1, 1, true, {64, 8, 8}, {64, 8, 8}, kH14ConvText349, std::size(kH14ConvText349), 1, 74752, 0x00000011, 0x00000004, 0x00000000},  // conv_probe_k3_c64_n64_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 16, 16}, {64, 14, 14}, kH14ConvText350, std::size(kH14ConvText350), 1, 74752, 0x00000011, 0x00000005, 0x00000000},  // conv_probe_k3_c64_n64_s16_st1_g1_bias1_valid
-    {3, 3, 1, 1, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText351, std::size(kH14ConvText351), 1, 74752, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c64_n64_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText352, std::size(kH14ConvText352), 1, 148480, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k3_c64_n128_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText353, std::size(kH14ConvText353), 1, 295936, 0x00000011, 0x00000012, 0x00000000},  // conv_known_k3_c64_n256_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 16, 16}, {512, 16, 16}, kH14ConvText354, std::size(kH14ConvText354), 1, 590848, 0x00000011, 0x00000022, 0x00000000},  // conv_known_k3_c64_n512_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 16, 16}, {768, 16, 16}, kH14ConvText355, std::size(kH14ConvText355), 1, 886784, 0x00000011, 0x00000032, 0x00000000},  // conv_known_k3_c64_n768_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 32, 32}, {64, 30, 30}, kH14ConvText356, std::size(kH14ConvText356), 1, 74752, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c64_n64_s32_st1_g1_bias1_valid
-    {3, 3, 1, 1, true, {64, 32, 32}, {64, 32, 32}, kH14ConvText357, std::size(kH14ConvText357), 1, 74752, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c64_n64_s32_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {64, 64, 64}, {64, 62, 62}, kH14ConvText358, std::size(kH14ConvText358), 1, 74752, 0x00000011, 0x00000020, 0x00000000},  // conv_probe_k3_c64_n64_s64_st1_g1_bias1_valid
-    {3, 3, 1, 1, true, {64, 64, 64}, {64, 64, 64}, kH14ConvText359, std::size(kH14ConvText359), 1, 74752, 0x00000011, 0x00000020, 0x00000000},  // conv_probe_k3_c64_n64_s64_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText360, std::size(kH14ConvText360), 1, 148480, 0x00000011, 0x0000000a, 0x00000000},  // conv_known_k3_c128_n64_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {128, 35, 35}, {256, 35, 35}, kH14ConvText361, std::size(kH14ConvText361), 1, 590848, 0x00000011, 0x00000043, 0x00000000},  // layer_conv_k3_c128_n256_s35_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {128, 35, 35}, {512, 35, 35}, kH14ConvText362, std::size(kH14ConvText362), 2, 1181696, 0x00000022, 0x00000043, 0x00000000},  // layer_conv_indexed_k3_c128_n512_s35_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {256, 1, 1}, {256, 1, 1}, kH14ConvText363, std::size(kH14ConvText363), 1, 1180672, 0x00000011, 0x00000023, 0x00000000},  // conv_probe_k3_c256_n256_s1_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {256, 8, 8}, {256, 6, 6}, kH14ConvText364, std::size(kH14ConvText364), 1, 1180672, 0x00000011, 0x00000029, 0x00000000},  // conv_probe_k3_c256_n256_s8_st1_g1_bias1_valid
-    {3, 3, 1, 1, true, {256, 8, 8}, {256, 8, 8}, kH14ConvText365, std::size(kH14ConvText365), 1, 1180672, 0x00000011, 0x0000002a, 0x00000000},  // conv_probe_k3_c256_n256_s8_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText366, std::size(kH14ConvText366), 1, 295936, 0x00000011, 0x00000012, 0x00000000},  // conv_known_k3_c256_n64_s16_st1_g1_bias1_same
-    {3, 3, 1, 1, true, {512, 35, 35}, {128, 35, 35}, kH14ConvText367, std::size(kH14ConvText367), 2, 1181696, 0x00000022, 0x00000055, 0x00000000},  // layer_conv_indexed_k3_c512_n128_s35_st1_g1_bias1_same
-    {3, 3, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText368, std::size(kH14ConvText368), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s8_st1_g3_bias0_same
-    {3, 3, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText369, std::size(kH14ConvText369), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s16_st1_g3_bias0_same
-    {3, 3, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText370, std::size(kH14ConvText370), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s32_st1_g3_bias0_same
-    {3, 3, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText371, std::size(kH14ConvText371), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c3_n3_s64_st1_g3_bias0_same
-    {3, 3, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText372, std::size(kH14ConvText372), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s8_st1_g3_bias1_same
-    {3, 3, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText373, std::size(kH14ConvText373), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s16_st1_g3_bias1_same
-    {3, 3, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText374, std::size(kH14ConvText374), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c3_n3_s32_st1_g3_bias1_same
-    {3, 3, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText375, std::size(kH14ConvText375), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c3_n3_s64_st1_g3_bias1_same
-    {3, 3, 1, 4, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText376, std::size(kH14ConvText376), 1, 20480, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k3_c64_n64_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText377, std::size(kH14ConvText377), 1, 36864, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c64_n128_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText378, std::size(kH14ConvText378), 1, 73728, 0x00000011, 0x0000000b, 0x00000000},  // conv_known_k3_c64_n256_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText379, std::size(kH14ConvText379), 1, 36864, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c128_n64_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText380, std::size(kH14ConvText380), 1, 73728, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c128_n128_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText381, std::size(kH14ConvText381), 1, 73728, 0x00000011, 0x0000000b, 0x00000000},  // conv_known_k3_c256_n64_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText382, std::size(kH14ConvText382), 1, 294912, 0x00000011, 0x00000018, 0x00000000},  // conv_probe_k3_c256_n256_s16_st1_g4_bias0_same
-    {3, 3, 1, 4, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText383, std::size(kH14ConvText383), 1, 20480, 0x00000011, 0x00000004, 0x00000000},  // conv_known_k3_c64_n64_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText384, std::size(kH14ConvText384), 1, 40960, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c64_n128_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText385, std::size(kH14ConvText385), 1, 77824, 0x00000011, 0x0000000b, 0x00000000},  // conv_known_k3_c64_n256_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText386, std::size(kH14ConvText386), 1, 40960, 0x00000011, 0x00000006, 0x00000000},  // conv_known_k3_c128_n64_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText387, std::size(kH14ConvText387), 1, 77824, 0x00000011, 0x00000009, 0x00000000},  // conv_probe_k3_c128_n128_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText388, std::size(kH14ConvText388), 1, 77824, 0x00000011, 0x0000000b, 0x00000000},  // conv_known_k3_c256_n64_s16_st1_g4_bias1_same
-    {3, 3, 1, 4, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText389, std::size(kH14ConvText389), 1, 299008, 0x00000011, 0x00000018, 0x00000000},  // conv_probe_k3_c256_n256_s16_st1_g4_bias1_same
-    {3, 3, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText390, std::size(kH14ConvText390), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s8_st1_g8_bias0_same
-    {3, 3, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText391, std::size(kH14ConvText391), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s16_st1_g8_bias0_same
-    {3, 3, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText392, std::size(kH14ConvText392), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s32_st1_g8_bias0_same
-    {3, 3, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText393, std::size(kH14ConvText393), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c8_n8_s64_st1_g8_bias0_same
-    {3, 3, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText394, std::size(kH14ConvText394), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s8_st1_g8_bias1_same
-    {3, 3, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText395, std::size(kH14ConvText395), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s16_st1_g8_bias1_same
-    {3, 3, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText396, std::size(kH14ConvText396), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c8_n8_s32_st1_g8_bias1_same
-    {3, 3, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText397, std::size(kH14ConvText397), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c8_n8_s64_st1_g8_bias1_same
-    {3, 3, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText398, std::size(kH14ConvText398), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s8_st1_g16_bias0_same
-    {3, 3, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText399, std::size(kH14ConvText399), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s16_st1_g16_bias0_same
-    {3, 3, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText400, std::size(kH14ConvText400), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n16_s32_st1_g16_bias0_same
-    {3, 3, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText401, std::size(kH14ConvText401), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k3_c16_n16_s64_st1_g16_bias0_same
-    {3, 3, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText402, std::size(kH14ConvText402), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s8_st1_g16_bias1_same
-    {3, 3, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText403, std::size(kH14ConvText403), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c16_n16_s16_st1_g16_bias1_same
-    {3, 3, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText404, std::size(kH14ConvText404), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c16_n16_s32_st1_g16_bias1_same
-    {3, 3, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText405, std::size(kH14ConvText405), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k3_c16_n16_s64_st1_g16_bias1_same
-    {3, 3, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText406, std::size(kH14ConvText406), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c24_n24_s8_st1_g24_bias0_same
-    {3, 3, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText407, std::size(kH14ConvText407), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c24_n24_s16_st1_g24_bias0_same
-    {3, 3, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText408, std::size(kH14ConvText408), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c24_n24_s32_st1_g24_bias0_same
-    {3, 3, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText409, std::size(kH14ConvText409), 1, 1024, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k3_c24_n24_s64_st1_g24_bias0_same
-    {3, 3, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText410, std::size(kH14ConvText410), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c24_n24_s8_st1_g24_bias1_same
-    {3, 3, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText411, std::size(kH14ConvText411), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c24_n24_s16_st1_g24_bias1_same
-    {3, 3, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText412, std::size(kH14ConvText412), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c24_n24_s32_st1_g24_bias1_same
-    {3, 3, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText413, std::size(kH14ConvText413), 1, 1024, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k3_c24_n24_s64_st1_g24_bias1_same
-    {3, 3, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText414, std::size(kH14ConvText414), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c32_n32_s8_st1_g32_bias0_same
-    {3, 3, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText415, std::size(kH14ConvText415), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c32_n32_s16_st1_g32_bias0_same
-    {3, 3, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText416, std::size(kH14ConvText416), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c32_n32_s32_st1_g32_bias0_same
-    {3, 3, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText417, std::size(kH14ConvText417), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k3_c32_n32_s64_st1_g32_bias0_same
-    {3, 3, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText418, std::size(kH14ConvText418), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k3_c32_n32_s8_st1_g32_bias1_same
-    {3, 3, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText419, std::size(kH14ConvText419), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k3_c32_n32_s16_st1_g32_bias1_same
-    {3, 3, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText420, std::size(kH14ConvText420), 1, 1024, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k3_c32_n32_s32_st1_g32_bias1_same
-    {3, 3, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText421, std::size(kH14ConvText421), 1, 1024, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k3_c32_n32_s64_st1_g32_bias1_same
-    {3, 3, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText422, std::size(kH14ConvText422), 1, 1024, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k3_c48_n48_s16_st1_g48_bias0_same
-    {3, 3, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText423, std::size(kH14ConvText423), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // conv_known_k3_c64_n64_s16_st1_g64_bias0_same
-    {3, 3, 1, 64, false, {64, 112, 112}, {64, 112, 112}, kH14ConvText424, std::size(kH14ConvText424), 1, 2048, 0x00000011, 0x0000006b, 0x00000000},  // layer_conv_k3_c64_n64_s112_st1_g64_bias0_same
-    {3, 3, 1, 64, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText425, std::size(kH14ConvText425), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // conv_probe_k3_c64_n64_s16_st1_g64_bias1_same
-    {3, 3, 1, 128, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText426, std::size(kH14ConvText426), 1, 3072, 0x00000011, 0x00000007, 0x00000000},  // conv_known_k3_c128_n128_s16_st1_g128_bias0_same
-    {3, 3, 1, 128, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText427, std::size(kH14ConvText427), 1, 3072, 0x00000011, 0x00000007, 0x00000000},  // conv_probe_k3_c128_n128_s16_st1_g128_bias1_same
-    {3, 3, 1, 256, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText428, std::size(kH14ConvText428), 1, 5120, 0x00000011, 0x0000000f, 0x00000000},  // conv_probe_k3_c256_n256_s16_st1_g256_bias0_same
-    {3, 3, 1, 256, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText429, std::size(kH14ConvText429), 1, 5120, 0x00000011, 0x0000000f, 0x00000000},  // conv_probe_k3_c256_n256_s16_st1_g256_bias1_same
-    {3, 3, 1, 512, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText430, std::size(kH14ConvText430), 1, 9216, 0x00000011, 0x0000001e, 0x00000000},  // conv_probe_k3_c512_n512_s16_st1_g512_bias0_same
-    {3, 3, 1, 512, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText431, std::size(kH14ConvText431), 1, 10240, 0x00000011, 0x0000001f, 0x00000000},  // conv_probe_k3_c512_n512_s16_st1_g512_bias1_same
-    {3, 3, 1, 1024, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText432, std::size(kH14ConvText432), 1, 18432, 0x00000011, 0x0000003d, 0x00000000},  // conv_probe_k3_c1024_n1024_s16_st1_g1024_bias0_same
-    {3, 3, 1, 1024, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText433, std::size(kH14ConvText433), 1, 20480, 0x00000011, 0x0000003e, 0x00000000},  // conv_probe_k3_c1024_n1024_s16_st1_g1024_bias1_same
-    {5, 5, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText434, std::size(kH14ConvText434), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n32_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText435, std::size(kH14ConvText435), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c3_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText436, std::size(kH14ConvText436), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c3_n32_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText437, std::size(kH14ConvText437), 1, 5120, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k5_c3_n32_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText438, std::size(kH14ConvText438), 1, 13312, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n32_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText439, std::size(kH14ConvText439), 1, 13312, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c8_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText440, std::size(kH14ConvText440), 1, 13312, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c8_n32_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText441, std::size(kH14ConvText441), 1, 13312, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k5_c8_n32_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText442, std::size(kH14ConvText442), 1, 18432, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c11_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText443, std::size(kH14ConvText443), 1, 2496, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n3_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText444, std::size(kH14ConvText444), 1, 6656, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n8_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText445, std::size(kH14ConvText445), 1, 13312, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText446, std::size(kH14ConvText446), 1, 19456, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n24_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText447, std::size(kH14ConvText447), 1, 25600, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n32_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText448, std::size(kH14ConvText448), 1, 2496, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c16_n3_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText449, std::size(kH14ConvText449), 1, 6656, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c16_n8_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText450, std::size(kH14ConvText450), 1, 13312, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n16_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText451, std::size(kH14ConvText451), 1, 19456, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c16_n24_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText452, std::size(kH14ConvText452), 1, 25600, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText453, std::size(kH14ConvText453), 1, 2496, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n3_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText454, std::size(kH14ConvText454), 1, 6656, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n8_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText455, std::size(kH14ConvText455), 1, 13312, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n16_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText456, std::size(kH14ConvText456), 1, 19456, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n24_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText457, std::size(kH14ConvText457), 1, 25600, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c16_n32_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText458, std::size(kH14ConvText458), 1, 2496, 0x00000011, 0x00000006, 0x00000000},  // layer_conv_k5_c16_n3_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText459, std::size(kH14ConvText459), 1, 6656, 0x00000011, 0x00000006, 0x00000000},  // layer_conv_k5_c16_n8_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText460, std::size(kH14ConvText460), 1, 13312, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k5_c16_n16_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText461, std::size(kH14ConvText461), 1, 19456, 0x00000011, 0x0000000a, 0x00000000},  // layer_conv_k5_c16_n24_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText462, std::size(kH14ConvText462), 1, 25600, 0x00000011, 0x0000000c, 0x00000000},  // layer_conv_k5_c16_n32_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText463, std::size(kH14ConvText463), 1, 38912, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c24_n32_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText464, std::size(kH14ConvText464), 1, 38912, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_indexed_k5_c24_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText465, std::size(kH14ConvText465), 1, 38912, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k5_c24_n32_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText466, std::size(kH14ConvText466), 1, 38912, 0x00000011, 0x0000000e, 0x00000000},  // layer_conv_k5_c24_n32_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText467, std::size(kH14ConvText467), 1, 51200, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c32_n32_s8_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText468, std::size(kH14ConvText468), 1, 51200, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_indexed_k5_c32_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText469, std::size(kH14ConvText469), 1, 51200, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k5_c32_n32_s32_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText470, std::size(kH14ConvText470), 1, 51200, 0x00000011, 0x00000010, 0x00000000},  // layer_conv_k5_c32_n32_s64_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText471, std::size(kH14ConvText471), 1, 76800, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k5_c48_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText472, std::size(kH14ConvText472), 1, 90112, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_indexed_k5_c56_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText473, std::size(kH14ConvText473), 1, 102400, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k5_c64_n32_s16_st1_g1_bias0_same
-    {5, 5, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText474, std::size(kH14ConvText474), 1, 5120, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n32_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText475, std::size(kH14ConvText475), 1, 5120, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c3_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText476, std::size(kH14ConvText476), 1, 5120, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c3_n32_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText477, std::size(kH14ConvText477), 1, 5120, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k5_c3_n32_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText478, std::size(kH14ConvText478), 1, 13312, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n32_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText479, std::size(kH14ConvText479), 1, 13312, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c8_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText480, std::size(kH14ConvText480), 1, 13312, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c8_n32_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText481, std::size(kH14ConvText481), 1, 13312, 0x00000011, 0x00000009, 0x00000000},  // layer_conv_k5_c8_n32_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText482, std::size(kH14ConvText482), 1, 18432, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c11_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText483, std::size(kH14ConvText483), 1, 2496, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n3_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText484, std::size(kH14ConvText484), 1, 6656, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n8_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText485, std::size(kH14ConvText485), 1, 13312, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText486, std::size(kH14ConvText486), 1, 19968, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n24_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText487, std::size(kH14ConvText487), 1, 26624, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n32_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText488, std::size(kH14ConvText488), 1, 2496, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c16_n3_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText489, std::size(kH14ConvText489), 1, 6656, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c16_n8_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText490, std::size(kH14ConvText490), 1, 13312, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n16_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText491, std::size(kH14ConvText491), 1, 19968, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c16_n24_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText492, std::size(kH14ConvText492), 1, 26624, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText493, std::size(kH14ConvText493), 1, 2496, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n3_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText494, std::size(kH14ConvText494), 1, 6656, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n8_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText495, std::size(kH14ConvText495), 1, 13312, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n16_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText496, std::size(kH14ConvText496), 1, 19968, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c16_n24_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText497, std::size(kH14ConvText497), 1, 26624, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c16_n32_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText498, std::size(kH14ConvText498), 1, 2496, 0x00000011, 0x00000006, 0x00000000},  // layer_conv_k5_c16_n3_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText499, std::size(kH14ConvText499), 1, 6656, 0x00000011, 0x00000006, 0x00000000},  // layer_conv_k5_c16_n8_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText500, std::size(kH14ConvText500), 1, 13312, 0x00000011, 0x00000008, 0x00000000},  // layer_conv_k5_c16_n16_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText501, std::size(kH14ConvText501), 1, 19968, 0x00000011, 0x0000000a, 0x00000000},  // layer_conv_k5_c16_n24_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText502, std::size(kH14ConvText502), 1, 26624, 0x00000011, 0x0000000c, 0x00000000},  // layer_conv_k5_c16_n32_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText503, std::size(kH14ConvText503), 1, 38912, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c24_n32_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText504, std::size(kH14ConvText504), 1, 38912, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_indexed_k5_c24_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText505, std::size(kH14ConvText505), 1, 38912, 0x00000011, 0x00000004, 0x00000000},  // layer_conv_k5_c24_n32_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText506, std::size(kH14ConvText506), 1, 38912, 0x00000011, 0x0000000e, 0x00000000},  // layer_conv_k5_c24_n32_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText507, std::size(kH14ConvText507), 1, 52224, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c32_n32_s8_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText508, std::size(kH14ConvText508), 1, 52224, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_indexed_k5_c32_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText509, std::size(kH14ConvText509), 1, 52224, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_k5_c32_n32_s32_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText510, std::size(kH14ConvText510), 1, 52224, 0x00000011, 0x00000010, 0x00000000},  // layer_conv_k5_c32_n32_s64_st1_g1_bias1_same
-    {5, 5, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText511, std::size(kH14ConvText511), 1, 90112, 0x00000011, 0x00000005, 0x00000000},  // layer_conv_indexed_k5_c56_n32_s16_st1_g1_bias1_same
-    {5, 5, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText512, std::size(kH14ConvText512), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s8_st1_g3_bias0_same
-    {5, 5, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText513, std::size(kH14ConvText513), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s16_st1_g3_bias0_same
-    {5, 5, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText514, std::size(kH14ConvText514), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s32_st1_g3_bias0_same
-    {5, 5, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText515, std::size(kH14ConvText515), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c3_n3_s64_st1_g3_bias0_same
-    {5, 5, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText516, std::size(kH14ConvText516), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s8_st1_g3_bias1_same
-    {5, 5, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText517, std::size(kH14ConvText517), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s16_st1_g3_bias1_same
-    {5, 5, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText518, std::size(kH14ConvText518), 1, 192, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c3_n3_s32_st1_g3_bias1_same
-    {5, 5, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText519, std::size(kH14ConvText519), 1, 192, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c3_n3_s64_st1_g3_bias1_same
-    {5, 5, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText520, std::size(kH14ConvText520), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n8_s8_st1_g8_bias0_same
-    {5, 5, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText521, std::size(kH14ConvText521), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c8_n8_s16_st1_g8_bias0_same
-    {5, 5, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText522, std::size(kH14ConvText522), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n8_s32_st1_g8_bias0_same
-    {5, 5, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText523, std::size(kH14ConvText523), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c8_n8_s64_st1_g8_bias0_same
-    {5, 5, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText524, std::size(kH14ConvText524), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n8_s8_st1_g8_bias1_same
-    {5, 5, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText525, std::size(kH14ConvText525), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_indexed_k5_c8_n8_s16_st1_g8_bias1_same
-    {5, 5, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText526, std::size(kH14ConvText526), 1, 512, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c8_n8_s32_st1_g8_bias1_same
-    {5, 5, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText527, std::size(kH14ConvText527), 1, 512, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c8_n8_s64_st1_g8_bias1_same
-    {5, 5, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText528, std::size(kH14ConvText528), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s8_st1_g16_bias0_same
-    {5, 5, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText529, std::size(kH14ConvText529), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s16_st1_g16_bias0_same
-    {5, 5, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText530, std::size(kH14ConvText530), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n16_s32_st1_g16_bias0_same
-    {5, 5, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText531, std::size(kH14ConvText531), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k5_c16_n16_s64_st1_g16_bias0_same
-    {5, 5, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText532, std::size(kH14ConvText532), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s8_st1_g16_bias1_same
-    {5, 5, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText533, std::size(kH14ConvText533), 1, 1024, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c16_n16_s16_st1_g16_bias1_same
-    {5, 5, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText534, std::size(kH14ConvText534), 1, 1024, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c16_n16_s32_st1_g16_bias1_same
-    {5, 5, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText535, std::size(kH14ConvText535), 1, 1024, 0x00000011, 0x00000007, 0x00000000},  // layer_conv_k5_c16_n16_s64_st1_g16_bias1_same
-    {5, 5, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText536, std::size(kH14ConvText536), 1, 1536, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c24_n24_s8_st1_g24_bias0_same
-    {5, 5, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText537, std::size(kH14ConvText537), 1, 1536, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c24_n24_s16_st1_g24_bias0_same
-    {5, 5, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText538, std::size(kH14ConvText538), 1, 1536, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c24_n24_s32_st1_g24_bias0_same
-    {5, 5, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText539, std::size(kH14ConvText539), 1, 1536, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k5_c24_n24_s64_st1_g24_bias0_same
-    {5, 5, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText540, std::size(kH14ConvText540), 1, 1536, 0x00000011, 0x00000000, 0x00000000},  // layer_conv_k5_c24_n24_s8_st1_g24_bias1_same
-    {5, 5, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText541, std::size(kH14ConvText541), 1, 1536, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_indexed_k5_c24_n24_s16_st1_g24_bias1_same
-    {5, 5, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText542, std::size(kH14ConvText542), 1, 1536, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c24_n24_s32_st1_g24_bias1_same
-    {5, 5, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText543, std::size(kH14ConvText543), 1, 1536, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k5_c24_n24_s64_st1_g24_bias1_same
-    {5, 5, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText544, std::size(kH14ConvText544), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c32_n32_s8_st1_g32_bias0_same
-    {5, 5, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText545, std::size(kH14ConvText545), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c32_n32_s16_st1_g32_bias0_same
-    {5, 5, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText546, std::size(kH14ConvText546), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c32_n32_s32_st1_g32_bias0_same
-    {5, 5, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText547, std::size(kH14ConvText547), 1, 2048, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k5_c32_n32_s64_st1_g32_bias0_same
-    {5, 5, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText548, std::size(kH14ConvText548), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c32_n32_s8_st1_g32_bias1_same
-    {5, 5, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText549, std::size(kH14ConvText549), 1, 2048, 0x00000011, 0x00000001, 0x00000000},  // layer_conv_k5_c32_n32_s16_st1_g32_bias1_same
-    {5, 5, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText550, std::size(kH14ConvText550), 1, 2048, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c32_n32_s32_st1_g32_bias1_same
-    {5, 5, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText551, std::size(kH14ConvText551), 1, 2048, 0x00000011, 0x0000000f, 0x00000000},  // layer_conv_k5_c32_n32_s64_st1_g32_bias1_same
-    {5, 5, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText552, std::size(kH14ConvText552), 1, 3072, 0x00000011, 0x00000002, 0x00000000},  // layer_conv_k5_c48_n48_s16_st1_g48_bias0_same
-    {5, 5, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText553, std::size(kH14ConvText553), 1, 4096, 0x00000011, 0x00000003, 0x00000000},  // layer_conv_k5_c64_n64_s16_st1_g64_bias0_same
-    {5, 5, 1, 96, false, {96, 32, 32}, {96, 32, 32}, kH14ConvText554, std::size(kH14ConvText554), 1, 5120, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k5_c96_n96_s32_st1_g96_bias0_same
-    {5, 5, 1, 96, true, {96, 32, 32}, {96, 32, 32}, kH14ConvText555, std::size(kH14ConvText555), 1, 5120, 0x00000011, 0x0000000b, 0x00000000},  // layer_conv_k5_c96_n96_s32_st1_g96_bias1_same
+    {1, 1, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText0, std::size(kH14ConvText0), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n32_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText1, std::size(kH14ConvText1), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c3_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText2, std::size(kH14ConvText2), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c3_n32_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText3, std::size(kH14ConvText3), 1, 1024, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k1_c3_n32_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText4, std::size(kH14ConvText4), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n32_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText5, std::size(kH14ConvText5), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c8_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText6, std::size(kH14ConvText6), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c8_n32_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText7, std::size(kH14ConvText7), 1, 1024, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k1_c8_n32_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText8, std::size(kH14ConvText8), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c11_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText9, std::size(kH14ConvText9), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n3_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText10, std::size(kH14ConvText10), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n8_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText11, std::size(kH14ConvText11), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText12, std::size(kH14ConvText12), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n24_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText13, std::size(kH14ConvText13), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n32_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText14, std::size(kH14ConvText14), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n3_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText15, std::size(kH14ConvText15), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n8_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText16, std::size(kH14ConvText16), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText17, std::size(kH14ConvText17), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n24_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText18, std::size(kH14ConvText18), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText19, std::size(kH14ConvText19), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n3_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText20, std::size(kH14ConvText20), 1, 512, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n8_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText21, std::size(kH14ConvText21), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n16_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText22, std::size(kH14ConvText22), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c16_n24_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText23, std::size(kH14ConvText23), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c16_n32_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText24, std::size(kH14ConvText24), 1, 192, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k1_c16_n3_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText25, std::size(kH14ConvText25), 1, 512, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k1_c16_n8_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText26, std::size(kH14ConvText26), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k1_c16_n16_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText27, std::size(kH14ConvText27), 1, 1024, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k1_c16_n24_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText28, std::size(kH14ConvText28), 1, 1024, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k1_c16_n32_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText29, std::size(kH14ConvText29), 1, 2048, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c24_n32_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText30, std::size(kH14ConvText30), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c24_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText31, std::size(kH14ConvText31), 1, 2048, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c24_n32_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText32, std::size(kH14ConvText32), 1, 2048, 0x00000011, 0x0000000d, 0x00000000, true},  // layer_conv_k1_c24_n32_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText33, std::size(kH14ConvText33), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c32_n32_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText34, std::size(kH14ConvText34), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c32_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText35, std::size(kH14ConvText35), 1, 2048, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c32_n32_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText36, std::size(kH14ConvText36), 1, 2048, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k1_c32_n32_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText37, std::size(kH14ConvText37), 1, 3072, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c48_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText38, std::size(kH14ConvText38), 1, 4096, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c56_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText39, std::size(kH14ConvText39), 1, 8192, 0x00000011, 0x00000000, 0x00000000, false},  // conv_probe_k1_c64_n64_s1_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 8, 8}, {64, 8, 8}, kH14ConvText40, std::size(kH14ConvText40), 1, 8192, 0x00000011, 0x00000002, 0x00000000, false},  // conv_probe_k1_c64_n64_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 8, 8}, {256, 8, 8}, kH14ConvText41, std::size(kH14ConvText41), 1, 32768, 0x00000011, 0x00000005, 0x00000000, false},  // env_conv_k1_c64_n256_s8_st1_g1_bias0
+    {1, 1, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText42, std::size(kH14ConvText42), 1, 4096, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c64_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText43, std::size(kH14ConvText43), 1, 8192, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText44, std::size(kH14ConvText44), 1, 16384, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText45, std::size(kH14ConvText45), 1, 32768, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k1_c64_n256_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {512, 16, 16}, kH14ConvText46, std::size(kH14ConvText46), 1, 65536, 0x00000011, 0x00000013, 0x00000000, false},  // conv_known_k1_c64_n512_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {768, 16, 16}, kH14ConvText47, std::size(kH14ConvText47), 1, 98304, 0x00000011, 0x0000001b, 0x00000000, false},  // conv_known_k1_c64_n768_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 16, 16}, {1024, 16, 16}, kH14ConvText48, std::size(kH14ConvText48), 1, 131072, 0x00000011, 0x00000024, 0x00000000, false},  // conv_known_k1_c64_n1024_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 32, 32}, {64, 32, 32}, kH14ConvText49, std::size(kH14ConvText49), 1, 8192, 0x00000011, 0x00000007, 0x00000000, false},  // conv_probe_k1_c64_n64_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 64, 64}, {64, 64, 64}, kH14ConvText50, std::size(kH14ConvText50), 1, 8192, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c64_n64_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {64, 112, 112}, {64, 112, 112}, kH14ConvText51, std::size(kH14ConvText51), 1, 8192, 0x00000011, 0x0000006b, 0x00000000, true},  // layer_conv_k1_c64_n64_s112_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {96, 16, 16}, {24, 16, 16}, kH14ConvText52, std::size(kH14ConvText52), 1, 4608, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_indexed_k1_c96_n24_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {96, 16, 16}, {32, 16, 16}, kH14ConvText53, std::size(kH14ConvText53), 1, 6144, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_indexed_k1_c96_n32_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {96, 16, 16}, {128, 16, 16}, kH14ConvText54, std::size(kH14ConvText54), 1, 24576, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_indexed_k1_c96_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText55, std::size(kH14ConvText55), 1, 16384, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText56, std::size(kH14ConvText56), 1, 32768, 0x00000011, 0x00000008, 0x00000000, false},  // conv_probe_k1_c128_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {128, 16, 16}, {256, 16, 16}, kH14ConvText57, std::size(kH14ConvText57), 1, 65536, 0x00000011, 0x0000000d, 0x00000000, false},  // conv_probe_k1_c128_n256_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {128, 16, 16}, {512, 16, 16}, kH14ConvText58, std::size(kH14ConvText58), 1, 131072, 0x00000011, 0x00000017, 0x00000000, false},  // conv_probe_k1_c128_n512_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {128, 16, 16}, {1024, 16, 16}, kH14ConvText59, std::size(kH14ConvText59), 1, 262144, 0x00000011, 0x0000002a, 0x00000000, false},  // conv_probe_k1_c128_n1024_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 1, 1}, {256, 1, 1}, kH14ConvText60, std::size(kH14ConvText60), 1, 131072, 0x00000011, 0x00000004, 0x00000000, false},  // conv_probe_k1_c256_n256_s1_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 8, 8}, {256, 8, 8}, kH14ConvText61, std::size(kH14ConvText61), 1, 131072, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_probe_k1_c256_n256_s8_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText62, std::size(kH14ConvText62), 1, 32768, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 16, 16}, {128, 16, 16}, kH14ConvText63, std::size(kH14ConvText63), 1, 65536, 0x00000011, 0x0000000d, 0x00000000, false},  // conv_probe_k1_c256_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText64, std::size(kH14ConvText64), 1, 131072, 0x00000011, 0x00000013, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 16, 16}, {512, 16, 16}, kH14ConvText65, std::size(kH14ConvText65), 1, 262144, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c256_n512_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 16, 16}, {1024, 16, 16}, kH14ConvText66, std::size(kH14ConvText66), 1, 524288, 0x00000011, 0x00000035, 0x00000000, false},  // conv_probe_k1_c256_n1024_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 32, 32}, {256, 32, 32}, kH14ConvText67, std::size(kH14ConvText67), 1, 131072, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k1_c256_n256_s32_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {256, 64, 64}, {256, 64, 64}, kH14ConvText68, std::size(kH14ConvText68), 1, 131072, 0x00000011, 0x0000007e, 0x00000000, false},  // conv_probe_k1_c256_n256_s64_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {512, 16, 16}, {64, 16, 16}, kH14ConvText69, std::size(kH14ConvText69), 1, 65536, 0x00000011, 0x00000013, 0x00000000, false},  // conv_probe_k1_c512_n64_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {512, 16, 16}, {128, 16, 16}, kH14ConvText70, std::size(kH14ConvText70), 1, 131072, 0x00000011, 0x00000017, 0x00000000, false},  // conv_probe_k1_c512_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {512, 16, 16}, {256, 16, 16}, kH14ConvText71, std::size(kH14ConvText71), 1, 262144, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c512_n256_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText72, std::size(kH14ConvText72), 1, 524288, 0x00000011, 0x0000002e, 0x00000000, false},  // conv_probe_k1_c512_n512_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {512, 16, 16}, {1024, 16, 16}, kH14ConvText73, std::size(kH14ConvText73), 1, 1048576, 0x00000011, 0x0000004c, 0x00000000, false},  // conv_probe_k1_c512_n1024_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {1024, 16, 16}, {64, 16, 16}, kH14ConvText74, std::size(kH14ConvText74), 1, 131072, 0x00000011, 0x00000024, 0x00000000, false},  // conv_probe_k1_c1024_n64_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {1024, 16, 16}, {128, 16, 16}, kH14ConvText75, std::size(kH14ConvText75), 1, 262144, 0x00000011, 0x0000002a, 0x00000000, false},  // conv_probe_k1_c1024_n128_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {1024, 16, 16}, {256, 16, 16}, kH14ConvText76, std::size(kH14ConvText76), 1, 524288, 0x00000011, 0x00000035, 0x00000000, false},  // conv_probe_k1_c1024_n256_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, false, {1024, 16, 16}, {512, 16, 16}, kH14ConvText77, std::size(kH14ConvText77), 1, 1048576, 0x00000011, 0x0000004c, 0x00000000, false},  // conv_probe_k1_c1024_n512_s16_st1_g1_bias0_same
+    {1, 1, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText78, std::size(kH14ConvText78), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n32_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText79, std::size(kH14ConvText79), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c3_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText80, std::size(kH14ConvText80), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c3_n32_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText81, std::size(kH14ConvText81), 1, 1024, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k1_c3_n32_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText82, std::size(kH14ConvText82), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n32_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText83, std::size(kH14ConvText83), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c8_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText84, std::size(kH14ConvText84), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c8_n32_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText85, std::size(kH14ConvText85), 1, 1024, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k1_c8_n32_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText86, std::size(kH14ConvText86), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c11_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText87, std::size(kH14ConvText87), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n3_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText88, std::size(kH14ConvText88), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n8_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText89, std::size(kH14ConvText89), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText90, std::size(kH14ConvText90), 1, 1536, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n24_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText91, std::size(kH14ConvText91), 1, 2048, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n32_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText92, std::size(kH14ConvText92), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n3_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText93, std::size(kH14ConvText93), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n8_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText94, std::size(kH14ConvText94), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText95, std::size(kH14ConvText95), 1, 1536, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n24_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText96, std::size(kH14ConvText96), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText97, std::size(kH14ConvText97), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n3_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText98, std::size(kH14ConvText98), 1, 512, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n8_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText99, std::size(kH14ConvText99), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n16_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText100, std::size(kH14ConvText100), 1, 1536, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c16_n24_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText101, std::size(kH14ConvText101), 1, 2048, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c16_n32_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText102, std::size(kH14ConvText102), 1, 192, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k1_c16_n3_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText103, std::size(kH14ConvText103), 1, 512, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k1_c16_n8_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText104, std::size(kH14ConvText104), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k1_c16_n16_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText105, std::size(kH14ConvText105), 1, 1536, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k1_c16_n24_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText106, std::size(kH14ConvText106), 1, 2048, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k1_c16_n32_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText107, std::size(kH14ConvText107), 1, 2048, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c24_n32_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText108, std::size(kH14ConvText108), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c24_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText109, std::size(kH14ConvText109), 1, 2048, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c24_n32_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText110, std::size(kH14ConvText110), 1, 2048, 0x00000011, 0x0000000d, 0x00000000, true},  // layer_conv_k1_c24_n32_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText111, std::size(kH14ConvText111), 1, 3072, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c32_n32_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText112, std::size(kH14ConvText112), 1, 3072, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c32_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText113, std::size(kH14ConvText113), 1, 3072, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c32_n32_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText114, std::size(kH14ConvText114), 1, 3072, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k1_c32_n32_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText115, std::size(kH14ConvText115), 1, 4096, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c56_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText116, std::size(kH14ConvText116), 1, 9216, 0x00000011, 0x00000000, 0x00000000, false},  // conv_probe_k1_c64_n64_s1_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 8, 8}, {64, 8, 8}, kH14ConvText117, std::size(kH14ConvText117), 1, 9216, 0x00000011, 0x00000002, 0x00000000, false},  // conv_probe_k1_c64_n64_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText118, std::size(kH14ConvText118), 1, 9216, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText119, std::size(kH14ConvText119), 1, 17408, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText120, std::size(kH14ConvText120), 1, 33792, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k1_c64_n256_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {512, 16, 16}, kH14ConvText121, std::size(kH14ConvText121), 1, 66560, 0x00000011, 0x00000013, 0x00000000, false},  // conv_known_k1_c64_n512_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {768, 16, 16}, kH14ConvText122, std::size(kH14ConvText122), 1, 100352, 0x00000011, 0x0000001b, 0x00000000, false},  // conv_known_k1_c64_n768_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 16, 16}, {1024, 16, 16}, kH14ConvText123, std::size(kH14ConvText123), 1, 133120, 0x00000011, 0x00000024, 0x00000000, false},  // conv_known_k1_c64_n1024_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 32, 32}, {64, 32, 32}, kH14ConvText124, std::size(kH14ConvText124), 1, 9216, 0x00000011, 0x00000007, 0x00000000, false},  // conv_probe_k1_c64_n64_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {64, 64, 64}, {64, 64, 64}, kH14ConvText125, std::size(kH14ConvText125), 1, 9216, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c64_n64_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {96, 16, 16}, {24, 16, 16}, kH14ConvText126, std::size(kH14ConvText126), 1, 5632, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_indexed_k1_c96_n24_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {96, 16, 16}, {32, 16, 16}, kH14ConvText127, std::size(kH14ConvText127), 1, 7168, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_indexed_k1_c96_n32_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {96, 16, 16}, {128, 16, 16}, kH14ConvText128, std::size(kH14ConvText128), 1, 25600, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_indexed_k1_c96_n128_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText129, std::size(kH14ConvText129), 1, 17408, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 1, 1}, {256, 1, 1}, kH14ConvText130, std::size(kH14ConvText130), 1, 132096, 0x00000011, 0x00000004, 0x00000000, false},  // conv_probe_k1_c256_n256_s1_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 8, 8}, {256, 8, 8}, kH14ConvText131, std::size(kH14ConvText131), 1, 132096, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_probe_k1_c256_n256_s8_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText132, std::size(kH14ConvText132), 1, 33792, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText133, std::size(kH14ConvText133), 1, 132096, 0x00000011, 0x00000013, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 32, 32}, {256, 32, 32}, kH14ConvText134, std::size(kH14ConvText134), 1, 132096, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k1_c256_n256_s32_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {256, 64, 64}, {256, 64, 64}, kH14ConvText135, std::size(kH14ConvText135), 1, 132096, 0x00000011, 0x0000007e, 0x00000000, false},  // conv_probe_k1_c256_n256_s64_st1_g1_bias1_same
+    {1, 1, 1, 1, true, {768, 1, 1}, {768, 1, 1}, kH14ConvText136, std::size(kH14ConvText136), 1, 1181696, 0x00000011, 0x00000025, 0x00000000, false},  // env_conv_k1_c768_n768_s1_st1_g1_bias1
+    {1, 1, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText137, std::size(kH14ConvText137), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s8_st1_g3_bias0_same
+    {1, 1, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText138, std::size(kH14ConvText138), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s16_st1_g3_bias0_same
+    {1, 1, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText139, std::size(kH14ConvText139), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s32_st1_g3_bias0_same
+    {1, 1, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText140, std::size(kH14ConvText140), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c3_n3_s64_st1_g3_bias0_same
+    {1, 1, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText141, std::size(kH14ConvText141), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s8_st1_g3_bias1_same
+    {1, 1, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText142, std::size(kH14ConvText142), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s16_st1_g3_bias1_same
+    {1, 1, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText143, std::size(kH14ConvText143), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c3_n3_s32_st1_g3_bias1_same
+    {1, 1, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText144, std::size(kH14ConvText144), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c3_n3_s64_st1_g3_bias1_same
+    {1, 1, 1, 4, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText145, std::size(kH14ConvText145), 1, 4096, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText146, std::size(kH14ConvText146), 1, 4096, 0x00000011, 0x00000005, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText147, std::size(kH14ConvText147), 1, 8192, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c64_n256_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText148, std::size(kH14ConvText148), 1, 4096, 0x00000011, 0x00000005, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText149, std::size(kH14ConvText149), 1, 8192, 0x00000011, 0x00000007, 0x00000000, false},  // conv_probe_k1_c128_n128_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText150, std::size(kH14ConvText150), 1, 8192, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText151, std::size(kH14ConvText151), 1, 32768, 0x00000011, 0x00000010, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText152, std::size(kH14ConvText152), 1, 131072, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k1_c512_n512_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText153, std::size(kH14ConvText153), 1, 524288, 0x00000011, 0x0000004c, 0x00000000, false},  // conv_probe_k1_c1024_n1024_s16_st1_g4_bias0_same
+    {1, 1, 1, 4, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText154, std::size(kH14ConvText154), 1, 4096, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText155, std::size(kH14ConvText155), 1, 8192, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText156, std::size(kH14ConvText156), 1, 12288, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c64_n256_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText157, std::size(kH14ConvText157), 1, 8192, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText158, std::size(kH14ConvText158), 1, 12288, 0x00000011, 0x00000008, 0x00000000, false},  // conv_probe_k1_c128_n128_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText159, std::size(kH14ConvText159), 1, 12288, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText160, std::size(kH14ConvText160), 1, 36864, 0x00000011, 0x00000010, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText161, std::size(kH14ConvText161), 1, 135168, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k1_c512_n512_s16_st1_g4_bias1_same
+    {1, 1, 1, 4, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText162, std::size(kH14ConvText162), 1, 528384, 0x00000011, 0x0000004c, 0x00000000, false},  // conv_probe_k1_c1024_n1024_s16_st1_g4_bias1_same
+    {1, 1, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText163, std::size(kH14ConvText163), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s8_st1_g8_bias0_same
+    {1, 1, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText164, std::size(kH14ConvText164), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s16_st1_g8_bias0_same
+    {1, 1, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText165, std::size(kH14ConvText165), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s32_st1_g8_bias0_same
+    {1, 1, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText166, std::size(kH14ConvText166), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c8_n8_s64_st1_g8_bias0_same
+    {1, 1, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText167, std::size(kH14ConvText167), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s8_st1_g8_bias1_same
+    {1, 1, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText168, std::size(kH14ConvText168), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s16_st1_g8_bias1_same
+    {1, 1, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText169, std::size(kH14ConvText169), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c8_n8_s32_st1_g8_bias1_same
+    {1, 1, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText170, std::size(kH14ConvText170), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c8_n8_s64_st1_g8_bias1_same
+    {1, 1, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText171, std::size(kH14ConvText171), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s8_st1_g16_bias0_same
+    {1, 1, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText172, std::size(kH14ConvText172), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s16_st1_g16_bias0_same
+    {1, 1, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText173, std::size(kH14ConvText173), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n16_s32_st1_g16_bias0_same
+    {1, 1, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText174, std::size(kH14ConvText174), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k1_c16_n16_s64_st1_g16_bias0_same
+    {1, 1, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText175, std::size(kH14ConvText175), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s8_st1_g16_bias1_same
+    {1, 1, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText176, std::size(kH14ConvText176), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c16_n16_s16_st1_g16_bias1_same
+    {1, 1, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText177, std::size(kH14ConvText177), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c16_n16_s32_st1_g16_bias1_same
+    {1, 1, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText178, std::size(kH14ConvText178), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k1_c16_n16_s64_st1_g16_bias1_same
+    {1, 1, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText179, std::size(kH14ConvText179), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c24_n24_s8_st1_g24_bias0_same
+    {1, 1, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText180, std::size(kH14ConvText180), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c24_n24_s16_st1_g24_bias0_same
+    {1, 1, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText181, std::size(kH14ConvText181), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c24_n24_s32_st1_g24_bias0_same
+    {1, 1, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText182, std::size(kH14ConvText182), 1, 1024, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k1_c24_n24_s64_st1_g24_bias0_same
+    {1, 1, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText183, std::size(kH14ConvText183), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c24_n24_s8_st1_g24_bias1_same
+    {1, 1, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText184, std::size(kH14ConvText184), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c24_n24_s16_st1_g24_bias1_same
+    {1, 1, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText185, std::size(kH14ConvText185), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c24_n24_s32_st1_g24_bias1_same
+    {1, 1, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText186, std::size(kH14ConvText186), 1, 1024, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k1_c24_n24_s64_st1_g24_bias1_same
+    {1, 1, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText187, std::size(kH14ConvText187), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c32_n32_s8_st1_g32_bias0_same
+    {1, 1, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText188, std::size(kH14ConvText188), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c32_n32_s16_st1_g32_bias0_same
+    {1, 1, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText189, std::size(kH14ConvText189), 1, 1024, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c32_n32_s32_st1_g32_bias0_same
+    {1, 1, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText190, std::size(kH14ConvText190), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k1_c32_n32_s64_st1_g32_bias0_same
+    {1, 1, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText191, std::size(kH14ConvText191), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k1_c32_n32_s8_st1_g32_bias1_same
+    {1, 1, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText192, std::size(kH14ConvText192), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k1_c32_n32_s16_st1_g32_bias1_same
+    {1, 1, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText193, std::size(kH14ConvText193), 1, 1024, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k1_c32_n32_s32_st1_g32_bias1_same
+    {1, 1, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText194, std::size(kH14ConvText194), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k1_c32_n32_s64_st1_g32_bias1_same
+    {1, 1, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText195, std::size(kH14ConvText195), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k1_c48_n48_s16_st1_g48_bias0_same
+    {1, 1, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText196, std::size(kH14ConvText196), 1, 1024, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st1_g64_bias0_same
+    {1, 1, 1, 64, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText197, std::size(kH14ConvText197), 1, 1024, 0x00000011, 0x00000003, 0x00000000, false},  // conv_probe_k1_c64_n64_s16_st1_g64_bias1_same
+    {1, 1, 1, 128, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText198, std::size(kH14ConvText198), 1, 1024, 0x00000011, 0x00000007, 0x00000000, false},  // conv_known_k1_c128_n128_s16_st1_g128_bias0_same
+    {1, 1, 1, 128, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText199, std::size(kH14ConvText199), 1, 1024, 0x00000011, 0x00000007, 0x00000000, false},  // conv_probe_k1_c128_n128_s16_st1_g128_bias1_same
+    {1, 1, 1, 256, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText200, std::size(kH14ConvText200), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g256_bias0_same
+    {1, 1, 1, 256, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText201, std::size(kH14ConvText201), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, false},  // conv_probe_k1_c256_n256_s16_st1_g256_bias1_same
+    {1, 1, 1, 512, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText202, std::size(kH14ConvText202), 1, 1024, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c512_n512_s16_st1_g512_bias0_same
+    {1, 1, 1, 512, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText203, std::size(kH14ConvText203), 1, 2048, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k1_c512_n512_s16_st1_g512_bias1_same
+    {1, 1, 1, 1024, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText204, std::size(kH14ConvText204), 1, 2048, 0x00000011, 0x0000003d, 0x00000000, false},  // conv_probe_k1_c1024_n1024_s16_st1_g1024_bias0_same
+    {1, 1, 1, 1024, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText205, std::size(kH14ConvText205), 1, 4096, 0x00000011, 0x0000003d, 0x00000000, false},  // conv_probe_k1_c1024_n1024_s16_st1_g1024_bias1_same
+    {1, 1, 2, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText206, std::size(kH14ConvText206), 1, 11136, 0x00000011, 0x00000000, 0x00000000, false},  // conv_probe_k1_c64_n64_s1_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {64, 8, 8}, {64, 4, 4}, kH14ConvText207, std::size(kH14ConvText207), 1, 11136, 0x00000011, 0x00000001, 0x00000000, false},  // conv_probe_k1_c64_n64_s8_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {64, 16, 16}, {64, 8, 8}, kH14ConvText208, std::size(kH14ConvText208), 1, 11136, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {64, 16, 16}, {128, 8, 8}, kH14ConvText209, std::size(kH14ConvText209), 1, 21376, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {64, 32, 32}, {64, 16, 16}, kH14ConvText210, std::size(kH14ConvText210), 1, 11136, 0x00000011, 0x00000006, 0x00000000, false},  // conv_probe_k1_c64_n64_s32_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {64, 64, 64}, {64, 32, 32}, kH14ConvText211, std::size(kH14ConvText211), 1, 11136, 0x00000011, 0x00000013, 0x00000000, false},  // conv_probe_k1_c64_n64_s64_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {128, 16, 16}, {64, 8, 8}, kH14ConvText212, std::size(kH14ConvText212), 1, 21376, 0x00000011, 0x00000005, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {128, 16, 16}, {128, 8, 8}, kH14ConvText213, std::size(kH14ConvText213), 1, 41856, 0x00000011, 0x00000006, 0x00000000, false},  // conv_probe_k1_c128_n128_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {256, 16, 16}, {64, 8, 8}, kH14ConvText214, std::size(kH14ConvText214), 1, 41856, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {256, 16, 16}, {128, 8, 8}, kH14ConvText215, std::size(kH14ConvText215), 1, 82816, 0x00000011, 0x0000000c, 0x00000000, false},  // conv_probe_k1_c256_n128_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {512, 16, 16}, {64, 8, 8}, kH14ConvText216, std::size(kH14ConvText216), 1, 82816, 0x00000011, 0x00000012, 0x00000000, false},  // conv_probe_k1_c512_n64_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {512, 16, 16}, {128, 8, 8}, kH14ConvText217, std::size(kH14ConvText217), 1, 164736, 0x00000011, 0x00000016, 0x00000000, false},  // conv_probe_k1_c512_n128_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {1024, 16, 16}, {64, 8, 8}, kH14ConvText218, std::size(kH14ConvText218), 1, 164736, 0x00000011, 0x00000024, 0x00000000, false},  // conv_probe_k1_c1024_n64_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, false, {1024, 16, 16}, {128, 8, 8}, kH14ConvText219, std::size(kH14ConvText219), 1, 328576, 0x00000011, 0x0000002a, 0x00000000, false},  // conv_probe_k1_c1024_n128_s16_st2_g1_bias0_same
+    {1, 1, 2, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText220, std::size(kH14ConvText220), 1, 11136, 0x00000011, 0x00000000, 0x00000000, false},  // conv_probe_k1_c64_n64_s1_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {64, 8, 8}, {64, 4, 4}, kH14ConvText221, std::size(kH14ConvText221), 1, 11136, 0x00000011, 0x00000001, 0x00000000, false},  // conv_probe_k1_c64_n64_s8_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {64, 16, 16}, {64, 8, 8}, kH14ConvText222, std::size(kH14ConvText222), 1, 11136, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k1_c64_n64_s16_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {64, 16, 16}, {128, 8, 8}, kH14ConvText223, std::size(kH14ConvText223), 1, 21376, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k1_c64_n128_s16_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {64, 32, 32}, {64, 16, 16}, kH14ConvText224, std::size(kH14ConvText224), 1, 11136, 0x00000011, 0x00000006, 0x00000000, false},  // conv_probe_k1_c64_n64_s32_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {64, 64, 64}, {64, 32, 32}, kH14ConvText225, std::size(kH14ConvText225), 1, 11136, 0x00000011, 0x00000013, 0x00000000, false},  // conv_probe_k1_c64_n64_s64_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {128, 16, 16}, {64, 8, 8}, kH14ConvText226, std::size(kH14ConvText226), 1, 21376, 0x00000011, 0x00000005, 0x00000000, false},  // conv_known_k1_c128_n64_s16_st2_g1_bias1_same
+    {1, 1, 2, 1, true, {256, 16, 16}, {64, 8, 8}, kH14ConvText227, std::size(kH14ConvText227), 1, 41856, 0x00000011, 0x00000009, 0x00000000, false},  // conv_known_k1_c256_n64_s16_st2_g1_bias1_same
+    {3, 3, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText228, std::size(kH14ConvText228), 1, 2048, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n32_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText229, std::size(kH14ConvText229), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c3_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText230, std::size(kH14ConvText230), 1, 2048, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c3_n32_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText231, std::size(kH14ConvText231), 1, 2048, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k3_c3_n32_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText232, std::size(kH14ConvText232), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n32_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText233, std::size(kH14ConvText233), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k3_c8_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText234, std::size(kH14ConvText234), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c8_n32_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText235, std::size(kH14ConvText235), 1, 5120, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k3_c8_n32_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText236, std::size(kH14ConvText236), 1, 7168, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c11_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText237, std::size(kH14ConvText237), 1, 960, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n3_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText238, std::size(kH14ConvText238), 1, 2560, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n8_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText239, std::size(kH14ConvText239), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText240, std::size(kH14ConvText240), 1, 7168, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n24_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText241, std::size(kH14ConvText241), 1, 9216, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n32_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText242, std::size(kH14ConvText242), 1, 960, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n3_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText243, std::size(kH14ConvText243), 1, 2560, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n8_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText244, std::size(kH14ConvText244), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n16_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText245, std::size(kH14ConvText245), 1, 7168, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n24_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText246, std::size(kH14ConvText246), 1, 9216, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText247, std::size(kH14ConvText247), 1, 960, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n3_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText248, std::size(kH14ConvText248), 1, 2560, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n8_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText249, std::size(kH14ConvText249), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c16_n16_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText250, std::size(kH14ConvText250), 1, 7168, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c16_n24_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText251, std::size(kH14ConvText251), 1, 9216, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c16_n32_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText252, std::size(kH14ConvText252), 1, 960, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k3_c16_n3_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText253, std::size(kH14ConvText253), 1, 2560, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k3_c16_n8_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText254, std::size(kH14ConvText254), 1, 5120, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k3_c16_n16_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText255, std::size(kH14ConvText255), 1, 7168, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k3_c16_n24_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText256, std::size(kH14ConvText256), 1, 9216, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k3_c16_n32_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText257, std::size(kH14ConvText257), 1, 14336, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c24_n32_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText258, std::size(kH14ConvText258), 1, 14336, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c24_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText259, std::size(kH14ConvText259), 1, 14336, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c24_n32_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText260, std::size(kH14ConvText260), 1, 14336, 0x00000011, 0x0000000d, 0x00000000, true},  // layer_conv_k3_c24_n32_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText261, std::size(kH14ConvText261), 1, 18432, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c32_n32_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText262, std::size(kH14ConvText262), 1, 18432, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c32_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText263, std::size(kH14ConvText263), 1, 18432, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k3_c32_n32_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText264, std::size(kH14ConvText264), 1, 18432, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k3_c32_n32_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText265, std::size(kH14ConvText265), 1, 27648, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c48_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText266, std::size(kH14ConvText266), 1, 32768, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c56_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 1, 1}, {64, 1, 1}, kH14ConvText267, std::size(kH14ConvText267), 1, 73728, 0x00000011, 0x00000002, 0x00000000, false},  // conv_probe_k3_c64_n64_s1_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 8, 8}, {64, 6, 6}, kH14ConvText268, std::size(kH14ConvText268), 1, 73728, 0x00000011, 0x00000003, 0x00000000, false},  // conv_probe_k3_c64_n64_s8_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 8, 8}, {64, 8, 8}, kH14ConvText269, std::size(kH14ConvText269), 1, 73728, 0x00000011, 0x00000004, 0x00000000, false},  // conv_probe_k3_c64_n64_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText270, std::size(kH14ConvText270), 1, 36864, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c64_n32_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {64, 14, 14}, kH14ConvText271, std::size(kH14ConvText271), 1, 73728, 0x00000011, 0x00000005, 0x00000000, false},  // conv_probe_k3_c64_n64_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText272, std::size(kH14ConvText272), 1, 73728, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c64_n64_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {128, 14, 14}, kH14ConvText273, std::size(kH14ConvText273), 1, 147456, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c64_n128_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText274, std::size(kH14ConvText274), 1, 147456, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k3_c64_n128_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {256, 14, 14}, kH14ConvText275, std::size(kH14ConvText275), 1, 294912, 0x00000011, 0x00000011, 0x00000000, false},  // conv_probe_k3_c64_n256_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText276, std::size(kH14ConvText276), 1, 294912, 0x00000011, 0x00000012, 0x00000000, false},  // conv_known_k3_c64_n256_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {512, 14, 14}, kH14ConvText277, std::size(kH14ConvText277), 1, 589824, 0x00000011, 0x00000020, 0x00000000, false},  // conv_probe_k3_c64_n512_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 16, 16}, {512, 16, 16}, kH14ConvText278, std::size(kH14ConvText278), 1, 589824, 0x00000011, 0x00000022, 0x00000000, false},  // conv_known_k3_c64_n512_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 16, 16}, {768, 16, 16}, kH14ConvText279, std::size(kH14ConvText279), 1, 884736, 0x00000011, 0x00000032, 0x00000000, false},  // conv_known_k3_c64_n768_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 32, 32}, {64, 30, 30}, kH14ConvText280, std::size(kH14ConvText280), 1, 73728, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c64_n64_s32_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 32, 32}, {64, 32, 32}, kH14ConvText281, std::size(kH14ConvText281), 1, 73728, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c64_n64_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {64, 64, 64}, {64, 62, 62}, kH14ConvText282, std::size(kH14ConvText282), 1, 73728, 0x00000011, 0x00000020, 0x00000000, false},  // conv_probe_k3_c64_n64_s64_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {64, 64, 64}, {64, 64, 64}, kH14ConvText283, std::size(kH14ConvText283), 1, 73728, 0x00000011, 0x00000020, 0x00000000, false},  // conv_probe_k3_c64_n64_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 16, 16}, {64, 14, 14}, kH14ConvText284, std::size(kH14ConvText284), 1, 147456, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c128_n64_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText285, std::size(kH14ConvText285), 1, 147456, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k3_c128_n64_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 16, 16}, {128, 14, 14}, kH14ConvText286, std::size(kH14ConvText286), 1, 294912, 0x00000011, 0x0000000f, 0x00000000, false},  // conv_probe_k3_c128_n128_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText287, std::size(kH14ConvText287), 1, 294912, 0x00000011, 0x00000010, 0x00000000, false},  // conv_probe_k3_c128_n128_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 16, 16}, {256, 14, 14}, kH14ConvText288, std::size(kH14ConvText288), 1, 589824, 0x00000011, 0x0000001b, 0x00000000, false},  // conv_probe_k3_c128_n256_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {128, 16, 16}, {256, 16, 16}, kH14ConvText289, std::size(kH14ConvText289), 1, 589824, 0x00000011, 0x0000001c, 0x00000000, false},  // conv_probe_k3_c128_n256_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 32, 32}, {256, 32, 32}, kH14ConvText290, std::size(kH14ConvText290), 1, 589824, 0x00000011, 0x00000028, 0x00000000, true},  // layer_conv_k3_c128_n256_s32_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 33, 33}, {256, 33, 33}, kH14ConvText291, std::size(kH14ConvText291), 1, 589824, 0x00000011, 0x00000040, 0x00000000, true},  // layer_conv_k3_c128_n256_s33_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 34, 34}, {256, 34, 34}, kH14ConvText292, std::size(kH14ConvText292), 1, 589824, 0x00000011, 0x00000042, 0x00000000, true},  // layer_conv_k3_c128_n256_s34_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 35, 35}, {256, 35, 35}, kH14ConvText293, std::size(kH14ConvText293), 1, 589824, 0x00000011, 0x00000043, 0x00000000, true},  // layer_conv_k3_c128_n256_s35_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 35, 35}, {512, 35, 35}, kH14ConvText294, std::size(kH14ConvText294), 2, 1179648, 0x00000022, 0x00000043, 0x00000000, true},  // layer_conv_indexed_k3_c128_n512_s35_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 36, 36}, {256, 36, 36}, kH14ConvText295, std::size(kH14ConvText295), 1, 589824, 0x00000011, 0x00000045, 0x00000000, true},  // layer_conv_k3_c128_n256_s36_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 40, 40}, {256, 40, 40}, kH14ConvText296, std::size(kH14ConvText296), 1, 589824, 0x00000011, 0x0000004a, 0x00000000, true},  // layer_conv_k3_c128_n256_s40_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 48, 48}, {256, 48, 48}, kH14ConvText297, std::size(kH14ConvText297), 1, 589824, 0x00000011, 0x00000056, 0x00000000, true},  // layer_conv_k3_c128_n256_s48_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {128, 64, 64}, {256, 64, 64}, kH14ConvText298, std::size(kH14ConvText298), 1, 589824, 0x00000011, 0x00000098, 0x00000000, true},  // layer_conv_k3_c128_n256_s64_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {256, 1, 1}, {256, 1, 1}, kH14ConvText299, std::size(kH14ConvText299), 1, 1179648, 0x00000011, 0x00000023, 0x00000000, false},  // conv_probe_k3_c256_n256_s1_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {256, 8, 8}, {256, 6, 6}, kH14ConvText300, std::size(kH14ConvText300), 1, 1179648, 0x00000011, 0x00000029, 0x00000000, false},  // conv_probe_k3_c256_n256_s8_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {256, 8, 8}, {256, 8, 8}, kH14ConvText301, std::size(kH14ConvText301), 1, 1179648, 0x00000011, 0x0000002a, 0x00000000, false},  // conv_probe_k3_c256_n256_s8_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {256, 16, 16}, {64, 14, 14}, kH14ConvText302, std::size(kH14ConvText302), 1, 294912, 0x00000011, 0x00000012, 0x00000000, false},  // conv_probe_k3_c256_n64_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText303, std::size(kH14ConvText303), 1, 294912, 0x00000011, 0x00000012, 0x00000000, false},  // conv_known_k3_c256_n64_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {256, 16, 16}, {128, 14, 14}, kH14ConvText304, std::size(kH14ConvText304), 1, 589824, 0x00000011, 0x0000001c, 0x00000000, false},  // conv_probe_k3_c256_n128_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {256, 16, 16}, {128, 16, 16}, kH14ConvText305, std::size(kH14ConvText305), 1, 589824, 0x00000011, 0x0000001c, 0x00000000, false},  // conv_probe_k3_c256_n128_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {512, 16, 16}, {64, 14, 14}, kH14ConvText306, std::size(kH14ConvText306), 1, 589824, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k3_c512_n64_s16_st1_g1_bias0_valid
+    {3, 3, 1, 1, false, {512, 16, 16}, {64, 16, 16}, kH14ConvText307, std::size(kH14ConvText307), 1, 589824, 0x00000011, 0x00000022, 0x00000000, false},  // conv_probe_k3_c512_n64_s16_st1_g1_bias0_same
+    {3, 3, 1, 1, false, {512, 35, 35}, {128, 35, 35}, kH14ConvText308, std::size(kH14ConvText308), 2, 1179648, 0x00000022, 0x00000055, 0x00000000, true},  // layer_conv_indexed_k3_c512_n128_s35_st1_g1_bias0_same
+    {3, 3, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText309, std::size(kH14ConvText309), 1, 2048, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n32_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText310, std::size(kH14ConvText310), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c3_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText311, std::size(kH14ConvText311), 1, 2048, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c3_n32_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText312, std::size(kH14ConvText312), 1, 2048, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k3_c3_n32_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText313, std::size(kH14ConvText313), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n32_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText314, std::size(kH14ConvText314), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k3_c8_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText315, std::size(kH14ConvText315), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c8_n32_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText316, std::size(kH14ConvText316), 1, 5120, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k3_c8_n32_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText317, std::size(kH14ConvText317), 1, 7168, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c11_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText318, std::size(kH14ConvText318), 1, 960, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n3_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText319, std::size(kH14ConvText319), 1, 2560, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n8_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText320, std::size(kH14ConvText320), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText321, std::size(kH14ConvText321), 1, 7680, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n24_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText322, std::size(kH14ConvText322), 1, 10240, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n32_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText323, std::size(kH14ConvText323), 1, 960, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n3_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText324, std::size(kH14ConvText324), 1, 2560, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n8_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText325, std::size(kH14ConvText325), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n16_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText326, std::size(kH14ConvText326), 1, 7680, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n24_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText327, std::size(kH14ConvText327), 1, 10240, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText328, std::size(kH14ConvText328), 1, 960, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n3_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText329, std::size(kH14ConvText329), 1, 2560, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n8_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText330, std::size(kH14ConvText330), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c16_n16_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText331, std::size(kH14ConvText331), 1, 7680, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c16_n24_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText332, std::size(kH14ConvText332), 1, 10240, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c16_n32_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText333, std::size(kH14ConvText333), 1, 960, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k3_c16_n3_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText334, std::size(kH14ConvText334), 1, 2560, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k3_c16_n8_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText335, std::size(kH14ConvText335), 1, 5120, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k3_c16_n16_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText336, std::size(kH14ConvText336), 1, 7680, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k3_c16_n24_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText337, std::size(kH14ConvText337), 1, 10240, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k3_c16_n32_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText338, std::size(kH14ConvText338), 1, 14336, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c24_n32_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText339, std::size(kH14ConvText339), 1, 14336, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c24_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText340, std::size(kH14ConvText340), 1, 14336, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c24_n32_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText341, std::size(kH14ConvText341), 1, 14336, 0x00000011, 0x0000000d, 0x00000000, true},  // layer_conv_k3_c24_n32_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText342, std::size(kH14ConvText342), 1, 19456, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c32_n32_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText343, std::size(kH14ConvText343), 1, 19456, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c32_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText344, std::size(kH14ConvText344), 1, 19456, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k3_c32_n32_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText345, std::size(kH14ConvText345), 1, 19456, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k3_c32_n32_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText346, std::size(kH14ConvText346), 1, 32768, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c56_n32_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 1, 1}, {64, 1, 1}, kH14ConvText347, std::size(kH14ConvText347), 1, 74752, 0x00000011, 0x00000002, 0x00000000, false},  // conv_probe_k3_c64_n64_s1_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 8, 8}, {64, 6, 6}, kH14ConvText348, std::size(kH14ConvText348), 1, 74752, 0x00000011, 0x00000003, 0x00000000, false},  // conv_probe_k3_c64_n64_s8_st1_g1_bias1_valid
+    {3, 3, 1, 1, true, {64, 8, 8}, {64, 8, 8}, kH14ConvText349, std::size(kH14ConvText349), 1, 74752, 0x00000011, 0x00000004, 0x00000000, false},  // conv_probe_k3_c64_n64_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 16, 16}, {64, 14, 14}, kH14ConvText350, std::size(kH14ConvText350), 1, 74752, 0x00000011, 0x00000005, 0x00000000, false},  // conv_probe_k3_c64_n64_s16_st1_g1_bias1_valid
+    {3, 3, 1, 1, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText351, std::size(kH14ConvText351), 1, 74752, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c64_n64_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText352, std::size(kH14ConvText352), 1, 148480, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k3_c64_n128_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText353, std::size(kH14ConvText353), 1, 295936, 0x00000011, 0x00000012, 0x00000000, false},  // conv_known_k3_c64_n256_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 16, 16}, {512, 16, 16}, kH14ConvText354, std::size(kH14ConvText354), 1, 590848, 0x00000011, 0x00000022, 0x00000000, false},  // conv_known_k3_c64_n512_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 16, 16}, {768, 16, 16}, kH14ConvText355, std::size(kH14ConvText355), 1, 886784, 0x00000011, 0x00000032, 0x00000000, false},  // conv_known_k3_c64_n768_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 32, 32}, {64, 30, 30}, kH14ConvText356, std::size(kH14ConvText356), 1, 74752, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c64_n64_s32_st1_g1_bias1_valid
+    {3, 3, 1, 1, true, {64, 32, 32}, {64, 32, 32}, kH14ConvText357, std::size(kH14ConvText357), 1, 74752, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c64_n64_s32_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {64, 64, 64}, {64, 62, 62}, kH14ConvText358, std::size(kH14ConvText358), 1, 74752, 0x00000011, 0x00000020, 0x00000000, false},  // conv_probe_k3_c64_n64_s64_st1_g1_bias1_valid
+    {3, 3, 1, 1, true, {64, 64, 64}, {64, 64, 64}, kH14ConvText359, std::size(kH14ConvText359), 1, 74752, 0x00000011, 0x00000020, 0x00000000, false},  // conv_probe_k3_c64_n64_s64_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText360, std::size(kH14ConvText360), 1, 148480, 0x00000011, 0x0000000a, 0x00000000, false},  // conv_known_k3_c128_n64_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {128, 35, 35}, {256, 35, 35}, kH14ConvText361, std::size(kH14ConvText361), 1, 590848, 0x00000011, 0x00000043, 0x00000000, true},  // layer_conv_k3_c128_n256_s35_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {128, 35, 35}, {512, 35, 35}, kH14ConvText362, std::size(kH14ConvText362), 2, 1181696, 0x00000022, 0x00000043, 0x00000000, true},  // layer_conv_indexed_k3_c128_n512_s35_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {256, 1, 1}, {256, 1, 1}, kH14ConvText363, std::size(kH14ConvText363), 1, 1180672, 0x00000011, 0x00000023, 0x00000000, false},  // conv_probe_k3_c256_n256_s1_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {256, 8, 8}, {256, 6, 6}, kH14ConvText364, std::size(kH14ConvText364), 1, 1180672, 0x00000011, 0x00000029, 0x00000000, false},  // conv_probe_k3_c256_n256_s8_st1_g1_bias1_valid
+    {3, 3, 1, 1, true, {256, 8, 8}, {256, 8, 8}, kH14ConvText365, std::size(kH14ConvText365), 1, 1180672, 0x00000011, 0x0000002a, 0x00000000, false},  // conv_probe_k3_c256_n256_s8_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText366, std::size(kH14ConvText366), 1, 295936, 0x00000011, 0x00000012, 0x00000000, false},  // conv_known_k3_c256_n64_s16_st1_g1_bias1_same
+    {3, 3, 1, 1, true, {512, 35, 35}, {128, 35, 35}, kH14ConvText367, std::size(kH14ConvText367), 2, 1181696, 0x00000022, 0x00000055, 0x00000000, true},  // layer_conv_indexed_k3_c512_n128_s35_st1_g1_bias1_same
+    {3, 3, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText368, std::size(kH14ConvText368), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s8_st1_g3_bias0_same
+    {3, 3, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText369, std::size(kH14ConvText369), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s16_st1_g3_bias0_same
+    {3, 3, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText370, std::size(kH14ConvText370), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s32_st1_g3_bias0_same
+    {3, 3, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText371, std::size(kH14ConvText371), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c3_n3_s64_st1_g3_bias0_same
+    {3, 3, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText372, std::size(kH14ConvText372), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s8_st1_g3_bias1_same
+    {3, 3, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText373, std::size(kH14ConvText373), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s16_st1_g3_bias1_same
+    {3, 3, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText374, std::size(kH14ConvText374), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c3_n3_s32_st1_g3_bias1_same
+    {3, 3, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText375, std::size(kH14ConvText375), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c3_n3_s64_st1_g3_bias1_same
+    {3, 3, 1, 4, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText376, std::size(kH14ConvText376), 1, 20480, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k3_c64_n64_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {64, 16, 16}, {128, 16, 16}, kH14ConvText377, std::size(kH14ConvText377), 1, 36864, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c64_n128_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {64, 16, 16}, {256, 16, 16}, kH14ConvText378, std::size(kH14ConvText378), 1, 73728, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_known_k3_c64_n256_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {128, 16, 16}, {64, 16, 16}, kH14ConvText379, std::size(kH14ConvText379), 1, 36864, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c128_n64_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText380, std::size(kH14ConvText380), 1, 73728, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c128_n128_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {256, 16, 16}, {64, 16, 16}, kH14ConvText381, std::size(kH14ConvText381), 1, 73728, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_known_k3_c256_n64_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText382, std::size(kH14ConvText382), 1, 294912, 0x00000011, 0x00000018, 0x00000000, false},  // conv_probe_k3_c256_n256_s16_st1_g4_bias0_same
+    {3, 3, 1, 4, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText383, std::size(kH14ConvText383), 1, 20480, 0x00000011, 0x00000004, 0x00000000, false},  // conv_known_k3_c64_n64_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {64, 16, 16}, {128, 16, 16}, kH14ConvText384, std::size(kH14ConvText384), 1, 40960, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c64_n128_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {64, 16, 16}, {256, 16, 16}, kH14ConvText385, std::size(kH14ConvText385), 1, 77824, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_known_k3_c64_n256_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {128, 16, 16}, {64, 16, 16}, kH14ConvText386, std::size(kH14ConvText386), 1, 40960, 0x00000011, 0x00000006, 0x00000000, false},  // conv_known_k3_c128_n64_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText387, std::size(kH14ConvText387), 1, 77824, 0x00000011, 0x00000009, 0x00000000, false},  // conv_probe_k3_c128_n128_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {256, 16, 16}, {64, 16, 16}, kH14ConvText388, std::size(kH14ConvText388), 1, 77824, 0x00000011, 0x0000000b, 0x00000000, false},  // conv_known_k3_c256_n64_s16_st1_g4_bias1_same
+    {3, 3, 1, 4, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText389, std::size(kH14ConvText389), 1, 299008, 0x00000011, 0x00000018, 0x00000000, false},  // conv_probe_k3_c256_n256_s16_st1_g4_bias1_same
+    {3, 3, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText390, std::size(kH14ConvText390), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s8_st1_g8_bias0_same
+    {3, 3, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText391, std::size(kH14ConvText391), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s16_st1_g8_bias0_same
+    {3, 3, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText392, std::size(kH14ConvText392), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s32_st1_g8_bias0_same
+    {3, 3, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText393, std::size(kH14ConvText393), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c8_n8_s64_st1_g8_bias0_same
+    {3, 3, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText394, std::size(kH14ConvText394), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s8_st1_g8_bias1_same
+    {3, 3, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText395, std::size(kH14ConvText395), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s16_st1_g8_bias1_same
+    {3, 3, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText396, std::size(kH14ConvText396), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c8_n8_s32_st1_g8_bias1_same
+    {3, 3, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText397, std::size(kH14ConvText397), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c8_n8_s64_st1_g8_bias1_same
+    {3, 3, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText398, std::size(kH14ConvText398), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s8_st1_g16_bias0_same
+    {3, 3, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText399, std::size(kH14ConvText399), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s16_st1_g16_bias0_same
+    {3, 3, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText400, std::size(kH14ConvText400), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n16_s32_st1_g16_bias0_same
+    {3, 3, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText401, std::size(kH14ConvText401), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k3_c16_n16_s64_st1_g16_bias0_same
+    {3, 3, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText402, std::size(kH14ConvText402), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s8_st1_g16_bias1_same
+    {3, 3, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText403, std::size(kH14ConvText403), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c16_n16_s16_st1_g16_bias1_same
+    {3, 3, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText404, std::size(kH14ConvText404), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c16_n16_s32_st1_g16_bias1_same
+    {3, 3, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText405, std::size(kH14ConvText405), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k3_c16_n16_s64_st1_g16_bias1_same
+    {3, 3, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText406, std::size(kH14ConvText406), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c24_n24_s8_st1_g24_bias0_same
+    {3, 3, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText407, std::size(kH14ConvText407), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c24_n24_s16_st1_g24_bias0_same
+    {3, 3, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText408, std::size(kH14ConvText408), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c24_n24_s32_st1_g24_bias0_same
+    {3, 3, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText409, std::size(kH14ConvText409), 1, 1024, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k3_c24_n24_s64_st1_g24_bias0_same
+    {3, 3, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText410, std::size(kH14ConvText410), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c24_n24_s8_st1_g24_bias1_same
+    {3, 3, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText411, std::size(kH14ConvText411), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c24_n24_s16_st1_g24_bias1_same
+    {3, 3, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText412, std::size(kH14ConvText412), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c24_n24_s32_st1_g24_bias1_same
+    {3, 3, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText413, std::size(kH14ConvText413), 1, 1024, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k3_c24_n24_s64_st1_g24_bias1_same
+    {3, 3, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText414, std::size(kH14ConvText414), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c32_n32_s8_st1_g32_bias0_same
+    {3, 3, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText415, std::size(kH14ConvText415), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c32_n32_s16_st1_g32_bias0_same
+    {3, 3, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText416, std::size(kH14ConvText416), 1, 1024, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c32_n32_s32_st1_g32_bias0_same
+    {3, 3, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText417, std::size(kH14ConvText417), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k3_c32_n32_s64_st1_g32_bias0_same
+    {3, 3, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText418, std::size(kH14ConvText418), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k3_c32_n32_s8_st1_g32_bias1_same
+    {3, 3, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText419, std::size(kH14ConvText419), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k3_c32_n32_s16_st1_g32_bias1_same
+    {3, 3, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText420, std::size(kH14ConvText420), 1, 1024, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k3_c32_n32_s32_st1_g32_bias1_same
+    {3, 3, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText421, std::size(kH14ConvText421), 1, 1024, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k3_c32_n32_s64_st1_g32_bias1_same
+    {3, 3, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText422, std::size(kH14ConvText422), 1, 1024, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k3_c48_n48_s16_st1_g48_bias0_same
+    {3, 3, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText423, std::size(kH14ConvText423), 1, 2048, 0x00000011, 0x00000003, 0x00000000, false},  // conv_known_k3_c64_n64_s16_st1_g64_bias0_same
+    {3, 3, 1, 64, false, {64, 112, 112}, {64, 112, 112}, kH14ConvText424, std::size(kH14ConvText424), 1, 2048, 0x00000011, 0x0000006b, 0x00000000, true},  // layer_conv_k3_c64_n64_s112_st1_g64_bias0_same
+    {3, 3, 1, 64, true, {64, 16, 16}, {64, 16, 16}, kH14ConvText425, std::size(kH14ConvText425), 1, 2048, 0x00000011, 0x00000003, 0x00000000, false},  // conv_probe_k3_c64_n64_s16_st1_g64_bias1_same
+    {3, 3, 1, 128, false, {128, 16, 16}, {128, 16, 16}, kH14ConvText426, std::size(kH14ConvText426), 1, 3072, 0x00000011, 0x00000007, 0x00000000, false},  // conv_known_k3_c128_n128_s16_st1_g128_bias0_same
+    {3, 3, 1, 128, true, {128, 16, 16}, {128, 16, 16}, kH14ConvText427, std::size(kH14ConvText427), 1, 3072, 0x00000011, 0x00000007, 0x00000000, false},  // conv_probe_k3_c128_n128_s16_st1_g128_bias1_same
+    {3, 3, 1, 256, false, {256, 16, 16}, {256, 16, 16}, kH14ConvText428, std::size(kH14ConvText428), 1, 5120, 0x00000011, 0x0000000f, 0x00000000, false},  // conv_probe_k3_c256_n256_s16_st1_g256_bias0_same
+    {3, 3, 1, 256, true, {256, 16, 16}, {256, 16, 16}, kH14ConvText429, std::size(kH14ConvText429), 1, 5120, 0x00000011, 0x0000000f, 0x00000000, false},  // conv_probe_k3_c256_n256_s16_st1_g256_bias1_same
+    {3, 3, 1, 512, false, {512, 16, 16}, {512, 16, 16}, kH14ConvText430, std::size(kH14ConvText430), 1, 9216, 0x00000011, 0x0000001e, 0x00000000, false},  // conv_probe_k3_c512_n512_s16_st1_g512_bias0_same
+    {3, 3, 1, 512, true, {512, 16, 16}, {512, 16, 16}, kH14ConvText431, std::size(kH14ConvText431), 1, 10240, 0x00000011, 0x0000001f, 0x00000000, false},  // conv_probe_k3_c512_n512_s16_st1_g512_bias1_same
+    {3, 3, 1, 1024, false, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText432, std::size(kH14ConvText432), 1, 18432, 0x00000011, 0x0000003d, 0x00000000, false},  // conv_probe_k3_c1024_n1024_s16_st1_g1024_bias0_same
+    {3, 3, 1, 1024, true, {1024, 16, 16}, {1024, 16, 16}, kH14ConvText433, std::size(kH14ConvText433), 1, 20480, 0x00000011, 0x0000003e, 0x00000000, false},  // conv_probe_k3_c1024_n1024_s16_st1_g1024_bias1_same
+    {5, 5, 1, 1, false, {3, 8, 8}, {32, 8, 8}, kH14ConvText434, std::size(kH14ConvText434), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n32_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {3, 16, 16}, {32, 16, 16}, kH14ConvText435, std::size(kH14ConvText435), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c3_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {3, 32, 32}, {32, 32, 32}, kH14ConvText436, std::size(kH14ConvText436), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c3_n32_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {3, 64, 64}, {32, 64, 64}, kH14ConvText437, std::size(kH14ConvText437), 1, 5120, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k5_c3_n32_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {8, 8, 8}, {32, 8, 8}, kH14ConvText438, std::size(kH14ConvText438), 1, 13312, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n32_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {8, 16, 16}, {32, 16, 16}, kH14ConvText439, std::size(kH14ConvText439), 1, 13312, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c8_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {8, 32, 32}, {32, 32, 32}, kH14ConvText440, std::size(kH14ConvText440), 1, 13312, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c8_n32_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {8, 64, 64}, {32, 64, 64}, kH14ConvText441, std::size(kH14ConvText441), 1, 13312, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k5_c8_n32_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {11, 16, 16}, {32, 16, 16}, kH14ConvText442, std::size(kH14ConvText442), 1, 18432, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c11_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 8, 8}, {3, 8, 8}, kH14ConvText443, std::size(kH14ConvText443), 1, 2496, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n3_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 8, 8}, {8, 8, 8}, kH14ConvText444, std::size(kH14ConvText444), 1, 6656, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n8_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText445, std::size(kH14ConvText445), 1, 13312, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 8, 8}, {24, 8, 8}, kH14ConvText446, std::size(kH14ConvText446), 1, 19456, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n24_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 8, 8}, {32, 8, 8}, kH14ConvText447, std::size(kH14ConvText447), 1, 25600, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n32_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 16, 16}, {3, 16, 16}, kH14ConvText448, std::size(kH14ConvText448), 1, 2496, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c16_n3_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 16, 16}, {8, 16, 16}, kH14ConvText449, std::size(kH14ConvText449), 1, 6656, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c16_n8_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText450, std::size(kH14ConvText450), 1, 13312, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n16_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 16, 16}, {24, 16, 16}, kH14ConvText451, std::size(kH14ConvText451), 1, 19456, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c16_n24_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 16, 16}, {32, 16, 16}, kH14ConvText452, std::size(kH14ConvText452), 1, 25600, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 32, 32}, {3, 32, 32}, kH14ConvText453, std::size(kH14ConvText453), 1, 2496, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n3_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 32, 32}, {8, 32, 32}, kH14ConvText454, std::size(kH14ConvText454), 1, 6656, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n8_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText455, std::size(kH14ConvText455), 1, 13312, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n16_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 32, 32}, {24, 32, 32}, kH14ConvText456, std::size(kH14ConvText456), 1, 19456, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n24_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 32, 32}, {32, 32, 32}, kH14ConvText457, std::size(kH14ConvText457), 1, 25600, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c16_n32_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 64, 64}, {3, 64, 64}, kH14ConvText458, std::size(kH14ConvText458), 1, 2496, 0x00000011, 0x00000006, 0x00000000, true},  // layer_conv_k5_c16_n3_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 64, 64}, {8, 64, 64}, kH14ConvText459, std::size(kH14ConvText459), 1, 6656, 0x00000011, 0x00000006, 0x00000000, true},  // layer_conv_k5_c16_n8_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText460, std::size(kH14ConvText460), 1, 13312, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k5_c16_n16_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 64, 64}, {24, 64, 64}, kH14ConvText461, std::size(kH14ConvText461), 1, 19456, 0x00000011, 0x0000000a, 0x00000000, true},  // layer_conv_k5_c16_n24_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {16, 64, 64}, {32, 64, 64}, kH14ConvText462, std::size(kH14ConvText462), 1, 25600, 0x00000011, 0x0000000c, 0x00000000, true},  // layer_conv_k5_c16_n32_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {24, 8, 8}, {32, 8, 8}, kH14ConvText463, std::size(kH14ConvText463), 1, 38912, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c24_n32_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {24, 16, 16}, {32, 16, 16}, kH14ConvText464, std::size(kH14ConvText464), 1, 38912, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_indexed_k5_c24_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {24, 32, 32}, {32, 32, 32}, kH14ConvText465, std::size(kH14ConvText465), 1, 38912, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k5_c24_n32_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {24, 64, 64}, {32, 64, 64}, kH14ConvText466, std::size(kH14ConvText466), 1, 38912, 0x00000011, 0x0000000e, 0x00000000, true},  // layer_conv_k5_c24_n32_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText467, std::size(kH14ConvText467), 1, 51200, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c32_n32_s8_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText468, std::size(kH14ConvText468), 1, 51200, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_indexed_k5_c32_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText469, std::size(kH14ConvText469), 1, 51200, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k5_c32_n32_s32_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText470, std::size(kH14ConvText470), 1, 51200, 0x00000011, 0x00000010, 0x00000000, true},  // layer_conv_k5_c32_n32_s64_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {48, 16, 16}, {32, 16, 16}, kH14ConvText471, std::size(kH14ConvText471), 1, 76800, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k5_c48_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {56, 16, 16}, {32, 16, 16}, kH14ConvText472, std::size(kH14ConvText472), 1, 90112, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_indexed_k5_c56_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, false, {64, 16, 16}, {32, 16, 16}, kH14ConvText473, std::size(kH14ConvText473), 1, 102400, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k5_c64_n32_s16_st1_g1_bias0_same
+    {5, 5, 1, 1, true, {3, 8, 8}, {32, 8, 8}, kH14ConvText474, std::size(kH14ConvText474), 1, 5120, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n32_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {3, 16, 16}, {32, 16, 16}, kH14ConvText475, std::size(kH14ConvText475), 1, 5120, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c3_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {3, 32, 32}, {32, 32, 32}, kH14ConvText476, std::size(kH14ConvText476), 1, 5120, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c3_n32_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {3, 64, 64}, {32, 64, 64}, kH14ConvText477, std::size(kH14ConvText477), 1, 5120, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k5_c3_n32_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {8, 8, 8}, {32, 8, 8}, kH14ConvText478, std::size(kH14ConvText478), 1, 13312, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n32_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {8, 16, 16}, {32, 16, 16}, kH14ConvText479, std::size(kH14ConvText479), 1, 13312, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c8_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {8, 32, 32}, {32, 32, 32}, kH14ConvText480, std::size(kH14ConvText480), 1, 13312, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c8_n32_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {8, 64, 64}, {32, 64, 64}, kH14ConvText481, std::size(kH14ConvText481), 1, 13312, 0x00000011, 0x00000009, 0x00000000, true},  // layer_conv_k5_c8_n32_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {11, 16, 16}, {32, 16, 16}, kH14ConvText482, std::size(kH14ConvText482), 1, 18432, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c11_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 8, 8}, {3, 8, 8}, kH14ConvText483, std::size(kH14ConvText483), 1, 2496, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n3_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 8, 8}, {8, 8, 8}, kH14ConvText484, std::size(kH14ConvText484), 1, 6656, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n8_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText485, std::size(kH14ConvText485), 1, 13312, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 8, 8}, {24, 8, 8}, kH14ConvText486, std::size(kH14ConvText486), 1, 19968, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n24_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 8, 8}, {32, 8, 8}, kH14ConvText487, std::size(kH14ConvText487), 1, 26624, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n32_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 16, 16}, {3, 16, 16}, kH14ConvText488, std::size(kH14ConvText488), 1, 2496, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c16_n3_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 16, 16}, {8, 16, 16}, kH14ConvText489, std::size(kH14ConvText489), 1, 6656, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c16_n8_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText490, std::size(kH14ConvText490), 1, 13312, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n16_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 16, 16}, {24, 16, 16}, kH14ConvText491, std::size(kH14ConvText491), 1, 19968, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c16_n24_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 16, 16}, {32, 16, 16}, kH14ConvText492, std::size(kH14ConvText492), 1, 26624, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 32, 32}, {3, 32, 32}, kH14ConvText493, std::size(kH14ConvText493), 1, 2496, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n3_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 32, 32}, {8, 32, 32}, kH14ConvText494, std::size(kH14ConvText494), 1, 6656, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n8_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText495, std::size(kH14ConvText495), 1, 13312, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n16_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 32, 32}, {24, 32, 32}, kH14ConvText496, std::size(kH14ConvText496), 1, 19968, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c16_n24_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 32, 32}, {32, 32, 32}, kH14ConvText497, std::size(kH14ConvText497), 1, 26624, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c16_n32_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 64, 64}, {3, 64, 64}, kH14ConvText498, std::size(kH14ConvText498), 1, 2496, 0x00000011, 0x00000006, 0x00000000, true},  // layer_conv_k5_c16_n3_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 64, 64}, {8, 64, 64}, kH14ConvText499, std::size(kH14ConvText499), 1, 6656, 0x00000011, 0x00000006, 0x00000000, true},  // layer_conv_k5_c16_n8_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText500, std::size(kH14ConvText500), 1, 13312, 0x00000011, 0x00000008, 0x00000000, true},  // layer_conv_k5_c16_n16_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 64, 64}, {24, 64, 64}, kH14ConvText501, std::size(kH14ConvText501), 1, 19968, 0x00000011, 0x0000000a, 0x00000000, true},  // layer_conv_k5_c16_n24_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {16, 64, 64}, {32, 64, 64}, kH14ConvText502, std::size(kH14ConvText502), 1, 26624, 0x00000011, 0x0000000c, 0x00000000, true},  // layer_conv_k5_c16_n32_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {24, 8, 8}, {32, 8, 8}, kH14ConvText503, std::size(kH14ConvText503), 1, 38912, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c24_n32_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {24, 16, 16}, {32, 16, 16}, kH14ConvText504, std::size(kH14ConvText504), 1, 38912, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_indexed_k5_c24_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {24, 32, 32}, {32, 32, 32}, kH14ConvText505, std::size(kH14ConvText505), 1, 38912, 0x00000011, 0x00000004, 0x00000000, true},  // layer_conv_k5_c24_n32_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {24, 64, 64}, {32, 64, 64}, kH14ConvText506, std::size(kH14ConvText506), 1, 38912, 0x00000011, 0x0000000e, 0x00000000, true},  // layer_conv_k5_c24_n32_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText507, std::size(kH14ConvText507), 1, 52224, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c32_n32_s8_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText508, std::size(kH14ConvText508), 1, 52224, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_indexed_k5_c32_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText509, std::size(kH14ConvText509), 1, 52224, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_k5_c32_n32_s32_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText510, std::size(kH14ConvText510), 1, 52224, 0x00000011, 0x00000010, 0x00000000, true},  // layer_conv_k5_c32_n32_s64_st1_g1_bias1_same
+    {5, 5, 1, 1, true, {56, 16, 16}, {32, 16, 16}, kH14ConvText511, std::size(kH14ConvText511), 1, 90112, 0x00000011, 0x00000005, 0x00000000, true},  // layer_conv_indexed_k5_c56_n32_s16_st1_g1_bias1_same
+    {5, 5, 1, 3, false, {3, 8, 8}, {3, 8, 8}, kH14ConvText512, std::size(kH14ConvText512), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s8_st1_g3_bias0_same
+    {5, 5, 1, 3, false, {3, 16, 16}, {3, 16, 16}, kH14ConvText513, std::size(kH14ConvText513), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s16_st1_g3_bias0_same
+    {5, 5, 1, 3, false, {3, 32, 32}, {3, 32, 32}, kH14ConvText514, std::size(kH14ConvText514), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s32_st1_g3_bias0_same
+    {5, 5, 1, 3, false, {3, 64, 64}, {3, 64, 64}, kH14ConvText515, std::size(kH14ConvText515), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c3_n3_s64_st1_g3_bias0_same
+    {5, 5, 1, 3, true, {3, 8, 8}, {3, 8, 8}, kH14ConvText516, std::size(kH14ConvText516), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s8_st1_g3_bias1_same
+    {5, 5, 1, 3, true, {3, 16, 16}, {3, 16, 16}, kH14ConvText517, std::size(kH14ConvText517), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s16_st1_g3_bias1_same
+    {5, 5, 1, 3, true, {3, 32, 32}, {3, 32, 32}, kH14ConvText518, std::size(kH14ConvText518), 1, 192, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c3_n3_s32_st1_g3_bias1_same
+    {5, 5, 1, 3, true, {3, 64, 64}, {3, 64, 64}, kH14ConvText519, std::size(kH14ConvText519), 1, 192, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c3_n3_s64_st1_g3_bias1_same
+    {5, 5, 1, 8, false, {8, 8, 8}, {8, 8, 8}, kH14ConvText520, std::size(kH14ConvText520), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n8_s8_st1_g8_bias0_same
+    {5, 5, 1, 8, false, {8, 16, 16}, {8, 16, 16}, kH14ConvText521, std::size(kH14ConvText521), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c8_n8_s16_st1_g8_bias0_same
+    {5, 5, 1, 8, false, {8, 32, 32}, {8, 32, 32}, kH14ConvText522, std::size(kH14ConvText522), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n8_s32_st1_g8_bias0_same
+    {5, 5, 1, 8, false, {8, 64, 64}, {8, 64, 64}, kH14ConvText523, std::size(kH14ConvText523), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c8_n8_s64_st1_g8_bias0_same
+    {5, 5, 1, 8, true, {8, 8, 8}, {8, 8, 8}, kH14ConvText524, std::size(kH14ConvText524), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n8_s8_st1_g8_bias1_same
+    {5, 5, 1, 8, true, {8, 16, 16}, {8, 16, 16}, kH14ConvText525, std::size(kH14ConvText525), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_indexed_k5_c8_n8_s16_st1_g8_bias1_same
+    {5, 5, 1, 8, true, {8, 32, 32}, {8, 32, 32}, kH14ConvText526, std::size(kH14ConvText526), 1, 512, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c8_n8_s32_st1_g8_bias1_same
+    {5, 5, 1, 8, true, {8, 64, 64}, {8, 64, 64}, kH14ConvText527, std::size(kH14ConvText527), 1, 512, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c8_n8_s64_st1_g8_bias1_same
+    {5, 5, 1, 16, false, {16, 8, 8}, {16, 8, 8}, kH14ConvText528, std::size(kH14ConvText528), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s8_st1_g16_bias0_same
+    {5, 5, 1, 16, false, {16, 16, 16}, {16, 16, 16}, kH14ConvText529, std::size(kH14ConvText529), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s16_st1_g16_bias0_same
+    {5, 5, 1, 16, false, {16, 32, 32}, {16, 32, 32}, kH14ConvText530, std::size(kH14ConvText530), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n16_s32_st1_g16_bias0_same
+    {5, 5, 1, 16, false, {16, 64, 64}, {16, 64, 64}, kH14ConvText531, std::size(kH14ConvText531), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k5_c16_n16_s64_st1_g16_bias0_same
+    {5, 5, 1, 16, true, {16, 8, 8}, {16, 8, 8}, kH14ConvText532, std::size(kH14ConvText532), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s8_st1_g16_bias1_same
+    {5, 5, 1, 16, true, {16, 16, 16}, {16, 16, 16}, kH14ConvText533, std::size(kH14ConvText533), 1, 1024, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c16_n16_s16_st1_g16_bias1_same
+    {5, 5, 1, 16, true, {16, 32, 32}, {16, 32, 32}, kH14ConvText534, std::size(kH14ConvText534), 1, 1024, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c16_n16_s32_st1_g16_bias1_same
+    {5, 5, 1, 16, true, {16, 64, 64}, {16, 64, 64}, kH14ConvText535, std::size(kH14ConvText535), 1, 1024, 0x00000011, 0x00000007, 0x00000000, true},  // layer_conv_k5_c16_n16_s64_st1_g16_bias1_same
+    {5, 5, 1, 24, false, {24, 8, 8}, {24, 8, 8}, kH14ConvText536, std::size(kH14ConvText536), 1, 1536, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c24_n24_s8_st1_g24_bias0_same
+    {5, 5, 1, 24, false, {24, 16, 16}, {24, 16, 16}, kH14ConvText537, std::size(kH14ConvText537), 1, 1536, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c24_n24_s16_st1_g24_bias0_same
+    {5, 5, 1, 24, false, {24, 32, 32}, {24, 32, 32}, kH14ConvText538, std::size(kH14ConvText538), 1, 1536, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c24_n24_s32_st1_g24_bias0_same
+    {5, 5, 1, 24, false, {24, 64, 64}, {24, 64, 64}, kH14ConvText539, std::size(kH14ConvText539), 1, 1536, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k5_c24_n24_s64_st1_g24_bias0_same
+    {5, 5, 1, 24, true, {24, 8, 8}, {24, 8, 8}, kH14ConvText540, std::size(kH14ConvText540), 1, 1536, 0x00000011, 0x00000000, 0x00000000, true},  // layer_conv_k5_c24_n24_s8_st1_g24_bias1_same
+    {5, 5, 1, 24, true, {24, 16, 16}, {24, 16, 16}, kH14ConvText541, std::size(kH14ConvText541), 1, 1536, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_indexed_k5_c24_n24_s16_st1_g24_bias1_same
+    {5, 5, 1, 24, true, {24, 32, 32}, {24, 32, 32}, kH14ConvText542, std::size(kH14ConvText542), 1, 1536, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c24_n24_s32_st1_g24_bias1_same
+    {5, 5, 1, 24, true, {24, 64, 64}, {24, 64, 64}, kH14ConvText543, std::size(kH14ConvText543), 1, 1536, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k5_c24_n24_s64_st1_g24_bias1_same
+    {5, 5, 1, 32, false, {32, 8, 8}, {32, 8, 8}, kH14ConvText544, std::size(kH14ConvText544), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c32_n32_s8_st1_g32_bias0_same
+    {5, 5, 1, 32, false, {32, 16, 16}, {32, 16, 16}, kH14ConvText545, std::size(kH14ConvText545), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c32_n32_s16_st1_g32_bias0_same
+    {5, 5, 1, 32, false, {32, 32, 32}, {32, 32, 32}, kH14ConvText546, std::size(kH14ConvText546), 1, 2048, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c32_n32_s32_st1_g32_bias0_same
+    {5, 5, 1, 32, false, {32, 64, 64}, {32, 64, 64}, kH14ConvText547, std::size(kH14ConvText547), 1, 2048, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k5_c32_n32_s64_st1_g32_bias0_same
+    {5, 5, 1, 32, true, {32, 8, 8}, {32, 8, 8}, kH14ConvText548, std::size(kH14ConvText548), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c32_n32_s8_st1_g32_bias1_same
+    {5, 5, 1, 32, true, {32, 16, 16}, {32, 16, 16}, kH14ConvText549, std::size(kH14ConvText549), 1, 2048, 0x00000011, 0x00000001, 0x00000000, true},  // layer_conv_k5_c32_n32_s16_st1_g32_bias1_same
+    {5, 5, 1, 32, true, {32, 32, 32}, {32, 32, 32}, kH14ConvText550, std::size(kH14ConvText550), 1, 2048, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c32_n32_s32_st1_g32_bias1_same
+    {5, 5, 1, 32, true, {32, 64, 64}, {32, 64, 64}, kH14ConvText551, std::size(kH14ConvText551), 1, 2048, 0x00000011, 0x0000000f, 0x00000000, true},  // layer_conv_k5_c32_n32_s64_st1_g32_bias1_same
+    {5, 5, 1, 48, false, {48, 16, 16}, {48, 16, 16}, kH14ConvText552, std::size(kH14ConvText552), 1, 3072, 0x00000011, 0x00000002, 0x00000000, true},  // layer_conv_k5_c48_n48_s16_st1_g48_bias0_same
+    {5, 5, 1, 64, false, {64, 16, 16}, {64, 16, 16}, kH14ConvText553, std::size(kH14ConvText553), 1, 4096, 0x00000011, 0x00000003, 0x00000000, true},  // layer_conv_k5_c64_n64_s16_st1_g64_bias0_same
+    {5, 5, 1, 96, false, {96, 32, 32}, {96, 32, 32}, kH14ConvText554, std::size(kH14ConvText554), 1, 5120, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k5_c96_n96_s32_st1_g96_bias0_same
+    {5, 5, 1, 96, true, {96, 32, 32}, {96, 32, 32}, kH14ConvText555, std::size(kH14ConvText555), 1, 5120, 0x00000011, 0x0000000b, 0x00000000, true},  // layer_conv_k5_c96_n96_s32_st1_g96_bias1_same
 };

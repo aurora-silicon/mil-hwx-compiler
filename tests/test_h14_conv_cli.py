@@ -121,6 +121,10 @@ def main():
     for directory in ('h14', 'h14-mobile'):
         for path in sorted((ROOT / 'research/oracles' / directory).glob('*.json')):
             r = json.loads(path.read_text())
+            # Native schedules have their own exact task/constant tests. They
+            # are not invariant-word bases for this earlier formula campaign.
+            if r.get('case', '').startswith('layer_conv'):
+                continue
             if r.get('error') is None and r.get('parameters', {}).get('weight_shape'):
                 r['_original'] = directory == 'h14'
                 records.append(r)

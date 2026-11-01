@@ -109,6 +109,7 @@ struct OracleConvTemplate {
     std::uint32_t programRecordCount;
     std::uint32_t unresolvedDescriptorWord;
     std::uint32_t scratchDescriptorWord;
+    bool nativeLayer;
 };
 
 #include "H14ElementwiseTemplates.inc"
@@ -922,6 +923,11 @@ std::vector<std::uint8_t> packConvStrided(std::uint32_t reduction,
 } // namespace
 
 bool supportsConvParity(ConvShape shape) { return convTemplate(shape); }
+
+bool isNativeConv(ConvShape shape) {
+    const auto *source = convTemplate(shape);
+    return source && source->nativeLayer;
+}
 
 std::vector<std::uint8_t> packConvWeights(ConvShape shape,
                                           const std::uint8_t *weights,

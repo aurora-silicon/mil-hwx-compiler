@@ -844,7 +844,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     }
     const BOOL linkedSchedule = h14 && [schedule isEqualToString:@"linked"];
     if (linkedSchedule && hwx)
-        return reject(diagnostics, @"H14 linked programs currently require ANEC", nil, @"h14.linked-outside-envelope");
+        return reject(diagnostics, @"H14 linked programs require ANEC; HWX descriptor cost fields and native resource mapping remain unresolved", nil, @"h14.linked-outside-envelope");
     if (![schedule isEqualToString:@"per-op"] && !linkedSchedule &&
         (!h14 || ![schedule isEqualToString:@"chain"]))
         return reject(diagnostics, h14
@@ -882,7 +882,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     if (!sourceOperations.count)
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires at least one operation", target.name], nil, unsupported);
-    BOOL allConv = h14, hasConv = NO, hasRelu = NO, unknownConv = NO, allGenericConv = YES;
+    BOOL allConv = h14, hasConv = NO, hasRelu = NO, unknownConv = NO, allGenericConv = YES, nativeConv = NO;
     for (ANEGraphOperation *op in sourceOperations) {
         const BOOL conv = [op.operationName isEqualToString:@"conv"];
         const BOOL relu = [op.operationName isEqualToString:@"relu"];
@@ -890,12 +890,13 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         hasConv = hasConv || conv; hasRelu = hasRelu || relu;
         H14ConvPlan plan{};
         if (conv && !convParityPlan(op, &plan)) unknownConv = YES;
+        else if (conv && ane::h14::isNativeConv(plan.shape)) nativeConv = YES;
         if (conv && !convParityPlan(op, &plan, YES)) allGenericConv = NO;
     }
     const BOOL linkedConv = [schedule isEqualToString:@"linked"];
     const char *forceGeneric = std::getenv("MILHWXC_H14_CONV_GENERIC");
     if (allConv && hasConv &&
-        ((allGenericConv && (linkedConv || hasRelu || unknownConv)) ||
+        ((allGenericConv && ((linkedConv && !nativeConv) || hasRelu || unknownConv)) ||
          (forceGeneric && std::string(forceGeneric) != "0")))
         return emitConvGraph(function, sourceOperations, modelRoot, directory,
                              format, linkedConv, diagnostics, error);

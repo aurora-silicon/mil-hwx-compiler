@@ -139,5 +139,8 @@ int main() {
     assert(!convGenericRefusal(invalid).empty());
     invalid={1,1,2,1,false,{64,16,16},{144,8,8}};
     assert(!convGenericRefusal(invalid).empty());
+    ConvShape camera{3,3,1,1,true,{128,35,35},{512,35,35}};
+    assert(isNativeConv(camera));
+    assert(!convGenericRefusal(camera).empty());
     std::cout << "H14 formula/linked encoding: PASS\n";
 }

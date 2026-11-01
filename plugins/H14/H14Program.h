@@ -153,6 +153,8 @@ bool supportsNormParity(NormOperation operation, NormShape shape);
 Program encodeNormParity(NormOperation operation, NormShape shape);
 /// True when the decoded Apple corpus covers this convolution as one program.
 bool supportsConvParity(ConvShape shape);
+/// Exact native-layer points retain their decoded schedules when linked.
+bool isNativeConv(ConvShape shape);
 /// Apple's constant-section layout for a convolution weight. `weights` is the
 /// MIL `[Cout, Cin / groups, kh, kw]` row-major fp16 constant, exactly the
 /// bytes the blob resolves to, and `bias` holds one fp16 value per output

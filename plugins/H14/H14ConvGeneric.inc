@@ -26,6 +26,9 @@ int padding(const ConvShape &s) {
 const OracleConvTemplate *familyBase(const ConvShape &s) {
     const OracleConvTemplate *best = nullptr;
     for (const auto &c : kConvTasks) {
+        // Native small-channel/camera schedules are not invariant-word bases
+        // for the older formula family, even where their shapes overlap it.
+        if (c.nativeLayer) continue;
         ConvShape probe{c.kernel, c.kernelWidth, c.stride, c.groups, c.bias,
                         c.input, c.output};
         if (c.taskCount != 1 || c.kernel != s.kernel ||
@@ -149,6 +152,11 @@ std::string convGenericRefusal(ConvShape s) {
     if (!familyBase(s)) return "no decoded family supplies the invariant registers";
     if (s.stride == 2 && s.output.channels > 128 && s.output.channels % 128)
         return "wide stride 2 requires a multiple of 128 outputs";
+    if (isNativeConv(s) && s.groups == 1 && s.kernel == 3 &&
+        s.input.width == 35 && s.input.height == 35 &&
+        ((s.input.channels == 128 && s.output.channels == 512) ||
+         (s.input.channels == 512 && s.output.channels == 128)))
+        return "wide dense writeouts require a qualified native schedule";
     return {};
 }
 
