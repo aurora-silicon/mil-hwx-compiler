@@ -7,12 +7,26 @@
 #import "MILParser.h"
 #import "HWXObjectWriter.h"
 #include "H13Program.h"
+#include "H16ConvProgram.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
+// Scoped to a compilation invocation; zero preserves the H13 path.
+static thread_local int gConvGeneration = 0;
+// H16G/H17 layers encoded in this compile, in order, for --schedule linked.
+static thread_local std::vector<ane::h16::Layer> gConvLayers;
+static ane::h16::Generation convGeneration() {
+    return gConvGeneration == 17 ? ane::h16::Generation::H17
+                                : ane::h16::Generation::H16G;
+}
+static NSString *convTargetName() { return gConvGeneration == 17 ? @"H17" : @"H16G"; }
+static NSString *convDiagnostic() {
+    return gConvGeneration == 17 ? @"h17.outside-parity-envelope" : @"h16g.conv-outside-envelope";
+}
+
 static BOOL reject(ANEDiagnosticEngine *diagnostics, NSString *message,
                    ANEGraphOperation *operation = nil,
                    NSString *code = @"h13.unsupported-program") {
@@ -1123,18 +1137,25 @@ static NSData *encodeHWX(const ane::h13::Program &program,
             HWXObjectBindingRoleInput, index)];
     }
     if (outputIndex >= program.inputs.size()) [bindings addObject:output];
-    NSData *task = [NSData dataWithBytes:anec.data() + ane::h13::anecHeaderBytes
+    NSData *task = [NSData dataWithBytes:gConvGeneration ? program.task.data()
+                           : anec.data() + ane::h13::anecHeaderBytes
                                   length:program.task.size()];
     NSData *constants = [NSData dataWithBytes:program.constants.data()
                                        length:program.constants.size()];
     HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
         initWithTaskCount:program.taskCount
-        firstTaskByteLength:program.firstTaskBytes recordCount:1
-        formatCode:0 scratchByteLength:0
-        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+        firstTaskByteLength:program.firstTaskBytes recordCount:gConvGeneration ? 16 : 1
+        formatCode:0
+        scratchByteLength:gConvGeneration ? static_cast<NSUInteger>(program.scratchAllocationBytes) : 0
+        descriptorLayout:gConvGeneration && program.scratchAllocationBytes
+            ? HWXProgramDescriptorLayoutScratchBackedMixed
+            : HWXProgramDescriptorLayoutLinear];
     info.scratchAllocationByteLength =
         static_cast<NSUInteger>(program.scratchAllocationBytes);
-    return [HWXObjectWriter buildObjectForArchitecture:HWXObjectArchitectureH13
+    info.kernelRegionConstants = gConvGeneration != 0;
+    return [HWXObjectWriter buildObjectForArchitecture:gConvGeneration
+             ? (gConvGeneration == 17 ? HWXObjectArchitectureH17 : HWXObjectArchitectureH16G)
+             : HWXObjectArchitectureH13
         taskDescriptor:task constantRegion:constants bindings:bindings
         kernelRelocationOffsets:relocationOffsets(program) programInfo:info
         error:error];
@@ -1729,6 +1750,12 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H13ConvPlan *plan) {
     if (bias && (!fp16Tensor(bias) || bias.type.shape.count != 1 ||
                  bias.type.shape[0].unsignedIntValue !=
                      candidate.shape.output.channels)) return NO;
+    if (gConvGeneration) {
+        if (rank3 || declaredPads || ![padType isEqualToString:@"same"]) return NO;
+        candidate.generic = YES;
+        *plan = candidate;
+        return YES;
+    }
     if (!ane::h13::supportsConvParity(candidate.shape) || forceGenericConv()) {
         // No decoded template: the formula-built encoder takes the geometry
         // when it is a symmetric same/valid pad it can express.
@@ -2134,6 +2161,18 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         // which is the order the packing consumes, so no host transform runs.
         const auto *weightBytes = static_cast<const std::uint8_t *>(weights.bytes);
         const auto *biasBytes = static_cast<const std::uint8_t *>(biasData.bytes);
+        if (gConvGeneration) {
+            ane::h16::Layer layer;
+            program = ane::h16::encodeConv(convGeneration(), convolution.shape,
+                                          weightBytes, weights.length, biasBytes,
+                                          biasData.length, &layer);
+            gConvLayers.push_back(layer);
+            *inputsOut = @[x];
+            *constantInputOut = nil;
+            *constantDataOut = nil;
+            *manifestOperationOut = name;
+            return YES;
+        }
         // A stride-2 section skips zero weights, so its size follows the
         // weight values and a template's recorded size fits only the
         // oracle's own payload. The generic encoder rebuilds the same task
@@ -2912,6 +2951,32 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
 }
 
 @implementation ANEH13Compiler
++ (BOOL)compileConvMILData:(NSData *)milData
+                 modelRoot:(NSURL *)modelRoot
+                    target:(NSString *)target
+                    format:(NSString *)format
+           outputDirectory:(NSURL *)directory
+                  schedule:(NSString *)schedule
+               diagnostics:(ANEDiagnosticEngine *)diagnostics
+                     error:(NSError **)error {
+    if (![target isEqualToString:@"H16G"] && ![target isEqualToString:@"H17"])
+        return reject(diagnostics, @"formula conv target must be H16G or H17");
+    struct Scope {
+        int previous;
+        explicit Scope(int generation) : previous(gConvGeneration) { gConvGeneration=generation; gConvLayers.clear(); }
+        ~Scope() { gConvGeneration=previous; gConvLayers.clear(); }
+    } scope([target isEqualToString:@"H17"] ? 17 : 16);
+    if (![format isEqualToString:@"hwx"])
+        return reject(diagnostics, @"H16G/H17 formula conv packages require HWX", nil, convDiagnostic());
+    // `linked` chains the layers through DRAM scratch with the DependencyMode
+    // edge (J700-verified); L2-resident chains are descriptor parity only.
+    if (![schedule isEqualToString:@"per-op"] && ![schedule isEqualToString:@"linked"])
+        return reject(diagnostics,
+            @"H16G/H17 schedules are 'per-op' and 'linked' (DRAM edges); L2-resident linked chains are descriptor parity only",
+            nil, convDiagnostic());
+    return [self compileMILData:milData modelRoot:modelRoot format:format
+        outputDirectory:directory schedule:schedule diagnostics:diagnostics error:error];
+}
 + (BOOL)compileMILData:(NSData *)milData
              modelRoot:(NSURL *)modelRoot
                 format:(NSString *)format
@@ -2981,6 +3046,24 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             [sourceOperations addObject:candidate];
     if (!sourceOperations.count)
         return reject(diagnostics, @"H13 requires at least one operation");
+
+    if (gConvGeneration) {
+        NSHashTable<ANEGraphOperation *> *fused = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+        for (ANEGraphOperation *candidate in sourceOperations) {
+            if ([candidate.operationName isEqualToString:@"conv"]) {
+                H13ConvPlan plan{};
+                if (!convParityPlan(candidate, &plan))
+                    return reject(diagnostics, @"H16G/H17 conv requires rank-4 batch-one fp16 SAME, zero explicit pads and unit dilation", candidate, convDiagnostic());
+                const auto refusal=ane::h16::executableRefusal(plan.shape);
+                if (!refusal.empty())
+                    return reject(diagnostics, [NSString stringWithUTF8String:refusal.c_str()], candidate, convDiagnostic());
+                ANEGraphOperation *relu=nil;
+                if (convReluOperation(sourceOperations,candidate,function.returnValues,&relu)) [fused addObject:relu];
+            } else if (![fused containsObject:candidate]) {
+                return reject(diagnostics, @"H16G/H17 formula backend accepts only conv and a single-consumer fused ReLU", candidate, convDiagnostic());
+            }
+        }
+    }
 
     BOOL chain = sourceOperations.count > 1;
     NSString *chainCode = @"h13.unsupported-chain";
@@ -4246,11 +4329,15 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     return NO;
                 const BOOL reluFused = [reluFusedConvs containsObject:operation];
                 if (reluFused) {
-                    ane::h13::fuseConvPostOperation(program,
+                    if (gConvGeneration) {
+                        ane::h16::fuseRelu(program);
+                        if (!gConvLayers.empty()) gConvLayers.back().relu = true;
+                    }
+                    else ane::h13::fuseConvPostOperation(program,
                         ane::h13::PostOperation::Relu);
                     manifestOperation = @"conv+relu";
                 }
-                std::vector<std::uint8_t> anec = ane::h13::encodeANEC(program);
+                std::vector<std::uint8_t> anec = gConvGeneration ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(program);
                 NSMutableArray *inputRecords =
                     [NSMutableArray arrayWithCapacity:inputs.count];
                 NSMutableDictionary *constantInputs = [NSMutableDictionary dictionary];
@@ -4352,7 +4439,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                         : (broadcast ? @"apple-parity-broadcast"
                         : (normalization ? @"apple-parity-norm"
                         : (convolution ? (program.formulaBuilt
-                                              ? @"h13-generic-conv"
+                                              ? (gConvGeneration ? @"h16-h17-formula-conv" : @"h13-generic-conv")
                                               : @"apple-parity-conv")
                         : (parity ? @"h13-oracle-parity" : @"h13-source-qualified")))),
                     @"operation": manifestOperation,
@@ -4375,13 +4462,19 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 throw std::logic_error(
                     "h13.linked-outside-envelope: linked program bookkeeping is inconsistent");
             for (NSDictionary *record in programRecords)
-                if (![record[@"encoder"] isEqualToString:@"h13-generic-conv"])
+                if (![record[@"encoder"] isEqualToString:
+                        gConvGeneration ? @"h16-h17-formula-conv" : @"h13-generic-conv"])
                     throw std::invalid_argument(
                         "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
             std::vector<ane::h13::LinkedLayer> layout;
-            ane::h13::Program combined =
-                ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
-            std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
+            if (gConvGeneration && gConvLayers.size() != chainPrograms.size())
+                throw std::logic_error(
+                    "h16-h17.linked: encoded layer bookkeeping is inconsistent");
+            ane::h13::Program combined = gConvGeneration
+                ? ane::h16::linkDramChain(convGeneration(), gConvLayers, chainPrograms, &layout)
+                : ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
+            std::vector<std::uint8_t> bytes = gConvGeneration
+                ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
                 combinedPayload = encodeHWX(combined, bytes, error);
@@ -4672,12 +4765,16 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }
 
     NSMutableDictionary *manifest = [@{
-        @"schema": @"mil-hwxc.h13-anec-package.v2",
-        @"target": @"H13", @"artifactFormat": format,
+        @"schema": gConvGeneration ? @"mil-hwxc.h16-h17-conv-package.v1" : @"mil-hwxc.h13-anec-package.v2",
+        @"target": gConvGeneration ? convTargetName() : @"H13", @"artifactFormat": format,
         @"programs": programRecords, @"dispatchPlan": dispatchPlan,
         @"intermediates": intermediateNames, @"tensors": tensors,
         @"physicalOutputs": physicalOutputs, @"logicalResults": logicalResults,
     } mutableCopy];
+    if (gConvGeneration) [manifest addEntriesFromDictionary:@{
+        @"validation": @"decoded-fields-and-stride1-kernel-hashes",
+        @"deviceValidated": @NO, @"unknowns": @[@"ExeCycles", @"runtime execution"],
+    }];
     if (chainSchedule || linkedSchedule)
         [manifest addEntriesFromDictionary:@{
             @"schedule": linkedL2 ? @"linked-l2" : (linkedSchedule ? @"linked" : @"chain"),

@@ -1,4 +1,5 @@
 #import "ANEH14Compiler.h"
+#import "ANEH13Compiler.h"
 
 #import "ANEBlobResolver.h"
 #import "ANEGraphVerifier.h"
@@ -826,7 +827,9 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
             userInfo:@{NSLocalizedDescriptionKey: message}];
         return NO;
     }
-    if (![schedule isEqualToString:@"per-op"] &&
+    // H17 convolution graphs take their schedule to the formula backend below.
+    if (target.generation != ane::h14::Generation::H17 &&
+        ![schedule isEqualToString:@"per-op"] &&
         (!h14 || (![schedule isEqualToString:@"chain"] &&
                   ![schedule isEqualToString:@"linked"])))
         return reject(diagnostics, h14
@@ -848,6 +851,17 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires exactly one function", target.name], nil, unsupported);
     ANEGraphFunction *function = module.functions[0];
+    if (target.generation == ane::h14::Generation::H17)
+        for (ANEGraphOperation *operation in function.operations)
+            if ([operation.operationName isEqualToString:@"conv"])
+                return [ANEH13Compiler compileConvMILData:milData modelRoot:modelRoot
+                    target:targetName format:format outputDirectory:directory
+                    schedule:schedule diagnostics:diagnostics error:error];
+    if (target.generation == ane::h14::Generation::H17 &&
+        ![schedule isEqualToString:@"per-op"])
+        return reject(diagnostics, @"H17 schedule must be 'per-op' outside convolution graphs",
+                      nil, code(target, @"unsupported-schedule"));
+
     for (ANEGraphOperation *candidate in function.operations)
         if (candidate.results.count != 1)
             return reject(diagnostics, [NSString stringWithFormat:
