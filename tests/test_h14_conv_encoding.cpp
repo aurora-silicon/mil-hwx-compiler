@@ -76,6 +76,17 @@ int main() {
     std::vector<Program> layers{conv(64,128,16),conv(128,128,16,3,1,true),
                                 conv(128,256,16,1,2),conv(256,512,8)};
     assert(layers[2].taskCount==2);
+    // A standalone multi-task program opens on its first task (0x08) and
+    // closes on its last (0x22), as Apple's decoded multi-task programs do;
+    // one task carries both. 0x2a on every task wedged the M2 firmware.
+    for (const auto &q : layers) {
+        std::size_t at=16;
+        for (unsigned i=0;i<q.taskCount;++i) {
+            assert(word(q.taskStream,at+8)==((i==0?0x08u:0u)|(i+1==q.taskCount?0x22u:0u)));
+            at=(at+((word(q.taskStream,at)>>16)&0x7ff)*4+15)&~std::size_t(15);
+        }
+    }
+    assert(word(layers[0].taskStream,16+8)==0x2a);
     fuseConvRelu(layers[1]);
     assert(reg(layers[1],16,0xd04)&0x10000);
     std::vector<LinkedLayer> layout;
