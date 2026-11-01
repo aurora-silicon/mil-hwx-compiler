@@ -95,9 +95,11 @@ class Lowering:
 
     def pool(self, source):
         c = self.shapes[source][1]
-        gather = np.zeros((4*c,c,3,3),np.float16)
+        phases=[]
         for block,(dy,dx) in enumerate(((1,1),(1,2),(2,1),(2,2))):
-            for channel in range(c): gather[block*c+channel,channel,dy,dx] = 1
+            gather = np.zeros((c,1,3,3),np.float16)
+            gather[:,0,dy,dx] = 1
+            phases.append(self.conv(source,gather,groups=c,pads=(1,1,1,1)))
         diff = np.zeros((4*c,4*c,1,1),np.float16)
         mix = np.zeros((2*c,4*c,1,1),np.float16)
         diff2 = np.zeros((2*c,2*c,1,1),np.float16)
@@ -114,7 +116,8 @@ class Lowering:
             diff2[channel,c+channel,0,0] = -1
             diff2[c+channel,c+channel,0,0] = 1
             total[channel,channel,0,0] = total[channel,c+channel,0,0] = 1
-        value = self.conv(source,gather,pads=(1,1,1,1))
+        value=phases[0]
+        for phase in phases[1:]: value=self.concat(value,phase)
         value = self.conv(value,diff,stride=2,relu=True)
         value = self.conv(value,mix)
         value = self.conv(value,diff2,relu=True)
@@ -170,13 +173,13 @@ def lower(model, output):
                 co,ci,kh,kw = w.shape
                 physical_in = builder.shapes[x][1]
                 physical_out = max(64 if co<16 else 16,1<<(co-1).bit_length())
-                if groups==1:
-                    padded = np.zeros((physical_out,physical_in,kh,kw),np.float16)
-                    padded[:co,:ci] = w
-                elif groups==shapes[node.input[0]][1]==co:
+                if groups==shapes[node.input[0]][1]==co and ci==1:
                     if physical_out!=physical_in: raise ValueError('depthwise padding mismatch')
                     groups = physical_in
                     padded = np.zeros((physical_out,1,kh,kw),np.float16);padded[:co] = w
+                elif groups==1:
+                    padded = np.zeros((physical_out,physical_in,kh,kw),np.float16)
+                    padded[:co,:ci] = w
                 else: raise ValueError('unsupported convolution grouping')
                 bias = None
                 if b is not None:
