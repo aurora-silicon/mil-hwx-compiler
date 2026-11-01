@@ -215,7 +215,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
 	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
-$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/LayerOps.h plugins/LayerGraph.h plugins/NativeLayerPlan.h plugins/NativeLayerTemplates.inc plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H16G/Encoding/H16ConvProgram.h plugins/LayerOps.h plugins/LayerGraph.h plugins/NativeLayerPlan.h plugins/NativeLayerTemplates.inc plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(INPUT_CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
@@ -404,3 +404,23 @@ test-h13: test-placement
 
 # Hash assertions are shared by all platform-independent software tests.
 $(BUILD)/test_h16g_constant_packing $(BUILD)/test_compiler_e2e $(BUILD)/test_structured_td_encoding $(BUILD)/test_staged_conv_compiler $(BUILD)/test_program_composition: tests/sha256_compat.h
+
+H16_CONV_SOURCES := plugins/H16G/Encoding/H16ConvProgram.cpp
+$(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/H13Program.h | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
+$(BUILD)/h16_conv_support.o: plugins/H13/H13Program.cpp plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
+$(BUILD)/h16_conv_dump: tests/h16_conv_dump.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
+
+.PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
+test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc
+	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
+test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
+	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
+test-h16g-conv-parity: $(BUILD)/h16_conv_dump
+	python3 tests/test_h16_h17_conv_parity.py $< H16G
+test-h17-conv-parity: $(BUILD)/h16_conv_dump
+	python3 tests/test_h16_h17_conv_parity.py $< H17
+
+test: test-h16g test-h17

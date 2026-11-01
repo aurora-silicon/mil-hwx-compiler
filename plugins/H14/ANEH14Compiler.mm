@@ -1,5 +1,6 @@
 #include "../NativeLayerPlan.h"
 #import "ANEH14Compiler.h"
+#import "ANEH13Compiler.h"
 
 #import "ANEBlobResolver.h"
 #import "ANEGraphVerifier.h"
@@ -845,7 +846,8 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     const BOOL linkedSchedule = h14 && [schedule isEqualToString:@"linked"];
     if (linkedSchedule && hwx)
         return reject(diagnostics, @"H14 linked programs require ANEC; HWX descriptor cost fields and native resource mapping remain unresolved", nil, @"h14.linked-outside-envelope");
-    if (![schedule isEqualToString:@"per-op"] && !linkedSchedule &&
+    if (target.generation != ane::h14::Generation::H17 &&
+        ![schedule isEqualToString:@"per-op"] && !linkedSchedule &&
         (!h14 || ![schedule isEqualToString:@"chain"]))
         return reject(diagnostics, h14
             ? @"H14 schedule must be 'per-op', 'chain', or 'linked'"
@@ -866,6 +868,17 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires exactly one function", target.name], nil, unsupported);
     ANEGraphFunction *function = module.functions[0];
+    if (target.generation == ane::h14::Generation::H17)
+        for (ANEGraphOperation *operation in function.operations)
+            if ([operation.operationName isEqualToString:@"conv"])
+                return [ANEH13Compiler compileConvMILData:milData modelRoot:modelRoot
+                    target:targetName format:format outputDirectory:directory
+                    schedule:schedule diagnostics:diagnostics error:error];
+    if (target.generation == ane::h14::Generation::H17 &&
+        ![schedule isEqualToString:@"per-op"])
+        return reject(diagnostics, @"H17 schedule must be 'per-op' outside convolution graphs",
+                      nil, code(target, @"unsupported-schedule"));
+
     for (ANEGraphOperation *candidate in function.operations)
         if (candidate.results.count != 1)
             return reject(diagnostics, [NSString stringWithFormat:
