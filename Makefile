@@ -283,6 +283,7 @@ test-h13-parity: $(BUILD)/mil-hwxc
 test-h14-parity: $(BUILD)/mil-hwxc
 	python3 research/generate_h14_templates.py --check
 	python3 tests/test_h14_parity.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_linked_reuse_oracles.py
 	python3 tests/test_h14_fixture_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_programs.py $(BUILD)/mil-hwxc
 	python3 tests/test_h14_matvec_row_programs.py $(BUILD)/mil-hwxc

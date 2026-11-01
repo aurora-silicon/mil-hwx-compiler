@@ -43,6 +43,28 @@ static unsigned bar(const Program &p, std::size_t off, unsigned address) {
     }
     throw std::logic_error("BAR absent");
 }
+static bool hasReg(const Program &p, std::size_t off, std::uint32_t addr) {
+    const auto end = off + ((word(p.taskStream, off) >> 16) & 0x7ff) * 4;
+    for (auto at = off + 32; at < end;) {
+        const auto h = word(p.taskStream, at), base = (h & 0x7fff) * 4;
+        unsigned n = 1;
+        if (h & 0x80000000u) {
+            if (addr == base) return true;
+            for (unsigned b = 0; b < 16; ++b) if ((h >> (15+b)) & 1) {
+                if (addr == base+(b+1)*4) return true;
+                ++n;
+            }
+        } else {
+            n = ((h >> 15) & 63) + 1;
+            if (addr >= base && addr < base+n*4) return true;
+        }
+        at += (n+1)*4;
+    }
+    return false;
+}
+static bool hasBar(const Program &p, std::size_t off, unsigned address) {
+    try { (void)bar(p, off, address); return true; } catch (const std::logic_error &) { return false; }
+}
 static Program conv(unsigned ci, unsigned co, unsigned h, unsigned k=1,
                     unsigned stride=1, bool dw=false) {
     ConvShape s{k,k,stride,dw?ci:1,true,{ci,h,h},{co,(h+stride-1)/stride,(h+stride-1)/stride}};
@@ -68,16 +90,32 @@ int main() {
         std::size_t own=16;
         for (unsigned i=0;i<layers[l].taskCount;++i,++global) {
             const auto size=((word(p.taskStream,off)>>16)&0x7ff)*4;
+            const bool multi=layers[l].taskCount>1, reuse=multi&&i>0;
+            const bool last=l+1==layers.size()&&i+1==layers[l].taskCount;
             assert((word(p.taskStream,off)&0xffff)==global);
-            assert(word(p.taskStream,off+24)==0);
+            // Multi-task layers keep L2 live (Apple's linked form).
+            assert(word(p.taskStream,off+24)==(multi&&!last?0x1fffffffu:0u));
             assert(word(p.taskStream,off+28)==0x50001);
             assert(reg(p,off,0x1908)==kernel+reg(layers[l],own,0x1908));
             assert(bar(p,off,0x1908)==1);
-            assert(bar(p,off,0x1110)==(l?3:4));
             assert(bar(p,off,0x1508)==(l+1<layers.size()?3:5));
-            if(l) {
+            if(reuse) {
+                // Later slices reuse the first slice's L2 input.
+                assert(!hasBar(p,off,0x1110));
+                for (unsigned a=0x1100;a<0x1500;a+=4) assert(!hasReg(p,off,a));
+                assert(!hasReg(p,off,0x504)&&!hasReg(p,off,0x514)&&!hasReg(p,off,0x518));
+                const auto ne=reg(layers[l],own,0x38), cls=(ne>>16)&15;
+                assert(reg(p,off,0x38)==((ne&~0xff00u)|(cls<<12)|(cls<<8)));
+                assert(reg(p,off,0x530)==(reg(layers[l],own,0x530)&~0x500030u));
+                assert(reg(p,off,0x534)==reg(layers[l],own,0x534));
+                assert(reg(p,off,0x510)==reg(layers[l],own,0x510));
+            } else {
+                assert(bar(p,off,0x1110)==(l?3:4));
+                assert(reg(p,off,0x504)==reg(layers[l],own,0x504));
+            }
+            if(l && !reuse) {
                 assert(reg(p,off,0x1110)==layout[l].inputOffset);
-                assert((reg(p,off,0x1100)>>28)==(i==0?1:0));
+                assert((reg(p,off,0x1100)>>28)==1);
                 assert(reg(p,off,0x1108)==0x4e);
             }
             if(l+1<layers.size()) {
