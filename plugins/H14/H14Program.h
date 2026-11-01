@@ -88,7 +88,6 @@ struct TensorLayout {
 
 struct Program {
     bool formulaBuilt = false;
-    std::uint64_t scratchAllocationBytes = 0;
     /// Complete __TEXT/__text content: the zero-size prefix frame followed by
     /// 16-byte aligned tasks, with the final task left unpadded.
     std::vector<std::uint8_t> taskStream;
