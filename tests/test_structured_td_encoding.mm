@@ -32,7 +32,8 @@ static void testWriterBoundsAndZeroInitialization(void) {
     NSError *error = nil;
     expect([writer writeUInt32:0x11223344 atOffset:4 field:@"test" error:&error],
            @"named field write succeeds");
-    const uint32_t *words = (const uint32_t *)writer.data.bytes;
+    NSData *snapshot __attribute__((objc_precise_lifetime)) = writer.data;
+    const uint32_t *words = (const uint32_t *)snapshot.bytes;
     expect(words[0] == 0 && words[1] == 0x11223344 && words[2] == 0 && words[3] == 0,
            @"descriptor starts zeroed and only named field changes");
     expect(![writer writeUInt32:1 atOffset:14 field:@"overflow" error:&error],
