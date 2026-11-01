@@ -4409,6 +4409,12 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     @"outputEdge": edgeNames[layout[index].outputEdge]} mutableCopy];
                 if (layout[index].inputEdge)
                     layerRecord[@"l2Source"] = @(layout[index].l2Source);
+                if (linkedL2 && index + 1 < layout.size()) {
+                    layerRecord[@"candidateL2Bytes"] = @(layout[index].candidateL2Bytes);
+                    if (!layout[index].l2SpillReason.empty())
+                        layerRecord[@"l2SpillReason"] =
+                            [NSString stringWithUTF8String:layout[index].l2SpillReason.c_str()];
+                }
                 if (layout[index].outputEdge) {
                     layerRecord[@"l2Result"] = @(layout[index].l2Result);
                     layerRecord[@"l2ResultBytes"] = @(layout[index].l2ResultBytes);
