@@ -14,6 +14,10 @@ CXXFLAGS := -std=c++17 -fobjc-arc $(GNUSTEP_FLAGS) -Wall -Wextra -Werror -Iinclu
 FRAMEWORKS := $(shell GNUSTEP_CONFIG_FILE=$(GNUSTEP_PREFIX)/etc/GNUstep/GNUstep.conf $(GNUSTEP_CONFIG) --base-libs 2>/dev/null) -lcrypto
 endif
 BUILD := build
+MAC_RUNTIME_CONTRACT :=
+ifeq ($(UNAME_S),Darwin)
+MAC_RUNTIME_CONTRACT := $(BUILD)/test_runtime_contract
+endif
 
 # GNUstep supplies Objective-C-only flags. Keep them on mixed/Objective-C++
 # commands, while pure C++ targets must not receive unused language options.
@@ -223,7 +227,7 @@ test-no-pattern-shortcuts: $(BUILD)/mil-hwxc
 $(BUILD)/test_runtime_contract: tests/test_runtime_contract.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm $(RUNTIME_SOURCES) | $(BUILD)
 	$(CXX) $(INPUT_CXXFLAGS) -Ilib/IR -Ilib/HWX -Ilib/Runtime $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
-test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_lexer $(BUILD)/test_mil_parser $(BUILD)/test_graph_import $(BUILD)/test_operation_graph $(BUILD)/test_graph_transforms $(BUILD)/test_structural_fusion $(BUILD)/test_h16g_legalization $(BUILD)/test_hwx_planning $(BUILD)/test_structured_td_encoding $(BUILD)/test_program_partition $(BUILD)/test_program_composition $(BUILD)/test_hwx_object_writer $(BUILD)/test_h16g_constant_packing $(BUILD)/test_staged_conv_compiler $(BUILD)/test_pass_manager $(BUILD)/test_plugin_registry $(BUILD)/test_compiler_e2e $(BUILD)/test_runtime_contract test-cli test-no-pattern-shortcuts
+test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_lexer $(BUILD)/test_mil_parser $(BUILD)/test_graph_import $(BUILD)/test_operation_graph $(BUILD)/test_graph_transforms $(BUILD)/test_structural_fusion $(BUILD)/test_h16g_legalization $(BUILD)/test_hwx_planning $(BUILD)/test_structured_td_encoding $(BUILD)/test_program_partition $(BUILD)/test_program_composition $(BUILD)/test_hwx_object_writer $(BUILD)/test_h16g_constant_packing $(BUILD)/test_staged_conv_compiler $(BUILD)/test_pass_manager $(BUILD)/test_plugin_registry $(BUILD)/test_compiler_e2e $(MAC_RUNTIME_CONTRACT) test-cli test-no-pattern-shortcuts
 	$(BUILD)/test_diagnostics
 	$(BUILD)/test_benchmark_stats
 	$(BUILD)/test_mil_lexer
@@ -243,7 +247,11 @@ test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_
 	$(BUILD)/test_pass_manager
 	$(BUILD)/test_plugin_registry
 	$(BUILD)/test_compiler_e2e
+ifeq ($(UNAME_S),Darwin)
 	$(BUILD)/test_runtime_contract
+else
+	@echo "SKIP: macOS IOSurface runtime contract is unavailable on $(UNAME_S)"
+endif
 	bash tests/test_release_hygiene.sh
 
 .PHONY: test-h13
