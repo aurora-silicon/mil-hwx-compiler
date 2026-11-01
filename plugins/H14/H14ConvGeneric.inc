@@ -202,6 +202,7 @@ Program encodeConvGeneric(ConvShape s, const std::uint8_t *weights,
     const auto cfg = 0x200000u | (cls << 16) |
         (repeat ? (cls << 12) | (cls << 8) : 0u) |
         (s.output.width <= 8 ? 5u : 1u);
+    const auto taskCount = (s.output.channels + slice - 1) / slice;
     std::uint32_t id = 0;
     for (std::uint32_t first = 0; first < s.output.channels; first += slice, ++id) {
         auto part = s;
@@ -268,7 +269,13 @@ Program encodeConvGeneric(ConvShape s, const std::uint8_t *weights,
             set(0x1918 + 4 * i, (get(task, span.first, bytes, 0x1918 + 4 * i) & ~0xff0000u) | (id << 16));
         storeLE32(task.taskStream, span.first,
             (static_cast<std::uint32_t>(bytes / 4) << 16) | id);
-        storeLE32(task.taskStream, span.first + 8, 0x2a);
+        // Header word 2: 0x08 opens the program on its first task and 0x22
+        // closes it on its last, as in every decoded multi-task H14 program
+        // (h14-mobile chain and s2link oracles). A single task carries both
+        // (0x2a). Setting both on every task of a multi-task program made the
+        // firmware's next command never complete on the M2.
+        storeLE32(task.taskStream, span.first + 8,
+            (id == 0 ? 0x08u : 0u) | (id + 1 == taskCount ? 0x22u : 0u));
         storeLE32(task.taskStream, span.first + 24, 0);
         storeLE32(task.taskStream, span.first + 28, 0x50001);
         result.taskStream.resize(alignUp(result.taskStream.size(), 16), 0);
