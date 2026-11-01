@@ -376,3 +376,9 @@ $(BUILD)/h14_conv_probe: tests/h14_conv_probe.cpp plugins/H14/H14Program.cpp plu
 test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
 	$(BUILD)/test_h14_conv_encoding
 	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
+
+.PHONY: test-camera-linked
+test-camera-linked:
+	python3 tests/test_camera_linked.py
+
+test: test-camera-linked
