@@ -1,13 +1,5 @@
 #import <Foundation/Foundation.h>
-#ifdef __APPLE__
-#import <CommonCrypto/CommonDigest.h>
-#else
-#include <openssl/sha.h>
-#define CC_SHA256_DIGEST_LENGTH SHA256_DIGEST_LENGTH
-using CC_LONG = size_t;
-#define CC_SHA256(data, length, digest) \
-    SHA256((const unsigned char *)(data), (length), (digest))
-#endif
+#include "sha256_compat.h"
 
 #import "H16GTaskComposer.h"
 #import "H16GTaskEncoder.h"

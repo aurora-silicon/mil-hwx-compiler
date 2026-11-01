@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <CommonCrypto/CommonDigest.h>
+#include "sha256_compat.h"
 #import "HWXMachOFormat.h"
 
 #import "ANEDiagnostic.h"

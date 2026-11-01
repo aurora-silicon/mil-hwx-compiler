@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <CommonCrypto/CommonDigest.h>
+#include "sha256_compat.h"
 
 #import "ANECompiler.h"
 #import "ANEDiagnostic.h"
