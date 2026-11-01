@@ -88,6 +88,9 @@ def build(directory, output, compiler, checkpoints=None):
     if selected - {v['result'] for v in layers}:
         raise ValueError('unknown checkpoint')
     output.mkdir(parents=True, exist_ok=False)
+    for source,name in ((directory/'LICENSE-MODEL','LICENSE-MODEL'),
+                        (Path(__file__).resolve().parents[1]/'LICENSE','LICENSE-COMPILER')):
+        if source.is_file(): shutil.copyfile(source,output/name)
     index = dict(schema='aurora.camera-prefixes.v1', diagnostic_only=True,
                  source_files={p.name:sha(p) for p in directory.iterdir() if p.is_file()
                                and p.name in ('model.mil','weights.bin','manifest.json','program-0.anec')},

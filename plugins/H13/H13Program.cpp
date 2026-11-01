@@ -3610,11 +3610,88 @@ Program linkConvChain(const std::vector<Program> &layers,
 Program linkLayerGraph(const std::vector<Program> &layers,
     const std::vector<ane::layers::Connection> &connections,
     const std::vector<std::string> &boundaries,const std::string &result,
-    ane::layers::GraphPlan *placement,std::vector<LinkedLayer> *layout) {
+    ane::layers::GraphPlan *placement,std::vector<LinkedLayer> *layout,bool l2Resident) {
     auto fail=[](const char *why)->void {
         throw std::invalid_argument(std::string("h13.linked-outside-envelope: ")+why);
     };
     auto plan=ane::layers::planGraph(layers,connections,boundaries,result,"h13.linked-outside-envelope");
+    if (l2Resident) {
+        // Contract only exclusive, consecutive formula-conv runs into the
+        // existing r2/r3 chain linker. A group has no scratch of its own and
+        // exposes exactly its original first input and last output. Native
+        // internal tasks, fan-out edges and concat producer views retain DRAM.
+        // In particular, r3's terminal 56x56 0x142 form must never be rebound
+        // to a graph scratch writer, so wide-dependent groups are excluded.
+        const auto n=layers.size();
+        std::vector<unsigned> uses(n,0);
+        ++uses[plan.result];
+        for (const auto &inputs:plan.inputs)
+            for (const auto ref:inputs) if (!ref.boundary) ++uses[ref.index];
+        auto eligible=[&](std::size_t i) {
+            return layers[i].formulaBuilt && !layers[i].nativeDramLayer &&
+                layers[i].taskCount && layers[i].inputs.size()==1 &&
+                !connections[i].concat && plan.outputs[i].owner==i;
+        };
+        std::vector<Program> grouped;
+        std::vector<ane::layers::Connection> edges;
+        std::vector<std::size_t> firsts,ends;
+        std::vector<std::vector<LinkedLayer>> internal;
+        bool changed=false;
+        for (std::size_t i=0;i<n;) {
+            std::size_t end=i+1;
+            if (eligible(i))
+                while (end<n && end-i<16 && eligible(end) && uses[end-1]==1 &&
+                       connections[end].inputs==std::vector<std::string>{connections[end-1].output}) ++end;
+            Program group;
+            std::vector<LinkedLayer> inside;
+            bool resident=false;
+            for (;end>i+1;--end) {
+                std::vector<Program> run(layers.begin()+i,layers.begin()+end);
+                const auto candidate=planL2(run);
+                if (candidate.terminal56 || std::any_of(candidate.edge.begin(),candidate.edge.end(),
+                    [](EdgeMode mode){return mode==EdgeMode::Dram || mode==EdgeMode::Dep120;})) continue;
+                group=linkConvChain(run,&inside,true);
+                if (group.scratchAllocationBytes) fail("resident graph group unexpectedly spills");
+                resident=true;changed=true;break;
+            }
+            if (!resident) { end=i+1;group=layers[i]; }
+            firsts.push_back(i);ends.push_back(end);
+            internal.push_back(std::move(inside));grouped.push_back(std::move(group));
+            auto edge=connections[i];edge.output=connections[end-1].output;
+            edges.push_back(std::move(edge));i=end;
+        }
+        if (changed) {
+            ane::layers::GraphPlan contracted;
+            std::vector<LinkedLayer> outer;
+            auto program=linkLayerGraph(grouped,edges,boundaries,result,&contracted,&outer,false);
+            std::vector<LinkedLayer> expanded(n);
+            for (std::size_t g=0;g<grouped.size();++g) {
+                for (std::size_t i=firsts[g];i<ends[g];++i) {
+                    const auto owner=ends[contracted.outputs[g].owner]-1;
+                    plan.outputs[i]=i+1==ends[g]
+                        ? ane::layers::Placement{owner,contracted.outputs[g].offset,contracted.outputs[g].output}
+                        : ane::layers::Placement{i,0,false};
+                    plan.zeroCopy[i]=i+1==ends[g] && contracted.zeroCopy[g];
+                    if (internal[g].empty()) expanded[i]=outer[g];
+                    else {
+                        auto entry=internal[g][i-firsts[g]];
+                        entry.firstTask+=outer[g].firstTask;
+                        if (i==firsts[g]) {
+                            entry.readsScratch=outer[g].readsScratch;entry.readOffset=outer[g].readOffset;
+                        }
+                        if (i+1==ends[g]) {
+                            entry.writesScratch=outer[g].writesScratch;entry.writeOffset=outer[g].writeOffset;
+                        }
+                        expanded[i]=std::move(entry);
+                    }
+                }
+            }
+            plan.scratchBytes=contracted.scratchBytes;
+            if (placement) *placement=std::move(plan);
+            if (layout) *layout=std::move(expanded);
+            return program;
+        }
+    }
     std::vector<std::vector<TaskSpan>> spans;
     std::vector<std::size_t> sizes;
     for (std::size_t i=0;i<layers.size();++i) {

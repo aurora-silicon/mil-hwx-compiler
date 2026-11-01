@@ -412,7 +412,8 @@ Program linkConvChain(const std::vector<Program> &layers,
 Program linkLayerGraph(const std::vector<Program> &programs,
     const std::vector<ane::layers::Connection> &connections,
     const std::vector<std::string> &boundaries,const std::string &result,
-    ane::layers::GraphPlan *placement=nullptr,std::vector<LinkedLayer> *layout=nullptr);
+    ane::layers::GraphPlan *placement=nullptr,std::vector<LinkedLayer> *layout=nullptr,
+    bool l2Resident=false);
 
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);

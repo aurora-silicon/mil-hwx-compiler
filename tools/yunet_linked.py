@@ -124,7 +124,7 @@ class Lowering:
         return self.conv(value,total)
 
 
-def lower(model, output):
+def lower(model, output, compact_heads=True):
     model = model.resolve()
     metadata = json.loads((model/'model.json').read_text())
     if metadata.get('model')!='yunet' or metadata.get('input')!=[1,3,320,320]:
@@ -172,7 +172,11 @@ def lower(model, output):
             else:
                 co,ci,kh,kw = w.shape
                 physical_in = builder.shapes[x][1]
-                physical_out = max(64 if co<16 else 16,1<<(co-1).bit_length())
+                # Four stride-8 heads each contribute an extra zero-padded
+                # 64-channel block. This makes the twelve-head concat a
+                # power-of-two input without four separate zero producers.
+                small_head = 128 if compact_heads and shapes[node.output[0]][2:] == [40,40] else 64
+                physical_out = max(small_head if co<16 else 16,1<<(co-1).bit_length())
                 if groups==shapes[node.input[0]][1]==co and ci==1:
                     if physical_out!=physical_in: raise ValueError('depthwise padding mismatch')
                     groups = physical_in
@@ -200,7 +204,8 @@ def lower(model, output):
             y = builder.pool(x);pools += 1
         else: raise ValueError('unsupported body operation: '+kind)
         builder.values[node.output[0]] = y
-    heads, readback = [], []
+    heads, readback, head_offsets = [], [], []
+    physical_channels=0
     if [v.name for v in network.graph.output]!=metadata['output_names']:
         raise ValueError('ONNX output order changed')
     decoded_channels=0
@@ -216,9 +221,11 @@ def lower(model, output):
             name = node.input[0]
         original = shapes[name]
         head = builder.values[name]
-        if builder.shapes[head][1]!=64 or original[2]!=original[3] or original[2] not in (10,20,40):
+        if builder.shapes[head][1] not in (64,128) or original[2]!=original[3] or original[2] not in (10,20,40):
             raise ValueError('unexpected head geometry')
         while builder.shapes[head][2]<40: head=builder.nearest(head)
+        head_offsets.append(physical_channels)
+        physical_channels+=builder.shapes[head][1]
         heads.append(head)
         readback.append(dict(name=value.name,channel_offset=decoded_channels,channels=original[1],
                              spatial=original[2],sample_stride=40//original[2],sigmoid=sigmoid,
@@ -226,14 +233,19 @@ def lower(model, output):
         decoded_channels+=original[1]
     # A power-of-two packed input lets one final 1x1 select the 48 useful
     # channels into a 64-channel readback, avoiding a multi-megabyte host copy.
-    zero_source=next(value for value in builder.values.values()
-                     if builder.shapes[value]==[1,64,40,40] and value not in heads)
-    for _ in range(4): heads.append(builder.conv(zero_source,np.zeros((64,64,1,1),np.float16)))
+    if not compact_heads:
+        zero_source=next(value for value in builder.values.values()
+                         if builder.shapes[value]==[1,64,40,40] and value not in heads)
+        for _ in range(4):
+            heads.append(builder.conv(zero_source,np.zeros((64,64,1,1),np.float16)))
+            physical_channels+=64
+    if physical_channels!=1024:
+        raise ValueError('head concat must supply a power-of-two 1024-channel input')
     packed = heads[0]
     for head in heads[1:]: packed=builder.concat(packed,head)
     select=np.zeros((64,1024,1,1),np.float16)
     for i,item in enumerate(readback):
-        for c in range(item['channels']): select[item['channel_offset']+c,i*64+c,0,0]=1
+        for c in range(item['channels']): select[item['channel_offset']+c,head_offsets[i]+c,0,0]=1
     packed=builder.conv(packed,select)
     if pools!=4 or len(readback)!=12 or decoded_channels!=48: raise ValueError('expected four pools and twelve heads')
     output.mkdir(parents=True,exist_ok=False)
@@ -251,10 +263,10 @@ def lower(model, output):
     return contract
 
 
-def compile_package(model, output, compiler, contract):
+def compile_package(model, output, compiler, contract, schedule='linked'):
     compiler=compiler.resolve()
     package=output/'package'
-    run=subprocess.run([str(compiler),'--target','H13','--schedule','linked',
+    run=subprocess.run([str(compiler),'--target','H13','--schedule',schedule,
         '--mil',str(output/'model.mil'),'--model-root',str(output),'--output',str(package)],
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
     (output/'compiler.log').write_bytes(run.stdout)
@@ -275,7 +287,7 @@ def compile_package(model, output, compiler, contract):
     licence=model.parent/'YUNET-LICENSE'
     (package/'LICENSE-MODEL').write_bytes(licence.read_bytes())
     plan=dict(contract)
-    plan.update(schema='aurora.camera-linked-lowered.v1',target='H13',schedule='linked',
+    plan.update(schema='aurora.camera-linked-lowered.v1',target='H13',schedule=schedule,
         compiler_sha256=sha(compiler),files={name:sha(package/name) for name in
         ('manifest.json',program['file'],'model.mil','weights.bin','LICENSE-MODEL')})
     (package/'camera-linked.json').write_text(json.dumps(plan,indent=2)+'\n')
@@ -287,10 +299,12 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('model',type=Path);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--compiler',type=Path)
+    p.add_argument('--schedule',choices=('linked','linked-l2'),default='linked')
+    p.add_argument('--head-padding',choices=('compact','legacy'),default='compact')
     a=p.parse_args()
     try:
-        contract=lower(a.model,a.output)
-        result=compile_package(a.model,a.output,a.compiler,contract) if a.compiler else contract
+        contract=lower(a.model,a.output,a.head_padding=='compact')
+        result=compile_package(a.model,a.output,a.compiler,contract,a.schedule) if a.compiler else contract
     except Exception as error:
         if a.output.is_dir(): (a.output/'build-failure.json').write_text(json.dumps(dict(status='fail',error=str(error)),indent=2)+'\n')
         raise

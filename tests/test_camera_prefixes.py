@@ -69,6 +69,27 @@ def main(compiler):
             except ValueError: pass
             else: raise AssertionError('prefix accepted wrong request NID')
             (case/'program-0.anec').write_bytes(data)
+        l2run=subprocess.run([compiler,'--target','H13','--schedule','linked-l2','--mil',str(root/'model.mil'),
+                              '--model-root',str(root),'--output',str(root/'resident')],capture_output=True,text=True)
+        assert l2run.returncode==0,l2run.stderr
+        l2,_=reader.load_package(root/'resident')
+        assert l2['scratchBytes']<original['scratchBytes']
+        assert l2['taskDescriptors']==original['taskDescriptors']
+        assert l2['layers'][3]['zeroCopy'] is True
+        assert l2['layers'][4]['outputEdge']=='l2-alias'
+        assert l2['layers'][5]['inputEdge']=='l2-alias'
+        assert l2['layers'][5]['outputEdge']=='l2-dependent'
+        assert l2['layers'][6]['inputEdge']=='l2-dependent'
+        assert 'y' not in l2['scratch']['regions'] and 'z' not in l2['scratch']['regions']
+        from h13_l2_edge_parity import tasks
+        dram_tasks=tasks(orig)
+        l2bytes=(root/'resident/program-0.anec').read_bytes()
+        l2tasks=tasks(l2bytes)
+        assert old_constants==l2bytes[4096+l2['constantOffset']:]
+        for (_,a),(_,b) in zip(dram_tasks,l2tasks):
+            for address in a:
+                if 0xc800<=address<0xd000 or 0x1f800<=address<0x1f900:
+                    assert a[address]==b[address],(address,a[address],b[address])
         rebuilt=rebuild(root/'source',root/'rebuilt',compiler,['b','y'])
         assert len(rebuilt['records'])==4
         assert all(r['status']=='pass' for r in rebuilt['records']),rebuilt

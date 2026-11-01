@@ -3155,8 +3155,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     candidate, @"h13.linked-outside-envelope");
             current = candidate.results[0];
         }
-        if (linkedGraph && (!hasConcat || linkedL2))
-            return reject(diagnostics,@"H13 branching linked graphs require a native concat and DRAM scheduling",nil,@"h13.linked-outside-envelope");
+        if (linkedGraph && !hasConcat)
+            return reject(diagnostics,@"H13 branching linked graphs require a native concat",nil,@"h13.linked-outside-envelope");
         if (convolutions < 2 || current != function.returnValues[0])
             return reject(diagnostics,
                 @"H13 linked scheduling needs two or more convolutions ending in the function result",
@@ -4543,7 +4543,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 ? ane::h16::linkDramChain(convGeneration(), gConvLayers, chainPrograms, &layout)
                 : linkedGraph
                 ? ane::h13::linkLayerGraph(chainPrograms,connections,boundaries,
-                    function.returnValues[0].name.UTF8String,&graphPlacement,&layout)
+                    function.returnValues[0].name.UTF8String,&graphPlacement,&layout,linkedL2)
                 : ane::h13::linkConvChain(chainPrograms,&layout,linkedL2);
             std::vector<std::uint8_t> bytes = gConvGeneration
                 ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);

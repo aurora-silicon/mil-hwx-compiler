@@ -137,6 +137,9 @@ def build(directory,output):
     directory,output = Path(directory),Path(output)
     manifest,_ = reader.load_package(directory)
     output.mkdir(parents=True,exist_ok=False)
+    for source,name in ((directory/'LICENSE-MODEL','LICENSE-MODEL'),
+                        (Path(__file__).resolve().parents[1]/'LICENSE','LICENSE-COMPILER')):
+        if source.is_file(): (output/name).write_bytes(source.read_bytes())
     index = dict(schema='aurora.camera-prefixes.v1',diagnostic_only=True,
                  source_files={n:sha(directory/n) for n in ('model.mil','weights.bin','manifest.json','program-0.anec')},records=[])
     for i,layer in enumerate(manifest['programs'][0]['layers']):
