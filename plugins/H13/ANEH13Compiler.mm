@@ -16,6 +16,8 @@
 #include <stdexcept>
 // Scoped to a compilation invocation; zero preserves the H13 path.
 static thread_local int gConvGeneration = 0;
+// H16G/H17 layers encoded in this compile, in order, for --schedule linked.
+static thread_local std::vector<ane::h16::Layer> gConvLayers;
 static ane::h16::Generation convGeneration() {
     return gConvGeneration == 17 ? ane::h16::Generation::H17
                                 : ane::h16::Generation::H16G;
@@ -1143,8 +1145,11 @@ static NSData *encodeHWX(const ane::h13::Program &program,
     HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
         initWithTaskCount:program.taskCount
         firstTaskByteLength:program.firstTaskBytes recordCount:gConvGeneration ? 16 : 1
-        formatCode:0 scratchByteLength:0
-        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+        formatCode:0
+        scratchByteLength:gConvGeneration ? static_cast<NSUInteger>(program.scratchAllocationBytes) : 0
+        descriptorLayout:gConvGeneration && program.scratchAllocationBytes
+            ? HWXProgramDescriptorLayoutScratchBackedMixed
+            : HWXProgramDescriptorLayoutLinear];
     info.scratchAllocationByteLength =
         static_cast<NSUInteger>(program.scratchAllocationBytes);
     info.kernelRegionConstants = gConvGeneration != 0;
@@ -2157,8 +2162,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         const auto *weightBytes = static_cast<const std::uint8_t *>(weights.bytes);
         const auto *biasBytes = static_cast<const std::uint8_t *>(biasData.bytes);
         if (gConvGeneration) {
+            ane::h16::Layer layer;
             program = ane::h16::encodeConv(convGeneration(), convolution.shape,
-                                          weightBytes, weights.length);
+                                          weightBytes, weights.length, biasBytes,
+                                          biasData.length, &layer);
+            gConvLayers.push_back(layer);
             *inputsOut = @[x];
             *constantInputOut = nil;
             *constantDataOut = nil;
@@ -2955,14 +2963,16 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         return reject(diagnostics, @"formula conv target must be H16G or H17");
     struct Scope {
         int previous;
-        explicit Scope(int generation) : previous(gConvGeneration) { gConvGeneration=generation; }
-        ~Scope() { gConvGeneration=previous; }
+        explicit Scope(int generation) : previous(gConvGeneration) { gConvGeneration=generation; gConvLayers.clear(); }
+        ~Scope() { gConvGeneration=previous; gConvLayers.clear(); }
     } scope([target isEqualToString:@"H17"] ? 17 : 16);
     if (![format isEqualToString:@"hwx"])
         return reject(diagnostics, @"H16G/H17 formula conv packages require HWX", nil, convDiagnostic());
-    if (![schedule isEqualToString:@"per-op"])
+    // `linked` chains the layers through DRAM scratch with the DependencyMode
+    // edge (J700-verified); L2-resident chains are descriptor parity only.
+    if (![schedule isEqualToString:@"per-op"] && ![schedule isEqualToString:@"linked"])
         return reject(diagnostics,
-            @"H16G/H17 linked executable refused: DRAM dependency protocol is unproven; measured L2 chains require unknown sparse kernel packing (descriptor parity only)",
+            @"H16G/H17 schedules are 'per-op' and 'linked' (DRAM edges); L2-resident linked chains are descriptor parity only",
             nil, convDiagnostic());
     return [self compileMILData:milData modelRoot:modelRoot format:format
         outputDirectory:directory schedule:schedule diagnostics:diagnostics error:error];
@@ -4319,7 +4329,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     return NO;
                 const BOOL reluFused = [reluFusedConvs containsObject:operation];
                 if (reluFused) {
-                    if (gConvGeneration) ane::h16::fuseRelu(program);
+                    if (gConvGeneration) {
+                        ane::h16::fuseRelu(program);
+                        if (!gConvLayers.empty()) gConvLayers.back().relu = true;
+                    }
                     else ane::h13::fuseConvPostOperation(program,
                         ane::h13::PostOperation::Relu);
                     manifestOperation = @"conv+relu";
@@ -4449,13 +4462,19 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 throw std::logic_error(
                     "h13.linked-outside-envelope: linked program bookkeeping is inconsistent");
             for (NSDictionary *record in programRecords)
-                if (![record[@"encoder"] isEqualToString:@"h13-generic-conv"])
+                if (![record[@"encoder"] isEqualToString:
+                        gConvGeneration ? @"h16-h17-formula-conv" : @"h13-generic-conv"])
                     throw std::invalid_argument(
                         "h13.linked-outside-envelope: every linked layer must be a formula-built convolution");
             std::vector<ane::h13::LinkedLayer> layout;
-            ane::h13::Program combined =
-                ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
-            std::vector<std::uint8_t> bytes = ane::h13::encodeANEC(combined);
+            if (gConvGeneration && gConvLayers.size() != chainPrograms.size())
+                throw std::logic_error(
+                    "h16-h17.linked: encoded layer bookkeeping is inconsistent");
+            ane::h13::Program combined = gConvGeneration
+                ? ane::h16::linkDramChain(convGeneration(), gConvLayers, chainPrograms, &layout)
+                : ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
+            std::vector<std::uint8_t> bytes = gConvGeneration
+                ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
                 combinedPayload = encodeHWX(combined, bytes, error);

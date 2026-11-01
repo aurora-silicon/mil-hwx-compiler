@@ -62,6 +62,13 @@ Description describeDramChain(Generation generation, const std::vector<Layer> &l
                               DramEdgeForm form, std::uint32_t scratchRegionBytes);
 h13::Program encodeConv(Generation generation, ConvShape shape,
                         const std::uint8_t *weights, std::size_t weightBytes,
-                        const std::uint8_t *bias = nullptr, std::size_t biasBytes = 0);
+                        const std::uint8_t *bias = nullptr, std::size_t biasBytes = 0,
+                        Layer *layerOut = nullptr);
+// One program of the encoded standalone layers linked through DRAM scratch
+// (slot 3, two ping-pong regions) with the DependencyMode edge form, which
+// ran exactly on the J700 (MobileNetV1 224, 28 tasks).
+h13::Program linkDramChain(Generation generation, const std::vector<Layer> &layers,
+                           const std::vector<h13::Program> &programs,
+                           std::vector<h13::LinkedLayer> *layout);
 void fuseRelu(h13::Program &program);
 }

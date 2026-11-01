@@ -295,7 +295,7 @@ Description describe(Generation gen, const std::vector<Layer> &layers, bool spar
             f.input.channels!=64 || f.output.channels!=128 || f.input.width!=56 ||
             (count==3 && (layers[0].shape.kernel!=1 || layers[0].shape.input.channels!=32 ||
                           layers[0].shape.output.channels!=64 || layers[0].shape.input.width!=112)))
-            throw std::invalid_argument("linked schedule is outside the two measured resident chains; DRAM dependency protocol is unproven on H16G/H17");
+            throw std::invalid_argument("L2-resident linked schedule is outside the two measured resident chains (DRAM-chained programs use describeDramChain)");
     }
     Description out;
     out.stream.resize(16,0);
@@ -464,7 +464,7 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
     return out;
 }
 h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights, std::size_t size,
-                        const std::uint8_t *bias, std::size_t biasBytes) {
+                        const std::uint8_t *bias, std::size_t biasBytes, Layer *layerOut) {
     if (auto why=executableRefusal(s); !why.empty()) throw std::invalid_argument(why);
     Layer layer{s,false};
     std::vector<std::uint8_t> constants;
@@ -479,6 +479,7 @@ h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights
     }
     auto d=describe(gen,{layer},true);
     if (constants.size()!=d.kernelBytes) throw std::logic_error("packed kernel disagrees with the chunk table");
+    if (layerOut) *layerOut=layer;
     h13::Program p;
     p.task=std::move(d.stream); p.constants=std::move(constants);
     p.firstTaskBytes=p.task.size(); p.taskCount=1;
@@ -511,5 +512,35 @@ void fuseRelu(h13::Program &p) {
         }
     }
     throw std::logic_error("H16/H17 task has no NE MAC configuration");
+}
+h13::Program linkDramChain(Generation gen, const std::vector<Layer> &layers,
+                           const std::vector<h13::Program> &programs,
+                           std::vector<h13::LinkedLayer> *layout) {
+    if (layers.size()!=programs.size() || layers.size()<2)
+        throw std::invalid_argument("a DRAM chain needs one encoded program per layer, two or more");
+    // Intermediates ping-pong between two scratch regions, each sized for the
+    // largest intermediate surface.
+    std::uint64_t region=0;
+    for (std::size_t i=0;i+1<programs.size();++i)
+        region=std::max<std::uint64_t>(region,programs[i].output.allocationBytes);
+    region=(region+0x3fff)&~std::uint64_t(0x3fff);
+    if (region>0x80000000ull) throw std::invalid_argument("intermediate surface exceeds the scratch envelope");
+    const auto d=describeDramChain(gen,layers,DramEdgeForm::DependencyOnly,U32(region));
+    h13::Program out;
+    out.task=d.stream;
+    for (std::size_t i=0;i<programs.size();++i) {
+        // Each standalone section is packed back to back; the chain's kernel
+        // bases are the running sum of the same chunk tables.
+        out.constants.insert(out.constants.end(),programs[i].constants.begin(),programs[i].constants.end());
+        if (layout) layout->push_back({U32(i),1,i!=0,(i-1)%2*region,i+1!=programs.size(),i%2*region});
+    }
+    if (out.constants.size()!=d.kernelBytes) throw std::logic_error("chain kernel bytes disagree with the descriptors");
+    out.firstTaskBytes=out.task.size(); out.taskCount=U32(programs.size());
+    out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
+    out.kernelRelocations=d.kernelRelocations;
+    out.scratchAllocationBytes=2*region;
+    out.inputs=programs.front().inputs; out.output=programs.back().output;
+    out.formulaBuilt=true;
+    return out;
 }
 }

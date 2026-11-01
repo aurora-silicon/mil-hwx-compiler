@@ -1,10 +1,24 @@
 # Formula-built H16G and H17 convolutions
 
-This is a partial port. All twelve decoded convolution programs per target
-(fifteen tasks) have formula-built descriptors. Executable HWX emission
-covers the six measured stride-1 standalone forms. **Full MobileNetV1 224 and
-executable linked H16/H17 chains remain refused.** No H16/H17 device execution
-is claimed by this change.
+**MobileNetV1 224 runs on the H17 ANE as one linked program.** On the J700
+(Neo, A18 Pro, T8140) the 28-task program compiled by
+`tools/h16-mobilenet/mobilenet.py --target H17` with real weights gave top-1
+16/16 against the float64 reference, at a host p50 of 1.744 ms per inference
+(200 runs, one submit, research harness). See "Device evidence" below. H16G
+emits the same network; it has not executed on a J616s yet.
+
+What the backend covers:
+
+- every MobileNetV1 224 convolution: 1x1 at 32..1024 channels, 3x3 depthwise
+  at stride 1 and 2, the 3->32 stride-2 stem, all with bias and fused ReLU;
+- stride 2 in Apple's zero-skipping sparse kernel form
+  ([stride-2 facts](h16-h17-stride2-sparse-kernel-facts.md)); dense stride-2
+  kernels hang the H17 engine and are never emitted;
+- `--schedule linked`: all layers in one program, intermediates in DRAM
+  scratch (slot 3, two ping-pong regions) with the DependencyMode edge.
+
+Descriptor parity holds for all 38 single-task and two-chain oracles per
+target and every kernel section, dense and sparse, matches Apple's SHA-256.
 
 The source facts are the sanitized `research/oracles/{h13,h16,h17}/conv_desc_*.json`
 from `research/h16g-h17-conv-oracles`. They contain decoded fields, source MIL,
@@ -20,6 +34,7 @@ record grammar are documented by
 make test-h16g test-h17
 make test-h13 test-h13-parity test-h17-parity
 python3 tools/h16-mobilenet/emit_measured.py build/measured-h16-h17
+python3 tools/h16-mobilenet/mobilenet.py build/mn-h17 --target H17 --weights mobilenet_v1_1_224_quant.tflite
 build/mil-hwxc --target H16G --format hwx --mil model.mil --model-root model --output out
 build/mil-hwxc --target H17 --format hwx --mil model.mil --model-root model --output out
 ```
@@ -54,12 +69,18 @@ measured `0x80` skew, not the standalone width-56 skew of `0x40`.
 | 1x1 64→128 @56 | 56 | 0x50 | 0x240000 | yes |
 | dense 3x3 64→64 @112 | 112 | 0 | 0x200000 | yes |
 | depthwise 3x3 C32 @112 | 112 | 0x50 | 0x230000 | yes |
-| dense 3x3/s2 3→32 @224 | 112 | 0 | 0x230000 | descriptors only |
-| depthwise 3x3/s2 C64 @112 | 56 | 0 | 0x210000 | descriptors only |
-| depthwise 3x3/s2 C128 @56 | 28 | 0x30 | 0x220000 | descriptors only |
+| dense 3x3/s2 3→32 @224 | 112 | 0 | 0x230000 | yes (sparse) |
+| depthwise 3x3/s2 C64 @112 | 56 | 0 | 0x210000 | yes (sparse) |
+| depthwise 3x3/s2 C128 @56 | 28 | 0x30 | 0x220000 | yes (sparse) |
 
-Only square batch-one SAME, unit dilation, no bias, dense or depthwise groups
-are covered. ReLU sets NE MAC bit 16. Dense stride-1 chunks are
+The round-2 and round-3 rows (MobileNetV1 widths 128..1024 at 56/28/14/7,
+stride-2 depthwise C256/C512, bias) are in the table in
+`plugins/H16G/Encoding/H16ConvProgram.cpp`. A biased layer without its own
+measured row takes the plain row's schedule; the measured bias rows show the
+same Common value except 512->1024 @7.
+
+Only square batch-one SAME, unit dilation, dense or depthwise groups are
+covered. Bias sets NE `0x4904` bit `0x10` and adds one bias row per lane. ReLU sets NE MAC bit 16. Dense stride-1 chunks are
 `align64(2*Cin*k*k*Cout/16)`; depthwise substitutes one for Cin. Sixteen local
 chunk offsets follow the cumulative sizes. Reset-default size 64 is omitted.
 
@@ -73,17 +94,17 @@ H17 NE write.
 Two resident schedules are descriptor-tested: depthwise C64/s2→pointwise
 C128, and pointwise C64→depthwise C64/s2→pointwise C128. External DMA appears
 at the endpoints only; task IDs, local chunk offsets, cumulative kernel bases,
-L2 bases and chain flags are rebuilt. This is a descriptor API, not a loader
-API: it supplies no sparse kernel bytes and cannot emit an executable package.
+L2 bases and chain flags are rebuilt. These L2 forms stay a descriptor API;
+executable chains use the DRAM edges described below.
 
 ## Parity and report corrections
 
 Every register (including omitted/default fields), packed record, task size,
-ID and known header word is checked against all twelve oracles for each
-target. **Only header[1] ExeCycles is excluded**; the encoder writes zero and
-makes no runtime claim about that unknown hint. All six applicable kernel
-section sizes/hashes must match, and nonuniform input weights must change the
-kernel section. Sparse section hashes are never claimed as passing tests.
+ID and known header word is checked against all 38 single-task and two-chain
+oracles for each target. **Only header[1] ExeCycles is excluded**; the encoder
+writes zero and makes no runtime claim about that unknown hint. All 36
+single-task kernel sections, dense and sparse, plain and biased, must match
+Apple's SHA-256, and nonuniform input weights must change the kernel section.
 
 The campaign uses the legacy `mint_oracles.blob` header layout. As already
 explained by `research/mint_conv_probes.py:blob_view`, its resolved constant
@@ -137,3 +158,44 @@ The tool saves the same random-weight graph and parameters as
 H13-relabelled object as an H16/H17 package. Wider decoded schedule/bias/sparse
 and DRAM-edge evidence is needed before full-model loadable packages can be
 emitted.
+
+## Linked programs (DRAM edges)
+
+`--schedule linked` keeps every layer's measured standalone task and links the
+tasks through DRAM scratch. Measured fields (round-2 DRAM chain):
+
+- producer (every non-final task): TileDMADst `0x5100` low byte `0xe1` (H17)
+  or `0xf1` (H16G), task index in bits 16..23, destination relocated on BAR
+  slot 3; no CacheDMA block;
+- consumer (every non-first task): TileDMASrc `0x4d00 = 0x20000021 | index<<16`
+  (DependencyMode bit 29), source relocated on BAR slot 3;
+- headers: first `0x68`/`0x00fff868`, middle `0x00fff800` (H17) or
+  `0x00fff820` (H16G), last `0x04000000`/`0x00fff860`; word 7 `0x1fffffff`
+  on every non-final task;
+- kernel bases are the running sum of the per-layer sections, which are
+  packed back to back; scratch holds two regions, each the largest
+  intermediate allocation; the program descriptor is the scratch-backed
+  `0x8c0` form.
+
+On the J700 the round-2 consumer form (low byte `0x41`, `0x4d08 = 0x4e`) and
+this DependencyMode-only form gave identical, deterministic results; without
+the dependency fields the chain races. L2-resident chains remain descriptor
+parity only.
+
+## Device evidence (J700, 2026-11-01)
+
+All runs used a research harness that loads the HWX sections directly; the
+clean kernel driver path is separate work. Mismatch counts are against the
+float64 per-layer fp16 chain; the engine's accumulator is narrower than fp32,
+so 1-ulp differences of a few percent per layer are expected.
+
+| Run | Result |
+| --- | --- |
+| 23 stride-1 layers, real weights, standalone | all outputs written; 2.5-11 % of values 1 ulp off (estimated rel-L2 ~1e-4) |
+| 5 stride-2 layers, sparse kernels, standalone | stem 1.8 %, depthwise 1.7-5.3 % 1-ulp mismatches, deterministic |
+| 5 linked stride-1 segments (2-12 tasks) | dependency forms identical and deterministic; 11 layers linked take 54 % of their standalone engine time |
+| full network, one 28-task program, 16 images | top-1 16/16 vs float64; host p50 1.744 ms, p90 1.747 ms, p99 2.204 ms; engine p50 38251 ticks at 24 MHz |
+
+The scratch regions in the device run were 2 MiB each; the compiler sizes them
+to the largest intermediate (1.75 MiB). The emitted object is otherwise
+identical: same descriptors, same kernel bytes.
