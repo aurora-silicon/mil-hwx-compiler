@@ -280,6 +280,14 @@ std::string executableRefusal(ConvShape s) {
     if (s.stride==2) return sparseStride2Refusal(s);
     return {};
 }
+// The H16 task stream opens with u32 1 and twelve zero bytes, the prologue
+// the H16G validator and the H16 driver require (and Apple's H16G output
+// carries). H17 keeps sixteen zero bytes, the form the J700 runs.
+static std::vector<std::uint8_t> streamPrologue(Generation gen) {
+    std::vector<std::uint8_t> stream(16,0);
+    if (gen==Generation::H16G) stream[0]=1;
+    return stream;
+}
 Description describe(Generation gen, const std::vector<Layer> &layers, bool sparseStride2) {
     if (gen!=Generation::H16G && gen!=Generation::H17)
         throw std::invalid_argument("unsupported convolution generation");
@@ -298,7 +306,7 @@ Description describe(Generation gen, const std::vector<Layer> &layers, bool spar
             throw std::invalid_argument("L2-resident linked schedule is outside the two measured resident chains (DRAM-chained programs use describeDramChain)");
     }
     Description out;
-    out.stream.resize(16,0);
+    out.stream=streamPrologue(gen);
     U32 residentRow=0,residentStride=0;
     U32 source=count==2 ? 0x63c00 : (count==3 ? 0x188e00 : 0);
     U32 kernelBase=0;
@@ -421,7 +429,7 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
     const bool h17=gen==Generation::H17;
     const unsigned count=static_cast<unsigned>(layers.size());
     Description out;
-    out.stream.resize(16,0);
+    out.stream=streamPrologue(gen);
     U32 kernelBase=0;
     for (unsigned i=0;i<count;++i) {
         const auto s=layers[i].shape;

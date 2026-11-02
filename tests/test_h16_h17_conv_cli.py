@@ -54,6 +54,7 @@ def main():
             assert got['constant_section']['nonzero_bytes'] == 0, path.name
             assert got['program_descriptor']['task_count'] == 1
             assert got['tensor_descriptors'] == oracle['tensor_descriptors'], path.name
+            assert task_prologue((output / 'program-0.hwx').read_bytes()) == PROLOGUE, path.name
             # Check the kernel relocation's section, width and operand. H17
             # elementwise constants use a different relocation target.
             data = (output / 'program-0.hwx').read_bytes()
@@ -159,6 +160,7 @@ def linked_chain(root):
     got = parse_hwx((linked / 'program-0.hwx').read_bytes(), ISA)
     assert not got['task_decode_errors'], got['task_decode_errors']
     assert got['program_descriptor']['task_count'] == 3
+    assert task_prologue((linked / 'program-0.hwx').read_bytes()) == PROLOGUE
     kernels = b''
     for i in range(3):
         data = (perop / f'program-{i}.hwx').read_bytes()
@@ -174,6 +176,27 @@ def linked_chain(root):
         assert int(tasks[i]['blocks']['0x04d00']['words']['0x04d00'], 16) == 0x20000021 | i << 16
         assert int(tasks[i - 1]['blocks']['0x05100']['words']['0x05100'], 16) & 0xff == \
             (0xe1 if TARGET == 'H17' else 0xf1)
+
+
+# The first 16 task-stream bytes: the H16 prologue (u32 1, twelve zero bytes)
+# on H16G, sixteen zero bytes on H17.
+PROLOGUE = (b'\x01' if TARGET == 'H16G' else b'\x00') + bytes(15)
+
+
+def task_prologue(data):
+    """The first 16 bytes of the __TEXT/__text task stream of an HWX object."""
+    import struct
+    cursor = 32
+    for _ in range(struct.unpack_from('<I', data, 16)[0]):
+        command, length = struct.unpack_from('<II', data, cursor)
+        if command == 0x19:
+            for i in range(struct.unpack_from('<I', data, cursor + 64)[0]):
+                at = cursor + 72 + i * 80
+                if data[at:at + 16].split(b'\0')[0] == b'__text':
+                    offset = struct.unpack_from('<I', data, at + 48)[0]
+                    return data[offset:offset + 16]
+        cursor += length
+    raise AssertionError('no __text section')
 
 
 def kernel_bytes(data):
