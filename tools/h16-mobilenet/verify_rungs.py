@@ -29,7 +29,7 @@ MASK = [
     0xf000000f,0x8000007f,0x000000f8,0x000000c3,0x0000000f,0x0000003e,0,
 ]
 TASK_BYTES = [
-    408,320,400,360,344,356,348,364,348,356,352,364,348,356,
+    412,320,400,360,344,356,348,364,348,356,352,364,348,356,
     352,360,352,360,352,360,352,360,352,364,348,356,352,408,
 ]
 
@@ -69,6 +69,12 @@ def main():
         assert [i for i, t in enumerate(tasks) if '0x05100' in t['blocks']] == [1, 27]
         assert [regs[i][0x4148] for i in range(28)] == \
                [0x500170,0x84a] + [0x140] * 25 + [0x14a]
+        assert regs[1][0x414c] == 0x0c5500
+        assert [regs[2][a] for a in (0x4110,0x4114,0x4118,0x411c,0x4120)] == \
+               [0x188e00,0x80,0x1050,0x1000,0x1000]
+        assert regs[27][0x414c] == 0x543f0 and regs[27][0x5100] == 0x011b0031
+        assert [regs[i][0x5500] & 0x20 for i in range(28)] == \
+               [0x20 if i in (0,3,7,11,23) else 0 for i in range(28)]
         assert manifest['schedule'] == ('linked-l2' if number == 1 else
             'linked-l2-schedule' if number == 2 else 'linked-l2-header')
         assert manifest['scratch']['channel'] == 3

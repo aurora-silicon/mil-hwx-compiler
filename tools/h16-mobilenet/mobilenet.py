@@ -142,7 +142,10 @@ def main():
     ap.add_argument('--weights'); ap.add_argument('--tfweights'); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--images')
     ap.add_argument('--schedule', choices=['linked', 'linked-l2', 'linked-l2-schedule',
-                                           'linked-l2-header'], default='linked')
+                                           'linked-l2-header', 'linked-l2-prefix-1',
+                                           'linked-l2-prefix-2', 'linked-l2-prefix-4',
+                                           'linked-l2-prefix-8', 'linked-l2-prefix-26',
+                                           'linked-l2-baseline-spill'], default='linked')
     a = ap.parse_args()
     if a.weights:
         from tflite_weights import mobilenet_v1_weights

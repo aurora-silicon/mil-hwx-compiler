@@ -67,9 +67,24 @@ Description describeDramChain(Generation generation, const std::vector<Layer> &l
 // and compact register write set.  These policies deliberately refuse every
 // graph except the named 28-layer MobileNetV1 224 shape.
 enum class MobileNetL2Policy { Placement, Schedule, Header };
+struct MobileNetL2Variant {
+    MobileNetL2Policy policy = MobileNetL2Policy::Placement;
+    // Number of resident edges enabled in Apple placement order
+    // (edge 0, then edges 2..26).  The remaining edges use the proven DRAM
+    // ping-pong form.  This is a hardware-bisection facility, not a general
+    // placement heuristic.
+    unsigned residentPrefix = 26;
+    // The full parity rungs use the decoded one-spill form.  Bisection can
+    // retain the old DRAM edge form to separate L2 placement from that spill.
+    bool measuredSpill = true;
+    std::uint32_t scratchRegionBytes = 0x1c0000;
+};
 Description describeMobileNetL2(Generation generation,
                                 const std::vector<Layer> &layers,
                                 MobileNetL2Policy policy);
+Description describeMobileNetL2(Generation generation,
+                                const std::vector<Layer> &layers,
+                                MobileNetL2Variant variant);
 h13::Program encodeConv(Generation generation, ConvShape shape,
                         const std::uint8_t *weights, std::size_t weightBytes,
                         const std::uint8_t *bias = nullptr, std::size_t biasBytes = 0,
@@ -84,6 +99,11 @@ h13::Program linkMobileNetL2(Generation generation,
                              const std::vector<Layer> &layers,
                              const std::vector<h13::Program> &programs,
                              MobileNetL2Policy policy,
+                             std::vector<h13::LinkedLayer> *layout);
+h13::Program linkMobileNetL2(Generation generation,
+                             const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Variant variant,
                              std::vector<h13::LinkedLayer> *layout);
 void fuseRelu(h13::Program &program);
 }

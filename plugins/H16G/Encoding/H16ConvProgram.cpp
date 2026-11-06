@@ -549,6 +549,12 @@ U32 mobileSourceCfg(unsigned edge) {
     return 0x104;
 }
 
+bool mobileResident(unsigned edge, unsigned prefix) {
+    if (edge==1 || prefix>26) return false;
+    const unsigned rank=edge==0 ? 0 : edge-1;
+    return rank<prefix;
+}
+
 std::uint64_t mobileSpan(unsigned edge) {
     const auto &s=mobileNetV1[edge];
     return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
@@ -598,13 +604,12 @@ void compactMobileNetDefaults(std::map<U32,U32> &r, unsigned taskIndex) {
     // members that are derivable from the shape.  Keep the complete values
     // in the placement plan above; omit only the measured default writes.
     if (taskIndex==0) {
-        r.erase(0x4110);                 // external-input staging default
         r.erase(0x4158); r.erase(0x415c);
     } else if (taskIndex==1) {
         r.erase(0x411c); r.erase(0x4120);
-        r.erase(0x4150); r.erase(0x4158); r.erase(0x415c);
+        r.erase(0x4150); r.erase(0x4154); r.erase(0x4158); r.erase(0x415c);
     } else if (taskIndex==2) {
-        r.erase(0x415c);
+        r.erase(0x4158); r.erase(0x415c);
     } else if (taskIndex+1==mobileNetV1.size()) {
         r.erase(0x411c); r.erase(0x4120);
     } else {
@@ -616,10 +621,18 @@ void compactMobileNetDefaults(std::map<U32,U32> &r, unsigned taskIndex) {
 
 Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers,
                                 MobileNetL2Policy policy) {
+    return describeMobileNetL2(gen,layers,MobileNetL2Variant{policy,26,true,0x1c0000});
+}
+
+Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                                MobileNetL2Variant variant) {
     if (gen!=Generation::H16G)
         throw std::invalid_argument("the measured MobileNet linked-L2 policies are H16G-only");
+    if (variant.residentPrefix>26)
+        throw std::invalid_argument("the MobileNet linked-L2 resident prefix must be 0..26");
     requireMobileNet(layers);
-    proveMobilePlacement();
+    if (variant.residentPrefix==26) proveMobilePlacement();
+    const auto policy=variant.policy;
     Description out;
     out.stream=streamPrologue(gen);
     U32 kernelBase=0;
@@ -636,32 +649,59 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             t.header[4]=first ? 0x68u : 0x28u;
             t.header[7]=mobileMask[i];
         }
-        r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240);
+        // Keep KernelDMA's sparse bit on every stride-2 task.  The first
+        // linked-L2 implementation rebuilt this word from the task id and
+        // terminal class and accidentally cleared bit 0x20, while leaving
+        // the coefficient section sparse.  The resulting descriptor ran but
+        // interpreted the stem and four downsampling kernels incorrectly.
+        r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240) |
+                  (layers[i].shape.stride==2 ? 0x20 : 0);
         for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
 
         // Source edge: external input, the sole spill read, or an L2 tuple.
         if (first) {
             // Keep the ordinary external source DMA emitted by task().
             r[0x4110]=static_cast<U32>(mobileSpan(0));
-        } else if (i==2) {
-            setSourceTuple(r,0x842,0,mobileNetV1[i].cin,mobileNetV1[i].width,
-                           mobileResultR[i-1]);
-            r[0x4d00]=0x20020041; r[0x4d08]=0x4e;
-            r[0x4d10]=r[0x4d14]=0; r[0x4d18]=0x700; r[0x4d1c]=0x31000;
-            r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
-        } else {
+        } else if (mobileResident(i-1,variant.residentPrefix)) {
             const unsigned edge=i-1;
             setSourceTuple(r,mobileSourceCfg(edge),mobileResultBase[edge],
                            mobileNetV1[i].cin,mobileNetV1[i].width,mobileResultR[edge]);
             eraseRange(r,0x4d00,0x4dff);
+        } else if (i==2 && variant.measuredSpill) {
+            // A DRAM read still stages into L2 before convolution.  Task 2's
+            // 1x1 source uses the ordinary capped-64-pixel source tuple and
+            // sits immediately after its resident result, not at base zero.
+            // Base zero/edge-1 geometry aliases the source and result and was
+            // the second correctness bug in the original rungs.
+            setSourceTuple(r,0x842,mobileSpan(i),mobileNetV1[i].cin,64,0x1050);
+            r[0x4d00]=0x20020041; r[0x4d08]=0x4e;
+            r[0x4d10]=r[0x4d14]=0; r[0x4d18]=0x700; r[0x4d1c]=0x31000;
+            r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
+        } else {
+            if (i<27 && mobileResident(i,variant.residentPrefix))
+                r[0x4110]=mobileResultBase[i]+static_cast<U32>(mobileSpan(i));
+            r[0x4d00]=0x20000021 | i<<16;
+            r[0x4d10]=r[0x4d14]=((i-1)%2)*variant.scratchRegionBytes;
+            t.sourceSlotFlags=0x21800000;
         }
 
         // Result edge: one spill, 26 resident edges, or the external output.
         if (last) {
             r[0x4148]=0x14a;
+            r[0x414c]=mobileResultBase[i-1]+mobileSpan(i-1);
+            r[0x5100]=(r[0x5100]&0xff00ffffu) | i<<16;
             r[0x5908]=i<<16 | 0xe0;
-        } else if (i==1) {
-            setResultTuple(r,0x84a,0,mobileNetV1[i].cout,
+        } else if (mobileResident(i,variant.residentPrefix)) {
+            const U32 cfg=i==0 ? 0x500170 : 0x140;
+            const U32 outWidth=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+            setResultTuple(r,cfg,mobileResultBase[i],mobileNetV1[i].cout,
+                           outWidth,mobileResultR[i]);
+            eraseRange(r,0x5100,0x51ff);
+            eraseRange(r,0x5900,0x59ff);
+        } else if (i==1 && variant.measuredSpill) {
+            // The spill result is staged after edge 0, which remains live as
+            // task 1's input.  A zero result base overwrites that input.
+            setResultTuple(r,0x84a,mobileSpan(0),mobileNetV1[i].cout,
                            (mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride,
                            mobileResultR[i]);
             r[0x5100]=0x010100f1; r[0x5108]=r[0x510c]=0;
@@ -669,15 +709,16 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
         } else {
-            const U32 cfg=i==0 ? 0x500170 : 0x140;
-            const U32 outWidth=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
-            setResultTuple(r,cfg,mobileResultBase[i],mobileNetV1[i].cout,
-                           outWidth,mobileResultR[i]);
-            eraseRange(r,0x5100,0x51ff);
+            if (i && mobileResident(i-1,variant.residentPrefix))
+                r[0x414c]=mobileResultBase[i-1]+static_cast<U32>(mobileSpan(i-1));
+            r[0x5100]=(r[0x5100]&0xff00ff00u) | i<<16 | 0xf1;
+            r[0x5108]=r[0x510c]=(i%2)*variant.scratchRegionBytes;
+            t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
         }
 
-        if (policy==MobileNetL2Policy::Header) compactMobileNetDefaults(r,i);
+        if (policy==MobileNetL2Policy::Header && variant.residentPrefix==26 &&
+            variant.measuredSpill) compactMobileNetDefaults(r,i);
         pack(t);
         out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
         out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
@@ -777,6 +818,14 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
                              const std::vector<h13::Program> &programs,
                              MobileNetL2Policy policy,
                              std::vector<h13::LinkedLayer> *layout) {
+    return linkMobileNetL2(gen,layers,programs,
+                           MobileNetL2Variant{policy,26,true,0x1c0000},layout);
+}
+
+h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Variant variant,
+                             std::vector<h13::LinkedLayer> *layout) {
     requireMobileNet(layers);
     if (gen!=Generation::H16G || programs.size()!=layers.size())
         throw std::invalid_argument("the MobileNet linked-L2 policy needs 28 H16G layer programs");
@@ -788,18 +837,26 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
                   programs[i-1].output.elementSize!=programs[i].inputs[0].elementSize))
             throw std::invalid_argument("a MobileNet linked-L2 layer input differs from its producer output");
     }
-    const auto d=describeMobileNetL2(gen,layers,policy);
+    const auto d=describeMobileNetL2(gen,layers,variant);
     h13::Program out;
     out.task=d.stream;
     if (layout) layout->clear();
     for (std::size_t i=0;i<programs.size();++i) {
         out.constants.insert(out.constants.end(),programs[i].constants.begin(),programs[i].constants.end());
         if (layout) {
-            const auto edgeCode=[](std::size_t edge) {
-                if (edge==1) return 0;
+            const auto edgeCode=[&](std::size_t edge) {
+                if (!mobileResident(static_cast<unsigned>(edge),variant.residentPrefix)) return 0;
                 return mobileSourceCfg(static_cast<unsigned>(edge))==0x104 ? 3 : 4;
             };
-            h13::LinkedLayer entry{U32(i),1,i==2,0,i==1,0};
+            const bool readsScratch=i && !mobileResident(U32(i-1),variant.residentPrefix);
+            const bool writesScratch=i+1<programs.size() &&
+                                     !mobileResident(U32(i),variant.residentPrefix);
+            const bool measuredWrite=variant.measuredSpill && i==1;
+            const bool measuredRead=variant.measuredSpill && i==2;
+            h13::LinkedLayer entry{U32(i),1,readsScratch,
+                measuredRead ? 0u : U32((i-1)%2)*variant.scratchRegionBytes,
+                writesScratch,
+                measuredWrite ? 0u : U32(i%2)*variant.scratchRegionBytes};
             entry.inputEdge=i ? edgeCode(i-1) : 0;
             entry.outputEdge=i+1<programs.size() ? edgeCode(i) : 0;
             if (entry.inputEdge) entry.l2Source=mobileResultBase[i-1];
@@ -816,7 +873,8 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
     out.firstTaskBytes=out.task.size(); out.taskCount=U32(programs.size());
     out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
     out.kernelRelocations=d.kernelRelocations;
-    out.scratchAllocationBytes=0xc4000;
+    const bool onlyMeasuredSpill=variant.measuredSpill && variant.residentPrefix==26;
+    out.scratchAllocationBytes=onlyMeasuredSpill ? 0xc4000 : 2*variant.scratchRegionBytes;
     out.inputs=programs.front().inputs; out.output=programs.back().output;
     out.formulaBuilt=true;
     return out;

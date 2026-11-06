@@ -115,7 +115,7 @@ H16G is the default target, so the flag is optional there.
 ```text
 usage: mil-hwxc --mil FILE --model-root DIR --output DIR
                 [--target H16G|H13|H14|H17|H18] [--format anec|hwx]
-                [--schedule per-op|chain|spatial|linked|linked-l2|linked-l2-schedule|linked-l2-header]
+                [--schedule per-op|chain|spatial|linked|linked-l2|linked-l2-schedule|linked-l2-header|linked-l2-prefix-{1,2,4,8,26}|linked-l2-baseline-spill]
 ```
 
 `--target` picks the backend.

@@ -41,9 +41,15 @@ BASE = [
     0x189260,0x1c1500,0x1f97a0,0x031a40,0x069c00,0,0x01c150,0x0382a0,
 ]
 TASK_BYTES = [
-    408,320,400,360,344,356,348,364,348,356,352,364,348,356,
+    412,320,400,360,344,356,348,364,348,356,352,364,348,356,
     352,360,352,360,352,360,352,360,352,364,348,356,352,408,
 ]
+
+
+def mobile_source_cfg(edge):
+    if edge <= 5 or edge in (7, 8):
+        return 0x120
+    return 0x104
 
 
 def run(mode):
@@ -93,6 +99,15 @@ def main():
     assert w[2][0x4d00] == 0x20020041 and w[2][0x4d68] == 0x08002031
     assert (w[1][0x5110], w[1][0x5114]) == (0x700, 0x31000)
     assert (w[2][0x4d18], w[2][0x4d1c]) == (0x700, 0x31000)
+    # The spill's task-local L2 staging regions must not alias the live input
+    # or result.  These independent decoded values were omitted from the
+    # first implementation and are not derived from BASE/mobileResultR.
+    assert w[1][0x414c] == 0x0c5500
+    assert [w[2][a] for a in (0x4110,0x4114,0x4118,0x411c,0x4120)] == \
+           [0x188e00,0x80,0x1050,0x1000,0x1000]
+    assert w[27][0x414c] == 0x543f0 and w[27][0x5100] == 0x011b0031
+    assert [w[i][0x5500] & 0x20 for i in range(28)] == \
+           [0x20 if i in (0,3,7,11,23) else 0 for i in range(28)]
     assert [w[i][0x4148] for i in range(28)] == \
         [0x500170,0x84a] + [0x140] * 25 + [0x14a]
     assert [w[i][0x4104] for i in range(1, 28)] == \
@@ -111,6 +126,34 @@ def main():
     assert [words(rungs['mobilenet-l2-schedule'])[i][0x3c] for i in range(28)] == SCHEDULE
     assert [words(rungs['mobilenet-l2-header'])[i][0x3c] for i in range(28)] == SCHEDULE
     assert sum(a != b for a, b in zip(old, SCHEDULE)) == 14
+
+    # Prefix packages keep the first k eligible edges resident (edge 0, then
+    # 2..k) and retain the old DRAM ping-pong form for every other edge,
+    # including edge 1.  This makes each device result identify the first bad
+    # L2 edge without also changing the measured-spill encoding.
+    eligible = [0] + list(range(2, 27))
+    for prefix in (1,2,4,8,26):
+        _, tasks = run(f'mobilenet-prefix-{prefix}')
+        ww = words(tasks)
+        resident = set(eligible[:prefix])
+        dram = set(range(27)) - resident
+        assert [i for i, t in enumerate(tasks) if '0x04d00' in t['blocks']] == \
+               [0] + [edge + 1 for edge in sorted(dram)]
+        assert [i for i, t in enumerate(tasks) if '0x05100' in t['blocks']] == \
+               sorted(dram) + [27]
+        for edge in resident:
+            assert ww[edge][0x4148] in (0x500170,0x140)
+            assert ww[edge + 1][0x4104] == mobile_source_cfg(edge)
+        if prefix == 26:
+            assert ww[1][0x5100] == 0x010100f1
+            assert ww[2][0x4d00] == 0x20020041
+
+    _, baseline_spill = run('mobilenet-baseline-spill')
+    bw = words(baseline_spill)
+    assert [i for i, t in enumerate(baseline_spill) if '0x04d00' in t['blocks']] == [0,2]
+    assert [i for i, t in enumerate(baseline_spill) if '0x05100' in t['blocks']] == [1,27]
+    assert bw[1][0x5100] != 0x010100f1 and bw[2][0x4d00] != 0x20020041
+    assert bw[1][0x414c] == 0x0c5500 and bw[2][0x4110] == 0x188e00
 
     headers = [[int(x, 16) for x in t['header_words']]
                for t in rungs['mobilenet-l2-header']]

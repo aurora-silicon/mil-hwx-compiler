@@ -217,6 +217,16 @@ are external input, spill write, spill read and external output.  The graph
 gate checks every shape, bias and ReLU position; the policies refuse H17 and
 every adjacent H16G graph instead of extrapolating the measured tables.
 
+For device diagnosis, `linked-l2-prefix-{1,2,4,8,26}` keeps only the first
+named number of eligible edges resident (edge 0, then edges 2 through 26) and
+leaves every other edge in the proven DRAM ping-pong form.
+Prefixes 1 through 8 retain the old edge-1 DRAM form; prefix 26 selects the
+corrected decoded one-spill form, so `linked-l2-baseline-spill` is its direct
+spill-control pair.
+`linked-l2-baseline-spill` keeps all 26 resident edges while retaining the old
+DRAM encoding for edge 1.  These are bisection-only schedules; they do not
+generalize placement beyond this exact graph.
+
 The implementation contains decoded field values and allocation rules, not a
 captured object or payload.  Register names and record grammar come from the
 BSD-3-Clause `coreml_to_ane_hwx` H16 map at revision `ce54664e`; model weights

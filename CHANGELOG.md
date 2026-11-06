@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: fix MobileNetV1 linked-L2 correctness by retaining KernelDMA sparse
+  mode on the five stride-2 tasks and preserving the decoded spill/external
+  L2 staging tuples. Add resident-prefix and baseline-spill schedules for a
+  bounded device bisection.
 - H16G: add three exact-graph MobileNetV1 linked-L2 schedules for staged
   placement, Common-word and header-policy A/B packages. They keep 26 of 27
   internal edges in the 2 MiB ring, use one `0xc4000` channel-3 spill, and

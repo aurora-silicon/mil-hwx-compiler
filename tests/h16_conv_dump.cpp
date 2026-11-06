@@ -51,6 +51,13 @@ int main(int argc, char **argv) {
                               : mode=="mobilenet-l2-schedule" ? ane::h16::MobileNetL2Policy::Schedule
                               : ane::h16::MobileNetL2Policy::Header;
             bytes=ane::h16::describeMobileNetL2(gen,layers,policy).stream;
+        } else if (mode.rfind("mobilenet-prefix-",0)==0 ||
+                   mode=="mobilenet-baseline-spill") {
+            const unsigned prefix=mode=="mobilenet-baseline-spill" ? 26u
+                : static_cast<unsigned>(std::stoul(mode.substr(17)));
+            bytes=ane::h16::describeMobileNetL2(gen,layers,
+                {ane::h16::MobileNetL2Policy::Placement,prefix,
+                 mode!="mobilenet-baseline-spill" && prefix==26,0x1c0000}).stream;
         }
         else if (mode.rfind("dram",0)==0) {
             const auto form=mode=="dram-measured" ? ane::h16::DramEdgeForm::Measured
