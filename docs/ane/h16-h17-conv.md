@@ -199,3 +199,27 @@ so 1-ulp differences of a few percent per layer are expected.
 The scratch regions in the device run were 2 MiB each; the compiler sizes them
 to the largest intermediate (1.75 MiB). The emitted object is otherwise
 identical: same descriptors, same kernel bytes.
+
+## H16G MobileNetV1 linked-L2 policies
+
+H16G exposes three deliberately workload-specific schedules for the exact
+biased 28-convolution MobileNetV1 1.0/224 graph:
+
+- `linked-l2`: 26 internal edges in the 2 MiB circular L2 and edge 1 in one
+  channel-3 `0xc4000` spill region;
+- `linked-l2-schedule`: the same placement plus the measured 28 Common
+  schedule words;
+- `linked-l2-header`: the same placement and Common words plus the measured
+  cost hints, dispatch limits and task masks.
+
+All three omit TileDMA blocks for resident edges.  The only TileDMA endpoints
+are external input, spill write, spill read and external output.  The graph
+gate checks every shape, bias and ReLU position; the policies refuse H17 and
+every adjacent H16G graph instead of extrapolating the measured tables.
+
+The implementation contains decoded field values and allocation rules, not a
+captured object or payload.  Register names and record grammar come from the
+BSD-3-Clause `coreml_to_ane_hwx` H16 map at revision `ce54664e`; model weights
+remain caller-supplied.  `tests/test_h16g_mobilenet_l2.py` proves the task
+count, complete source/result tuples, ring wrap, spill formats, four DMA
+endpoints, schedule words and headers from decoded compiler output.

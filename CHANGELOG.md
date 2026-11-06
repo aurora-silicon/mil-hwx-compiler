@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: add three exact-graph MobileNetV1 linked-L2 schedules for staged
+  placement, Common-word and header-policy A/B packages. They keep 26 of 27
+  internal edges in the 2 MiB ring, use one `0xc4000` channel-3 spill, and
+  omit TileDMA blocks on resident edges.
 - H13/H14: add the explicit spatial schedule, using existing copy, convolution
   and matrix kernels for halo dispatch, nearest/bilinear resize and concat.
   Support the MobileNetV1 convolution/head geometries at batch 1/8, including

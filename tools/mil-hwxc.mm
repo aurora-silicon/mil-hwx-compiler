@@ -13,7 +13,7 @@ static void printUsage(const char *program) {
     fprintf(stderr,
         "usage: %s --mil FILE --model-root DIR "
         "--output DIR [--target H16G|H13|H14|H17|H18] [--format anec|hwx] "
-        "[--schedule per-op|chain|spatial|linked|linked-l2]\n", program);
+        "[--schedule per-op|chain|spatial|linked|linked-l2|linked-l2-schedule|linked-l2-header]\n", program);
 }
 
 static NSString *severityName(ANEDiagnosticSeverity severity) {

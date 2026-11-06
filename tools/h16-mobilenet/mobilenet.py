@@ -9,6 +9,8 @@ layers run at stride 2 (sparse kernels), SAME padding, ReLU where the original
 uses ReLU6. The classifier is a 1x1 conv (1024 -> 1001, zero-padded to 1024)
 at 7x7 before the average pool, so the host only averages 49 positions per
 logit. `--schedule linked` chains all 28 convolutions through DRAM scratch.
+On H16G, the three `linked-l2*` schedules emit the placement, Common-word,
+and full header-policy rungs for controlled A/B runs.
 
 Without weights the weights are random (He-scaled). The float64 reference
 rounds every layer to fp16, as the engine stores its surfaces; `--images`
@@ -139,6 +141,8 @@ def main():
     ap.add_argument('out'); ap.add_argument('--target', choices=['H17', 'H16G'], default='H17')
     ap.add_argument('--weights'); ap.add_argument('--tfweights'); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--images')
+    ap.add_argument('--schedule', choices=['linked', 'linked-l2', 'linked-l2-schedule',
+                                           'linked-l2-header'], default='linked')
     a = ap.parse_args()
     if a.weights:
         from tflite_weights import mobilenet_v1_weights
@@ -153,14 +157,14 @@ def main():
     src = os.path.join(a.out, 'src')
     mil = write_mil(src, params)
     milc = os.environ.get('MILC', os.path.join(HERE, '..', '..', 'build', 'mil-hwxc'))
-    r = subprocess.run([milc, '--target', a.target, '--format', 'hwx', '--schedule', 'linked', '--mil', mil,
+    r = subprocess.run([milc, '--target', a.target, '--format', 'hwx', '--schedule', a.schedule, '--mil', mil,
                         '--model-root', src, '--output', os.path.join(a.out, 'linked')], capture_output=True, text=True)
     if r.returncode:
         raise SystemExit(f'linked compile failed: {r.stderr.strip()[-800:]}')
     m = json.load(open(os.path.join(a.out, 'linked', 'manifest.json')))
     np.savez(os.path.join(a.out, 'params.npz'), **{f'w{i}': P['w'] for i, P in enumerate(params)},
              **{f'b{i}': P['b'] for i, P in enumerate(params)})
-    msg = (f"{a.out}: {a.target} linked {m['programs'][0]['taskDescriptors']} tasks, "
+    msg = (f"{a.out}: {a.target} {a.schedule} {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
     if a.images:
         imgs = np.load(a.images)['images']

@@ -471,6 +471,227 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
     out.kernelBytes=kernelBase;
     return out;
 }
+
+namespace {
+struct MobileLayerShape {
+    U32 cin, cout, width, kernel, stride, groups;
+};
+
+constexpr std::array<MobileLayerShape,28> mobileNetV1 = {{
+    {3,32,224,3,2,1}, {32,32,112,3,1,32}, {32,64,112,1,1,1},
+    {64,64,112,3,2,64}, {64,128,56,1,1,1}, {128,128,56,3,1,128},
+    {128,128,56,1,1,1}, {128,128,56,3,2,128}, {128,256,28,1,1,1},
+    {256,256,28,3,1,256}, {256,256,28,1,1,1}, {256,256,28,3,2,256},
+    {256,512,14,1,1,1}, {512,512,14,3,1,512}, {512,512,14,1,1,1},
+    {512,512,14,3,1,512}, {512,512,14,1,1,1}, {512,512,14,3,1,512},
+    {512,512,14,1,1,1}, {512,512,14,3,1,512}, {512,512,14,1,1,1},
+    {512,512,14,3,1,512}, {512,512,14,1,1,1}, {512,512,14,3,2,512},
+    {512,1024,7,1,1,1}, {1024,1024,7,3,1,1024},
+    {1024,1024,7,1,1,1}, {1024,1024,7,1,1,1},
+}};
+
+// Result R strides and bases from the t-4603 H16G full-edge decode.  A zero
+// base is deliberately omitted by the encoder: zero is the task-local
+// default.  Edge 1 is the sole DRAM spill and therefore has no ring base.
+constexpr std::array<U32,27> mobileResultR = {{
+    0x1c30,0x1c00,0x3820,0x1c80,0x3830,0x3830,0x3830,
+    0x2050,0x4050,0x4050,0x4040,0x2030,
+    0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,
+    0x4030,0x4020,0x2030,0x4030,0x4030,0x4030,
+}};
+constexpr std::array<U32,27> mobileResultBase = {{
+    0x000000,0x000000,0x000000,0x188e00,0x000000,0x0c4a80,0x189500,
+    0x0708c0,0x000000,0x0708c0,0x0e1180,0x151880,
+    0x000000,0x0382a0,0x070540,0x0a87e0,0x0e0a80,0x118d20,0x150fc0,
+    0x189260,0x1c1500,0x1f97a0,0x031a40,0x069c00,0x000000,0x01c150,
+    0x0382a0,
+}};
+constexpr std::array<U32,28> mobileSchedule = {{
+    0x230000,0x230000,0x231100,0x211100,0x243300,0x243300,0x243300,
+    0x222200,0x222200,0x222200,0x222200,0x233300,0x233300,0x233300,
+    0x233300,0x233300,0x233300,0x233300,0x233300,0x233300,0x233300,
+    0x233300,0x233300,0x244404,0x244404,0x244404,0x244404,0x244404,
+}};
+constexpr std::array<U32,28> mobileCost = {{
+    0x04,0x0b,0x0b,0x0c,0x02,0x07,0x05,0x06,0x03,0x03,0x06,0x02,0x03,0x01,
+    0x07,0x01,0x07,0x01,0x07,0x01,0x07,0x01,0x07,0x01,0x0f,0x01,0x1e,0x25,
+}};
+constexpr std::array<U32,28> mobileMask = {{
+    0x00001fff,0x00001fff,0x01ffffff,0x7fffffff,0x7f001fff,0x01ffffff,0xfffff01f,
+    0xff00079f,0x000007ff,0x00007fff,0x003fff80,0x007fc000,0x0060000f,0x000000ff,
+    0x000007f8,0x00007f80,0x0003fc00,0x003fc000,0x01fe0000,0x1fe00000,0xff000000,
+    0xf000000f,0x8000007f,0x000000f8,0x000000c3,0x0000000f,0x0000003e,0x00000000,
+}};
+
+void requireMobileNet(const std::vector<Layer> &layers) {
+    if (layers.size()!=mobileNetV1.size())
+        throw std::invalid_argument("H16G linked-L2 policies require the exact 28-layer MobileNetV1 224 graph");
+    for (std::size_t i=0;i<layers.size();++i) {
+        const auto &s=layers[i].shape;
+        const auto &want=mobileNetV1[i];
+        if (s.input.channels!=want.cin || s.output.channels!=want.cout ||
+            s.input.width!=want.width || s.input.height!=want.width ||
+            s.kernel!=want.kernel || s.kernelWidth!=want.kernel ||
+            s.stride!=want.stride || s.groups!=want.groups || !s.bias ||
+            layers[i].relu!=(i+1!=layers.size()))
+            throw std::invalid_argument("H16G linked-L2 policies require the exact biased MobileNetV1 224 shapes and ReLU sequence");
+    }
+}
+
+void eraseRange(std::map<U32,U32> &r, U32 first, U32 last) {
+    for (auto it=r.lower_bound(first);it!=r.end() && it->first<=last;)
+        it=r.erase(it);
+}
+
+U32 mobileSourceCfg(unsigned edge) {
+    if (edge==1) return 0x842;
+    if (edge<=5 || edge==7 || edge==8) return 0x120;
+    return 0x104;
+}
+
+std::uint64_t mobileSpan(unsigned edge) {
+    const auto &s=mobileNetV1[edge];
+    return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
+}
+
+bool mobileRingOverlap(std::uint64_t a, std::uint64_t an,
+                       std::uint64_t b, std::uint64_t bn) {
+    constexpr std::uint64_t ring=0x200000;
+    if (an+bn>ring) return true;
+    for (std::uint64_t aa:{a%ring,a%ring+ring})
+        for (std::uint64_t bb:{b%ring,b%ring+ring})
+            if (aa<bb+bn && bb<aa+an) return true;
+    return false;
+}
+
+void proveMobilePlacement() {
+    // Task 0 stages its external input immediately after its result.  The
+    // spill source of task 2 is not resident in the ring.  Every remaining
+    // task with resident input and output must keep both full tensors apart.
+    constexpr std::uint64_t inputBytes=224ull*3*448;
+    if (mobileRingOverlap(0,mobileSpan(0),mobileSpan(0),inputBytes))
+        throw std::logic_error("MobileNet task 0 input overlaps its L2 result");
+    for (unsigned taskIndex=3;taskIndex<27;++taskIndex)
+        if (mobileRingOverlap(mobileResultBase[taskIndex-1],mobileSpan(taskIndex-1),
+                              mobileResultBase[taskIndex],mobileSpan(taskIndex)))
+            throw std::logic_error("MobileNet L2 ring placement overlaps a live input");
+}
+
+void setSourceTuple(std::map<U32,U32> &r, U32 cfg, U32 base,
+                    U32 channels, U32 width, U32 rowStride) {
+    r[0x4104]=cfg; r.erase(0x4108);
+    if (base) r[0x4110]=base; else r.erase(0x4110);
+    const U32 c=(2*width+15)&~U32(15),d=channels*c;
+    r[0x4114]=c; r[0x4118]=rowStride; r[0x411c]=d; r[0x4120]=d;
+}
+
+void setResultTuple(std::map<U32,U32> &r, U32 cfg, U32 base,
+                    U32 channels, U32 width, U32 rowStride) {
+    r[0x4148]=cfg;
+    if (base) r[0x414c]=base; else r.erase(0x414c);
+    const U32 c=(2*width+15)&~U32(15),d=channels*c;
+    r[0x4150]=c; r[0x4154]=rowStride; r[0x4158]=d; r[0x415c]=d;
+}
+
+void compactMobileNetDefaults(std::map<U32,U32> &r, unsigned taskIndex) {
+    // The rung-3 decoded write set relies on task-local defaults for tuple
+    // members that are derivable from the shape.  Keep the complete values
+    // in the placement plan above; omit only the measured default writes.
+    if (taskIndex==0) {
+        r.erase(0x4110);                 // external-input staging default
+        r.erase(0x4158); r.erase(0x415c);
+    } else if (taskIndex==1) {
+        r.erase(0x411c); r.erase(0x4120);
+        r.erase(0x4150); r.erase(0x4158); r.erase(0x415c);
+    } else if (taskIndex==2) {
+        r.erase(0x415c);
+    } else if (taskIndex+1==mobileNetV1.size()) {
+        r.erase(0x411c); r.erase(0x4120);
+    } else {
+        r.erase(0x411c); r.erase(0x4120);
+        r.erase(0x4158); r.erase(0x415c);
+    }
+}
+} // namespace
+
+Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                                MobileNetL2Policy policy) {
+    if (gen!=Generation::H16G)
+        throw std::invalid_argument("the measured MobileNet linked-L2 policies are H16G-only");
+    requireMobileNet(layers);
+    proveMobilePlacement();
+    Description out;
+    out.stream=streamPrologue(gen);
+    U32 kernelBase=0;
+    for (unsigned i=0;i<layers.size();++i) {
+        const bool first=i==0,last=i+1==layers.size();
+        Task t=task(gen,layers[i],true,0,1,0,0,kernelBase,0,0);
+        auto &r=t.registers;
+        t.header={i,0,(first ? 0x68u : 0u) | (last ? 0x04000000u : 0u),0,
+                  first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+                  0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
+        if (policy!=MobileNetL2Policy::Placement) r[0x3c]=mobileSchedule[i];
+        if (policy==MobileNetL2Policy::Header) {
+            t.header[1]=mobileCost[i];
+            t.header[4]=first ? 0x68u : 0x28u;
+            t.header[7]=mobileMask[i];
+        }
+        r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240);
+        for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
+
+        // Source edge: external input, the sole spill read, or an L2 tuple.
+        if (first) {
+            // Keep the ordinary external source DMA emitted by task().
+            r[0x4110]=static_cast<U32>(mobileSpan(0));
+        } else if (i==2) {
+            setSourceTuple(r,0x842,0,mobileNetV1[i].cin,mobileNetV1[i].width,
+                           mobileResultR[i-1]);
+            r[0x4d00]=0x20020041; r[0x4d08]=0x4e;
+            r[0x4d10]=r[0x4d14]=0; r[0x4d18]=0x700; r[0x4d1c]=0x31000;
+            r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
+        } else {
+            const unsigned edge=i-1;
+            setSourceTuple(r,mobileSourceCfg(edge),mobileResultBase[edge],
+                           mobileNetV1[i].cin,mobileNetV1[i].width,mobileResultR[edge]);
+            eraseRange(r,0x4d00,0x4dff);
+        }
+
+        // Result edge: one spill, 26 resident edges, or the external output.
+        if (last) {
+            r[0x4148]=0x14a;
+            r[0x5908]=i<<16 | 0xe0;
+        } else if (i==1) {
+            setResultTuple(r,0x84a,0,mobileNetV1[i].cout,
+                           (mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride,
+                           mobileResultR[i]);
+            r[0x5100]=0x010100f1; r[0x5108]=r[0x510c]=0;
+            r[0x5110]=0x700; r[0x5114]=0x31000; r[0x5138]=0x08302031;
+            t.resultSlotFlags=0x21800000;
+            eraseRange(r,0x5900,0x59ff);
+        } else {
+            const U32 cfg=i==0 ? 0x500170 : 0x140;
+            const U32 outWidth=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+            setResultTuple(r,cfg,mobileResultBase[i],mobileNetV1[i].cout,
+                           outWidth,mobileResultR[i]);
+            eraseRange(r,0x5100,0x51ff);
+            eraseRange(r,0x5900,0x59ff);
+        }
+
+        if (policy==MobileNetL2Policy::Header) compactMobileNetDefaults(r,i);
+        pack(t);
+        out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
+        out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
+        out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
+        U32 length=0;
+        for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(layers[i].shape,true))
+            length+=n;
+        kernelBase+=length;
+        out.tasks.push_back(std::move(t));
+    }
+    out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
+    out.kernelBytes=kernelBase;
+    return out;
+}
 h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights, std::size_t size,
                         const std::uint8_t *bias, std::size_t biasBytes, Layer *layerOut) {
     if (auto why=executableRefusal(s); !why.empty()) throw std::invalid_argument(why);
@@ -547,6 +768,55 @@ h13::Program linkDramChain(Generation gen, const std::vector<Layer> &layers,
     out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
     out.kernelRelocations=d.kernelRelocations;
     out.scratchAllocationBytes=2*region;
+    out.inputs=programs.front().inputs; out.output=programs.back().output;
+    out.formulaBuilt=true;
+    return out;
+}
+
+h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Policy policy,
+                             std::vector<h13::LinkedLayer> *layout) {
+    requireMobileNet(layers);
+    if (gen!=Generation::H16G || programs.size()!=layers.size())
+        throw std::invalid_argument("the MobileNet linked-L2 policy needs 28 H16G layer programs");
+    for (std::size_t i=0;i<programs.size();++i) {
+        if (!programs[i].formulaBuilt || programs[i].taskCount!=1 ||
+            programs[i].inputs.size()!=1)
+            throw std::invalid_argument("every MobileNet linked-L2 layer must be one formula-built convolution task");
+        if (i && (programs[i-1].output.nchw!=programs[i].inputs[0].nchw ||
+                  programs[i-1].output.elementSize!=programs[i].inputs[0].elementSize))
+            throw std::invalid_argument("a MobileNet linked-L2 layer input differs from its producer output");
+    }
+    const auto d=describeMobileNetL2(gen,layers,policy);
+    h13::Program out;
+    out.task=d.stream;
+    if (layout) layout->clear();
+    for (std::size_t i=0;i<programs.size();++i) {
+        out.constants.insert(out.constants.end(),programs[i].constants.begin(),programs[i].constants.end());
+        if (layout) {
+            const auto edgeCode=[](std::size_t edge) {
+                if (edge==1) return 0;
+                return mobileSourceCfg(static_cast<unsigned>(edge))==0x104 ? 3 : 4;
+            };
+            h13::LinkedLayer entry{U32(i),1,i==2,0,i==1,0};
+            entry.inputEdge=i ? edgeCode(i-1) : 0;
+            entry.outputEdge=i+1<programs.size() ? edgeCode(i) : 0;
+            if (entry.inputEdge) entry.l2Source=mobileResultBase[i-1];
+            if (entry.outputEdge) {
+                entry.l2Result=mobileResultBase[i];
+                const U32 outHeight=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+                entry.l2ResultBytes=std::uint64_t(outHeight)*mobileResultR[i];
+            }
+            layout->push_back(entry);
+        }
+    }
+    if (out.constants.size()!=d.kernelBytes)
+        throw std::logic_error("MobileNet linked-L2 kernel bytes disagree with the descriptors");
+    out.firstTaskBytes=out.task.size(); out.taskCount=U32(programs.size());
+    out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
+    out.kernelRelocations=d.kernelRelocations;
+    out.scratchAllocationBytes=0xc4000;
     out.inputs=programs.front().inputs; out.output=programs.back().output;
     out.formulaBuilt=true;
     return out;

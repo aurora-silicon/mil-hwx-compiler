@@ -45,6 +45,13 @@ int main(int argc, char **argv) {
                                                                          : ane::h16::DramEdgeForm::Measured,0x200000).stream;
         } else if (mode=="describe") bytes=ane::h16::describe(gen,layers).stream;
         else if (mode=="describe-dense") bytes=ane::h16::describe(gen,layers,false).stream;
+        else if (mode=="mobilenet-l2" || mode=="mobilenet-l2-schedule" ||
+                 mode=="mobilenet-l2-header") {
+            const auto policy=mode=="mobilenet-l2" ? ane::h16::MobileNetL2Policy::Placement
+                              : mode=="mobilenet-l2-schedule" ? ane::h16::MobileNetL2Policy::Schedule
+                              : ane::h16::MobileNetL2Policy::Header;
+            bytes=ane::h16::describeMobileNetL2(gen,layers,policy).stream;
+        }
         else if (mode.rfind("dram",0)==0) {
             const auto form=mode=="dram-measured" ? ane::h16::DramEdgeForm::Measured
                           : mode=="dram-dep" ? ane::h16::DramEdgeForm::DependencyOnly
