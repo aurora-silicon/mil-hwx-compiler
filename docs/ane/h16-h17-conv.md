@@ -219,10 +219,22 @@ every adjacent H16G graph instead of extrapolating the measured tables.
 
 For device diagnosis, `linked-l2-prefix-{1,2,4,8,26}` keeps only the first
 named number of eligible edges resident (edge 0, then edges 2 through 26) and
-leaves every other edge in the proven DRAM ping-pong form.
-Prefixes 1 through 8 retain the old edge-1 DRAM form; prefix 26 selects the
-corrected decoded one-spill form, so `linked-l2-baseline-spill` is its direct
-spill-control pair.
+leaves every other edge in DRAM.  A return from a resident run to DRAM is not
+the ordinary standalone `ResultCfg=0x500172` form: that hybrid left the
+source TileDMA/BAR state live and prefix-1's second execution used the raw
+source selector `0x21` as a DVA high word.  Each such boundary now uses the
+decoded spill pair (`ResultCfg=0x84a`, `SourceCfg=0x842`, destination/source
+formats `0x08302031`/`0x08002031`) with complete task-local staging fields.
+Edge 1 is byte-field identical to the measured Apple transition; a prefix
+ending before edge 26 may add one shape-derived bridge at the end of its
+resident run.
+
+The offline bisection proof resolves every slot-3/6/7/8 BAR record twice from
+the immutable descriptor addends, checks each addend against its mapping and
+rejects the resident-source/standalone-result hybrid.  This proves that a
+second execution does not depend on a ring or BAR cursor consumed by the
+first.  Device qualification still runs prefix-1 twice before any larger
+prefix because a firmware quarantine costs a reboot.
 `linked-l2-baseline-spill` keeps all 26 resident edges while retaining the old
 DRAM encoding for edge 1.  These are bisection-only schedules; they do not
 generalize placement beyond this exact graph.

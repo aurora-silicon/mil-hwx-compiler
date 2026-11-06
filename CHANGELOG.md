@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: make MobileNet linked-L2 resident-prefix programs repeatable.  A task
+  consuming an L2-resident input now crosses back to DRAM with the decoded
+  `0x84a`/`0x842` spill bridge instead of mixing resident SourceCfg with the
+  standalone `0x500172` result form.  Add a two-pass BAR-resolution proof.
 - H16G: fix MobileNetV1 linked-L2 correctness by retaining KernelDMA sparse
   mode on the five stride-2 tasks and preserving the decoded spill/external
   L2 staging tuples. Add resident-prefix and baseline-spill schedules for a

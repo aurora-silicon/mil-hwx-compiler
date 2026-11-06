@@ -128,15 +128,17 @@ def main():
     assert sum(a != b for a, b in zip(old, SCHEDULE)) == 14
 
     # Prefix packages keep the first k eligible edges resident (edge 0, then
-    # 2..k) and retain the old DRAM ping-pong form for every other edge,
-    # including edge 1.  This makes each device result identify the first bad
-    # L2 edge without also changing the measured-spill encoding.
+    # 2..k).  Every transition back to DRAM uses the explicit 0x84a/0x842
+    # spill bridge; mixing a resident source with standalone 0x500172 leaves
+    # TileDMA/BAR state live into the next execution.
     eligible = [0] + list(range(2, 27))
     for prefix in (1,2,4,8,26):
         _, tasks = run(f'mobilenet-prefix-{prefix}')
         ww = words(tasks)
         resident = set(eligible[:prefix])
         dram = set(range(27)) - resident
+        bridges = {edge for edge in dram
+                   if edge == 1 or (edge and edge - 1 in resident)}
         assert [i for i, t in enumerate(tasks) if '0x04d00' in t['blocks']] == \
                [0] + [edge + 1 for edge in sorted(dram)]
         assert [i for i, t in enumerate(tasks) if '0x05100' in t['blocks']] == \
@@ -144,9 +146,19 @@ def main():
         for edge in resident:
             assert ww[edge][0x4148] in (0x500170,0x140)
             assert ww[edge + 1][0x4104] == mobile_source_cfg(edge)
-        if prefix == 26:
-            assert ww[1][0x5100] == 0x010100f1
-            assert ww[2][0x4d00] == 0x20020041
+        for edge in bridges:
+            assert ww[edge][0x4148] == 0x84a
+            assert ww[edge + 1][0x4104] == 0x842
+            assert ww[edge][0x5100] == 0x010000f1 | edge << 16
+            assert ww[edge + 1][0x4d00] == 0x20000041 | (edge + 1) << 16
+            assert ww[edge][0x5138] == 0x08302031
+            assert ww[edge + 1][0x4d68] == 0x08002031
+        # The first bridge is the decoded Apple edge and must remain exact in
+        # every prefix, including its task-local staging bases and geometry.
+        assert ww[1][0x414c] == 0x0c5500
+        assert ww[2][0x4d00] == 0x20020041
+        assert (ww[1][0x5110],ww[1][0x5114]) == (0x700,0x31000)
+        assert (ww[2][0x4d18],ww[2][0x4d1c]) == (0x700,0x31000)
 
     _, baseline_spill = run('mobilenet-baseline-spill')
     bw = words(baseline_spill)

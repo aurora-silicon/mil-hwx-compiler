@@ -3057,8 +3057,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         requestedH16MobileL2;
     const BOOL bisectL2 = [schedule hasPrefix:@"linked-l2-prefix-"] ||
         [schedule isEqualToString:@"linked-l2-baseline-spill"];
-    const BOOL measuredSpillL2 = !bisectL2 ||
-        [schedule isEqualToString:@"linked-l2-prefix-26"];
+    // Every resident prefix needs an explicit spill bridge where it returns
+    // to DRAM.  The baseline-spill spelling is retained only as the old-form
+    // negative control.
+    const BOOL measuredSpillL2 =
+        ![schedule isEqualToString:@"linked-l2-baseline-spill"];
     const BOOL linkedSchedule = linkedL2 || [schedule isEqualToString:@"linked"];
     struct LinkedGenericScope {
         BOOL previous;

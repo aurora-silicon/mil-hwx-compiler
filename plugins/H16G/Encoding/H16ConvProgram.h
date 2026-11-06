@@ -74,8 +74,8 @@ struct MobileNetL2Variant {
     // ping-pong form.  This is a hardware-bisection facility, not a general
     // placement heuristic.
     unsigned residentPrefix = 26;
-    // The full parity rungs use the decoded one-spill form.  Bisection can
-    // retain the old DRAM edge form to separate L2 placement from that spill.
+    // The full parity rungs and safe resident prefixes use decoded spill
+    // bridges.  False is retained only for the old-form negative control.
     bool measuredSpill = true;
     std::uint32_t scratchRegionBytes = 0x1c0000;
 };

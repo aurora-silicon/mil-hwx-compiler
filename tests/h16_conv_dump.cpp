@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
                 : static_cast<unsigned>(std::stoul(mode.substr(17)));
             bytes=ane::h16::describeMobileNetL2(gen,layers,
                 {ane::h16::MobileNetL2Policy::Placement,prefix,
-                 mode!="mobilenet-baseline-spill" && prefix==26,0x1c0000}).stream;
+                 mode!="mobilenet-baseline-spill",0x1c0000}).stream;
         }
         else if (mode.rfind("dram",0)==0) {
             const auto form=mode=="dram-measured" ? ane::h16::DramEdgeForm::Measured

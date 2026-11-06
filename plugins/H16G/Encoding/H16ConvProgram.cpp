@@ -555,6 +555,19 @@ bool mobileResident(unsigned edge, unsigned prefix) {
     return rank<prefix;
 }
 
+// A DRAM edge produced by a task whose input is resident is not an ordinary
+// standalone DRAM edge.  The ordinary 0x500172/0x01302031 form leaves the
+// resident source's TileDMA/BAR state live across executions.  Edge 1 is the
+// decoded instance of this transition; prefix packages can create one more
+// at the end of their resident run.  Use the same explicit spill handshake
+// for every such boundary.
+bool mobileSpillBridge(unsigned edge, MobileNetL2Variant variant) {
+    if (!variant.measuredSpill || mobileResident(edge,variant.residentPrefix))
+        return false;
+    if (edge==1) return true;
+    return edge && mobileResident(edge-1,variant.residentPrefix);
+}
+
 std::uint64_t mobileSpan(unsigned edge) {
     const auto &s=mobileNetV1[edge];
     return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
@@ -667,15 +680,21 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             setSourceTuple(r,mobileSourceCfg(edge),mobileResultBase[edge],
                            mobileNetV1[i].cin,mobileNetV1[i].width,mobileResultR[edge]);
             eraseRange(r,0x4d00,0x4dff);
-        } else if (i==2 && variant.measuredSpill) {
-            // A DRAM read still stages into L2 before convolution.  Task 2's
-            // 1x1 source uses the ordinary capped-64-pixel source tuple and
-            // sits immediately after its resident result, not at base zero.
-            // Base zero/edge-1 geometry aliases the source and result and was
-            // the second correctness bug in the original rungs.
-            setSourceTuple(r,0x842,mobileSpan(i),mobileNetV1[i].cin,64,0x1050);
-            r[0x4d00]=0x20020041; r[0x4d08]=0x4e;
-            r[0x4d10]=r[0x4d14]=0; r[0x4d18]=0x700; r[0x4d1c]=0x31000;
+        } else if (mobileSpillBridge(i-1,variant)) {
+            // A spill bridge stages into a fresh task-local L2 region.  If
+            // this task produces a resident result, put the source after it;
+            // otherwise the standalone task's result staging already starts
+            // after the source tile and base zero is the local default.
+            r[0x4104]=0x842; r.erase(0x4108);
+            const U32 base=mobileResident(i,variant.residentPrefix)
+                ? mobileResultBase[i]+static_cast<U32>(mobileSpan(i)) : 0;
+            if (base) r[0x4110]=base; else r.erase(0x4110);
+            const auto &edge=mobileNetV1[i-1];
+            const U32 width=(edge.width+edge.stride-1)/edge.stride;
+            const U32 row=16*width,plane=row*width;
+            r[0x4d00]=0x20000041 | i<<16; r[0x4d08]=0x4e;
+            const U32 offset=(i-1)==1 ? 0 : U32((i-1)%2)*variant.scratchRegionBytes;
+            r[0x4d10]=r[0x4d14]=offset; r[0x4d18]=row; r[0x4d1c]=plane;
             r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
         } else {
             if (i<27 && mobileResident(i,variant.residentPrefix))
@@ -698,14 +717,20 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
                            outWidth,mobileResultR[i]);
             eraseRange(r,0x5100,0x51ff);
             eraseRange(r,0x5900,0x59ff);
-        } else if (i==1 && variant.measuredSpill) {
-            // The spill result is staged after edge 0, which remains live as
-            // task 1's input.  A zero result base overwrites that input.
-            setResultTuple(r,0x84a,mobileSpan(0),mobileNetV1[i].cout,
+        } else if (mobileSpillBridge(i,variant)) {
+            // A spill result is staged after its resident input.  The
+            // 0x84a/0x842 pair is also the state boundary that makes another
+            // EXECUTE independent of TileDMA state left by the first one.
+            const U32 inputBase=mobileResultBase[i-1];
+            setResultTuple(r,0x84a,inputBase+static_cast<U32>(mobileSpan(i-1)),
+                           mobileNetV1[i].cout,
                            (mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride,
                            mobileResultR[i]);
-            r[0x5100]=0x010100f1; r[0x5108]=r[0x510c]=0;
-            r[0x5110]=0x700; r[0x5114]=0x31000; r[0x5138]=0x08302031;
+            const U32 width=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+            const U32 row=16*width,plane=row*width;
+            const U32 offset=i==1 ? 0 : U32(i%2)*variant.scratchRegionBytes;
+            r[0x5100]=0x010000f1 | i<<16; r[0x5108]=r[0x510c]=offset;
+            r[0x5110]=row; r[0x5114]=plane; r[0x5138]=0x08302031;
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
         } else {
