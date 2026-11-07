@@ -17,7 +17,7 @@ rounds every layer to fp16, as the engine stores its surfaces; `--images`
 (an npz holding `images` [N,3,224,224] in [-1, 1]) adds per-image references
 and the input surfaces.
 """
-import argparse, json, os, shutil, struct, subprocess, sys
+import argparse, glob, json, os, shutil, struct, subprocess, sys
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'h13-mobilenet'))
@@ -75,14 +75,15 @@ def blob_write(path, arrays):
     return offs
 
 
-def write_mil(outdir, params):
+def write_mil(outdir, params, net_layers=None):
+    net_layers = layers() if net_layers is None else net_layers
     os.makedirs(os.path.join(outdir, 'weights'), exist_ok=True)
     arrays = []
     for P in params:
         arrays += [P['w'], P['b']]
     offs = blob_write(os.path.join(outdir, 'weights', 'weight.bin'), arrays)
     body, cur, c, h = [], 'x', 3, 224
-    for i, (L, P) in enumerate(zip(layers(), params)):
+    for i, (L, P) in enumerate(zip(net_layers, params)):
         co, k, s, g = L['cout'], L['k'], L['s'], L['g']
         ho = -(-h // s)
         cig = c // g
@@ -136,17 +137,35 @@ def surface(a16):
     return buf.tobytes()
 
 
+def input_surfaces(directory):
+    """Load previously packaged 3x224x224 input surfaces as CHW fp16."""
+    result = []
+    for path in sorted(glob.glob(os.path.join(directory, 'input_*.bin'))):
+        data = np.fromfile(path, dtype=np.float16)
+        if data.size != 3 * 224 * 224:
+            raise ValueError(f'{path}: expected a packed 3x224x224 fp16 input surface')
+        result.append(data.reshape(3, 224, 224))
+    if not result:
+        raise ValueError(f'{directory}: no input_*.bin surfaces')
+    return result
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('out'); ap.add_argument('--target', choices=['H17', 'H16G'], default='H17')
     ap.add_argument('--weights'); ap.add_argument('--tfweights'); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--images')
+    ap.add_argument('--input-dir', help='directory of packaged input_*.bin surfaces')
+    ap.add_argument('--tasks', type=int, choices=[2, 3, 4, 6, 9, 15, 28], default=28,
+                    help='emit the first N MobileNet tasks (the qualification ladder uses 2,3,4,6,9,15,28)')
     ap.add_argument('--schedule', choices=['linked', 'linked-l2', 'linked-l2-schedule',
                                            'linked-l2-header', 'linked-l2-prefix-1',
                                            'linked-l2-prefix-2', 'linked-l2-prefix-4',
                                            'linked-l2-prefix-8', 'linked-l2-prefix-26',
                                            'linked-l2-baseline-spill'], default='linked')
     a = ap.parse_args()
+    if a.images and a.input_dir:
+        ap.error('--images and --input-dir are mutually exclusive')
     if a.weights:
         from tflite_weights import mobilenet_v1_weights
         tfw = mobilenet_v1_weights(a.weights)
@@ -155,10 +174,11 @@ def main():
         tfw = [dict(w=z[f'w{i}'], b=z[f'b{i}']) for i in range(28)]
     else:
         tfw = random_weights(a.seed)
-    params = ane_params(tfw)
+    net_layers = layers()[:a.tasks]
+    params = ane_params(tfw)[:a.tasks]
     shutil.rmtree(a.out, ignore_errors=True)
     src = os.path.join(a.out, 'src')
-    mil = write_mil(src, params)
+    mil = write_mil(src, params, net_layers)
     milc = os.environ.get('MILC', os.path.join(HERE, '..', '..', 'build', 'mil-hwxc'))
     r = subprocess.run([milc, '--target', a.target, '--format', 'hwx', '--schedule', a.schedule, '--mil', mil,
                         '--model-root', src, '--output', os.path.join(a.out, 'linked')], capture_output=True, text=True)
@@ -169,15 +189,15 @@ def main():
              **{f'b{i}': P['b'] for i, P in enumerate(params)})
     msg = (f"{a.out}: {a.target} {a.schedule} {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
-    if a.images:
-        imgs = np.load(a.images)['images']
+    if a.images or a.input_dir:
+        imgs = np.load(a.images)['images'] if a.images else input_surfaces(a.input_dir)
         refs = os.path.join(a.out, 'refs'); os.makedirs(refs)
         tops = []
         for i, img in enumerate(imgs):
             x = img.astype(np.float16)
             with open(os.path.join(refs, f'input_{i:02d}.bin'), 'wb') as f:
                 f.write(surface(x))
-            for L, P in zip(layers(), params):
+            for L, P in zip(net_layers, params):
                 x = conv_ref(x, P, L)
             with open(os.path.join(refs, f'output_{i:02d}.bin'), 'wb') as f:
                 f.write(surface(x))

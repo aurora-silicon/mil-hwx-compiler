@@ -52,9 +52,9 @@ def mobile_source_cfg(edge):
     return 0x104
 
 
-def run(mode):
+def run(mode, count=28):
     args = [DUMP, mode, 'H16G']
-    for index, layer in enumerate(LAYERS):
+    for index, layer in enumerate(LAYERS[:count]):
         # Every layer is biased; tasks 0-26 fuse ReLU.
         args += [*map(str, layer), str(2 | (index != 27))]
     result = subprocess.run(args, capture_output=True, timeout=60)
@@ -159,6 +159,30 @@ def main():
         assert ww[2][0x4d00] == 0x20020041
         assert (ww[1][0x5110],ww[1][0x5114]) == (0x700,0x31000)
         assert (ww[2][0x4d18],ww[2][0x4d1c]) == (0x700,0x31000)
+
+    # Grow the prefix-1 placement from two tasks through the full graph.
+    # Every nonterminal task retains the 28-task encoding; only each rung's
+    # last task gains the external output endpoint.
+    _, full_prefix = run('mobilenet-prefix-1')
+    full_words = words(full_prefix)
+    for count in (2,3,4,6,9,15,28):
+        _, tasks = run('mobilenet-prefix-1',count)
+        ww = words(tasks)
+        assert len(tasks) == count
+        for index in range(count-1):
+            assert ww[index] == full_words[index], (count,index)
+        assert [i for i,t in enumerate(tasks) if '0x04d00' in t['blocks']] == \
+               [0] + list(range(2,count))
+        assert [i for i,t in enumerate(tasks) if '0x05100' in t['blocks']] == \
+               list(range(1,count))
+        assert ww[-1][0x4148] == 0x14a
+        if count >= 3:
+            assert ww[1][0x4148] == 0x84a and ww[2][0x4104] == 0x842
+        if count >= 6:
+            # Edge 3 is the first ping-pong edge with a nonzero BAR-3
+            # addend.  It is one u64, not two copies of the low offset.
+            assert (ww[3][0x5108],ww[3][0x510c]) == (0x1c0000,0)
+            assert (ww[4][0x4d10],ww[4][0x4d14]) == (0x1c0000,0)
 
     _, baseline_spill = run('mobilenet-baseline-spill')
     bw = words(baseline_spill)

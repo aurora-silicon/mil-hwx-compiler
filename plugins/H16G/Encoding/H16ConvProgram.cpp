@@ -524,8 +524,8 @@ constexpr std::array<U32,28> mobileMask = {{
 }};
 
 void requireMobileNet(const std::vector<Layer> &layers) {
-    if (layers.size()!=mobileNetV1.size())
-        throw std::invalid_argument("H16G linked-L2 policies require the exact 28-layer MobileNetV1 224 graph");
+    if (layers.size()<2 || layers.size()>mobileNetV1.size())
+        throw std::invalid_argument("H16G linked-L2 policies require a 2..28-task prefix of MobileNetV1 224");
     for (std::size_t i=0;i<layers.size();++i) {
         const auto &s=layers[i].shape;
         const auto &want=mobileNetV1[i];
@@ -533,14 +533,24 @@ void requireMobileNet(const std::vector<Layer> &layers) {
             s.input.width!=want.width || s.input.height!=want.width ||
             s.kernel!=want.kernel || s.kernelWidth!=want.kernel ||
             s.stride!=want.stride || s.groups!=want.groups || !s.bias ||
-            layers[i].relu!=(i+1!=layers.size()))
-            throw std::invalid_argument("H16G linked-L2 policies require the exact biased MobileNetV1 224 shapes and ReLU sequence");
+            layers[i].relu!=(i+1!=mobileNetV1.size()))
+            throw std::invalid_argument("H16G linked-L2 policies require an exact biased MobileNetV1 224 prefix and original ReLU sequence");
     }
 }
 
 void eraseRange(std::map<U32,U32> &r, U32 first, U32 last) {
     for (auto it=r.lower_bound(first);it!=r.end() && it->first<=last;)
         it=r.erase(it);
+}
+
+// BAR relocation operands are little-endian 64-bit addends.  The old
+// ping-pong path copied a nonzero 32-bit offset into both words, turning
+// 0x1c0000 into 0x001c0000001c0000.  Zero-offset sentinels could not expose
+// that error.  Keep all address-pair writes behind this helper.
+void setAddressAddend(std::map<U32,U32> &r, U32 address,
+                      std::uint64_t addend) {
+    r[address]=static_cast<U32>(addend);
+    r[address+4]=static_cast<U32>(addend>>32);
 }
 
 U32 mobileSourceCfg(unsigned edge) {
@@ -694,13 +704,13 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             const U32 row=16*width,plane=row*width;
             r[0x4d00]=0x20000041 | i<<16; r[0x4d08]=0x4e;
             const U32 offset=(i-1)==1 ? 0 : U32((i-1)%2)*variant.scratchRegionBytes;
-            r[0x4d10]=r[0x4d14]=offset; r[0x4d18]=row; r[0x4d1c]=plane;
+            setAddressAddend(r,0x4d10,offset); r[0x4d18]=row; r[0x4d1c]=plane;
             r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
         } else {
             if (i<27 && mobileResident(i,variant.residentPrefix))
                 r[0x4110]=mobileResultBase[i]+static_cast<U32>(mobileSpan(i));
             r[0x4d00]=0x20000021 | i<<16;
-            r[0x4d10]=r[0x4d14]=((i-1)%2)*variant.scratchRegionBytes;
+            setAddressAddend(r,0x4d10,((i-1)%2)*variant.scratchRegionBytes);
             t.sourceSlotFlags=0x21800000;
         }
 
@@ -729,7 +739,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             const U32 width=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
             const U32 row=16*width,plane=row*width;
             const U32 offset=i==1 ? 0 : U32(i%2)*variant.scratchRegionBytes;
-            r[0x5100]=0x010000f1 | i<<16; r[0x5108]=r[0x510c]=offset;
+            r[0x5100]=0x010000f1 | i<<16; setAddressAddend(r,0x5108,offset);
             r[0x5110]=row; r[0x5114]=plane; r[0x5138]=0x08302031;
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
@@ -737,7 +747,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             if (i && mobileResident(i-1,variant.residentPrefix))
                 r[0x414c]=mobileResultBase[i-1]+static_cast<U32>(mobileSpan(i-1));
             r[0x5100]=(r[0x5100]&0xff00ff00u) | i<<16 | 0xf1;
-            r[0x5108]=r[0x510c]=(i%2)*variant.scratchRegionBytes;
+            setAddressAddend(r,0x5108,(i%2)*variant.scratchRegionBytes);
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
         }
@@ -853,7 +863,7 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
                              std::vector<h13::LinkedLayer> *layout) {
     requireMobileNet(layers);
     if (gen!=Generation::H16G || programs.size()!=layers.size())
-        throw std::invalid_argument("the MobileNet linked-L2 policy needs 28 H16G layer programs");
+        throw std::invalid_argument("the MobileNet linked-L2 policy needs one H16G layer program per prefix task");
     for (std::size_t i=0;i<programs.size();++i) {
         if (!programs[i].formulaBuilt || programs[i].taskCount!=1 ||
             programs[i].inputs.size()!=1)
@@ -898,8 +908,15 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
     out.firstTaskBytes=out.task.size(); out.taskCount=U32(programs.size());
     out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
     out.kernelRelocations=d.kernelRelocations;
-    const bool onlyMeasuredSpill=variant.measuredSpill && variant.residentPrefix==26;
-    out.scratchAllocationBytes=onlyMeasuredSpill ? 0xc4000 : 2*variant.scratchRegionBytes;
+    unsigned dramEdges=0;
+    bool onlyMeasuredEdge1=true;
+    for (unsigned edge=0;edge+1<layers.size();++edge)
+        if (!mobileResident(edge,variant.residentPrefix)) {
+            ++dramEdges;
+            onlyMeasuredEdge1 &= variant.measuredSpill && edge==1;
+        }
+    out.scratchAllocationBytes=!dramEdges ? 0
+        : onlyMeasuredEdge1 ? 0xc4000 : 2*variant.scratchRegionBytes;
     out.inputs=programs.front().inputs; out.output=programs.back().output;
     out.formulaBuilt=true;
     return out;

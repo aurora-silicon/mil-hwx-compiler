@@ -30,7 +30,7 @@ def source_cfg(edge):
 
 
 def bar_trace(tasks):
-    """Resolve every dense BAR operand from immutable descriptor addends."""
+    """Resolve every dense BAR operand as one little-endian u64 addend."""
     trace = []
     for task_index, task in enumerate(tasks):
         words = register_words(task)
@@ -42,11 +42,12 @@ def bar_trace(tasks):
             assert header & 0x20000000
             slot = (header >> 23) & 0x3f
             assert slot in BAR_BASE and record['count'] == 2
-            addends = (words[address], words[address + 4])
-            assert all(addend < BAR_BYTES[slot] for addend in addends)
-            resolved = tuple(BAR_BASE[slot] + addend for addend in addends)
-            assert all(value >> 32 != 0x21 for value in resolved)
-            trace.append((task_index, address, slot, addends, resolved))
+            pair = (words[address], words[address + 4])
+            addend = pair[0] | pair[1] << 32
+            assert addend < BAR_BYTES[slot], (task_index, hex(address), slot, pair)
+            resolved = BAR_BASE[slot] + addend
+            assert resolved >> 32 != 0x21
+            trace.append((task_index, address, slot, pair, addend, resolved))
     return trace
 
 

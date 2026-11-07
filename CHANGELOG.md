@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: encode scratch BAR base operands as one little-endian u64 instead of
+  copying a nonzero ping-pong offset into both halves. Add 2/3/4/6/9/15/28
+  task MobileNet prefix generation and per-prefix CPU references; the first
+  corrected transition is task 3's edge-3 destination consumed by task 4.
 - H16G: make MobileNet linked-L2 resident-prefix programs repeatable.  A task
   consuming an L2-resident input now crosses back to DRAM with the decoded
   `0x84a`/`0x842` spill bridge instead of mixing resident SourceCfg with the

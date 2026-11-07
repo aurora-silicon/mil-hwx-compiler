@@ -215,7 +215,10 @@ biased 28-convolution MobileNetV1 1.0/224 graph:
 All three omit TileDMA blocks for resident edges.  The only TileDMA endpoints
 are external input, spill write, spill read and external output.  The graph
 gate checks every shape, bias and ReLU position; the policies refuse H17 and
-every adjacent H16G graph instead of extrapolating the measured tables.
+every non-prefix H16G graph instead of extrapolating the measured tables.
+For diagnosis it also accepts exact 2..28-task leading prefixes, preserving
+the original ReLU choice and making the last included task write the external
+output.
 
 For device diagnosis, `linked-l2-prefix-{1,2,4,8,26}` keeps only the first
 named number of eligible edges resident (edge 0, then edges 2 through 26) and
@@ -230,11 +233,18 @@ ending before edge 26 may add one shape-derived bridge at the end of its
 resident run.
 
 The offline bisection proof resolves every slot-3/6/7/8 BAR record twice from
-the immutable descriptor addends, checks each addend against its mapping and
+the immutable descriptor addends, treats each low/high pair as one
+little-endian u64, checks that addend against its mapping and
 rejects the resident-source/standalone-result hybrid.  This proves that a
 second execution does not depend on a ring or BAR cursor consumed by the
 first.  Device qualification still runs prefix-1 twice before any larger
 prefix because a firmware quarantine costs a reboot.
+
+The DRAM ping-pong base is a 64-bit relocation operand.  A nonzero
+`0x1c0000` region therefore encodes as low/high `(0x1c0000, 0)`.  Copying the
+offset into both words produces `0x001c0000001c0000`; zero-offset two-task
+sentinels cannot detect that error.  In prefix-1, task 3's edge-3 destination
+is the first nonzero record and task 4 is its first consumer.
 `linked-l2-baseline-spill` keeps all 26 resident edges while retaining the old
 DRAM encoding for edge 1.  These are bisection-only schedules; they do not
 generalize placement beyond this exact graph.
