@@ -3108,20 +3108,41 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
 
     if (gConvGeneration) {
         NSHashTable<ANEGraphOperation *> *fused = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+        // Diagnose the whole graph before emitting anything. A first unsupported
+        // geometry must not hide the missing operations later in a real model.
+        // Discover fusion independently of geometry acceptance, so an unsupported
+        // conv does not also produce a misleading standalone-ReLU refusal.
         for (ANEGraphOperation *candidate in sourceOperations) {
+            if (![candidate.operationName isEqualToString:@"conv"]) continue;
+            ANEGraphOperation *relu = nil;
+            if (convReluOperation(sourceOperations, candidate, function.returnValues, &relu))
+                [fused addObject:relu];
+        }
+        BOOL covered = YES;
+        for (ANEGraphOperation *candidate in sourceOperations) {
+            NSString *reason = nil;
             if ([candidate.operationName isEqualToString:@"conv"]) {
                 H13ConvPlan plan{};
                 if (!convParityPlan(candidate, &plan))
-                    return reject(diagnostics, @"H16G/H17 conv requires rank-4 batch-one fp16 SAME, zero explicit pads and unit dilation", candidate, convDiagnostic());
-                const auto refusal=ane::h16::executableRefusal(plan.shape);
-                if (!refusal.empty())
-                    return reject(diagnostics, [NSString stringWithUTF8String:refusal.c_str()], candidate, convDiagnostic());
-                ANEGraphOperation *relu=nil;
-                if (convReluOperation(sourceOperations,candidate,function.returnValues,&relu)) [fused addObject:relu];
+                    reason = @"H16G/H17 conv requires rank-4 batch-one fp16 SAME, zero explicit pads and unit dilation";
+                else {
+                    const auto refusal=ane::h16::executableRefusal(plan.shape);
+                    if (!refusal.empty())
+                        reason = [NSString stringWithUTF8String:refusal.c_str()];
+                }
             } else if (![fused containsObject:candidate]) {
-                return reject(diagnostics, @"H16G/H17 formula backend accepts only conv and a single-consumer fused ReLU", candidate, convDiagnostic());
+                reason = @"H16G/H17 formula backend accepts only conv and a single-consumer fused ReLU";
+            }
+            if (reason) {
+                ANEGraphValue *result = candidate.results[0];
+                reject(diagnostics, [NSString stringWithFormat:@"%@ %@ output [%@]: %@",
+                    candidate.operationName, result.name,
+                    [result.type.shape componentsJoinedByString:@", "], reason],
+                    candidate, convDiagnostic());
+                covered = NO;
             }
         }
+        if (!covered) return NO;
     }
 
     BOOL chain = sourceOperations.count > 1;
