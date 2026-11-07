@@ -109,7 +109,9 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
             require(all(any(a <= i * 4 < b for a, b in REGISTER_BLOCKS)
                         for i in indices), "task-register")
             rec += len(indices) * 4
-        padded = (end + 15) & ~15
+        # The kernel permits the final descriptor to end exactly at EOF;
+        # alignment and zero padding remain mandatory between descriptors.
+        padded = end if end == len(data) else (end + 15) & ~15
         require(padded <= len(data) and not any(data[end:padded]), "task-padding")
         pos = padded
         count += 1
