@@ -4,6 +4,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: keep the MobileNet prefix terminal ResultCfg in the task's measured
+  direct or staged class.  Two- and three-task prefixes no longer inherit the
+  full classifier's direct bit, which produced one plausible result before
+  wedging the next EXECUTE.  Add two-task field-group bisection schedules for
+  the legacy terminal, linear KernelDMA and sentinel first-edge geometry.
 - H16G: encode scratch BAR base operands as one little-endian u64 instead of
   copying a nonzero ping-pong offset into both halves. Add 2/3/4/6/9/15/28
   task MobileNet prefix generation and per-prefix CPU references; the first

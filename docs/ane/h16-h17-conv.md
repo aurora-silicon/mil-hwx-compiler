@@ -240,6 +240,16 @@ second execution does not depend on a ring or BAR cursor consumed by the
 first.  Device qualification still runs prefix-1 twice before any larger
 prefix because a firmware quarantine costs a reboot.
 
+A truncated graph also keeps the terminal task's own result class.  The full
+28-task graph ends in a direct 1x1 classifier (`ResultCfg=0x14a`), but the
+two- and three-task prefixes end in staged schedules (`ResultCfg=0x142`).
+Forcing the classifier's direct bit onto those prefix terminals can return a
+plausible first result while leaving result state armed for the next EXECUTE.
+The `linked-l2-hybrid-{legacy-terminal,linear-kernel,sentinel-geometry}`
+two-task schedules isolate that bit, the linear KernelDMA group, and the
+passing sentinel's first-edge base/row geometry respectively; they are qualification
+artifacts, not general placement policies.
+
 The DRAM ping-pong base is a 64-bit relocation operand.  A nonzero
 `0x1c0000` region therefore encodes as low/high `(0x1c0000, 0)`.  Copying the
 offset into both words produces `0x001c0000001c0000`; zero-offset two-task

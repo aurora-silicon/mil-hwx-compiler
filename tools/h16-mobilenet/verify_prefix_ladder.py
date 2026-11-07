@@ -13,6 +13,8 @@ from mint_oracles import parse_hwx  # noqa: E402
 RUNGS = (("tasks-0-1", 2), ("tasks-0-2", 3), ("tasks-0-3", 4),
          ("tasks-0-5", 6), ("tasks-0-8", 9), ("tasks-0-14", 15),
          ("tasks-0-27", 28))
+TERMINAL_CFG = {2: 0x142, 3: 0x142, 4: 0x14a, 6: 0x14a,
+                9: 0x14a, 15: 0x14a, 28: 0x14a}
 
 
 def load(package):
@@ -53,7 +55,7 @@ def prove_package(package, count):
            [0] + list(range(2,count))
     assert [i for i,t in enumerate(tasks) if '0x05100' in t['blocks']] == \
            list(range(1,count))
-    assert regs[-1][0x4148] == 0x14a
+    assert regs[-1][0x4148] == TERMINAL_CFG[count]
     if count >= 3:
         assert regs[1][0x4148] == 0x84a and regs[2][0x4104] == 0x842
         assert regs[1][0x5100] == 0x010100f1

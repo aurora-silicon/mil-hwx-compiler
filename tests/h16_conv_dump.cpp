@@ -51,6 +51,16 @@ int main(int argc, char **argv) {
                               : mode=="mobilenet-l2-schedule" ? ane::h16::MobileNetL2Policy::Schedule
                               : ane::h16::MobileNetL2Policy::Header;
             bytes=ane::h16::describeMobileNetL2(gen,layers,policy).stream;
+        } else if (mode.rfind("mobilenet-hybrid-",0)==0) {
+            const auto swap=mode=="mobilenet-hybrid-legacy-terminal"
+                ? ane::h16::MobileNetL2FieldSwap::LegacyTerminalDirect
+                : mode=="mobilenet-hybrid-linear-kernel"
+                ? ane::h16::MobileNetL2FieldSwap::LinearKernelDMA
+                : mode=="mobilenet-hybrid-sentinel-geometry"
+                ? ane::h16::MobileNetL2FieldSwap::SentinelFirstEdgeGeometry
+                : throw std::invalid_argument("unknown MobileNet field swap");
+            bytes=ane::h16::describeMobileNetL2(gen,layers,
+                {ane::h16::MobileNetL2Policy::Placement,1,true,0x1c0000,swap}).stream;
         } else if (mode.rfind("mobilenet-prefix-",0)==0 ||
                    mode=="mobilenet-baseline-spill") {
             const unsigned prefix=mode=="mobilenet-baseline-spill" ? 26u

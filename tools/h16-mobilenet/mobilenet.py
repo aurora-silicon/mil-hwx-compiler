@@ -162,7 +162,10 @@ def main():
                                            'linked-l2-header', 'linked-l2-prefix-1',
                                            'linked-l2-prefix-2', 'linked-l2-prefix-4',
                                            'linked-l2-prefix-8', 'linked-l2-prefix-26',
-                                           'linked-l2-baseline-spill'], default='linked')
+                                           'linked-l2-baseline-spill',
+                                           'linked-l2-hybrid-legacy-terminal',
+                                           'linked-l2-hybrid-linear-kernel',
+                                           'linked-l2-hybrid-sentinel-geometry'], default='linked')
     a = ap.parse_args()
     if a.images and a.input_dir:
         ap.error('--images and --input-dir are mutually exclusive')

@@ -165,6 +165,8 @@ def main():
     # last task gains the external output endpoint.
     _, full_prefix = run('mobilenet-prefix-1')
     full_words = words(full_prefix)
+    terminal_cfg = {2: 0x142, 3: 0x142, 4: 0x14a, 6: 0x14a,
+                    9: 0x14a, 15: 0x14a, 28: 0x14a}
     for count in (2,3,4,6,9,15,28):
         _, tasks = run('mobilenet-prefix-1',count)
         ww = words(tasks)
@@ -175,7 +177,10 @@ def main():
                [0] + list(range(2,count))
         assert [i for i,t in enumerate(tasks) if '0x05100' in t['blocks']] == \
                list(range(1,count))
-        assert ww[-1][0x4148] == 0x14a
+        # The first two truncations end on non-direct schedules.  They must
+        # retain the ordinary staged terminal class rather than inheriting
+        # the full graph's direct classifier bit.
+        assert ww[-1][0x4148] == terminal_cfg[count]
         if count >= 3:
             assert ww[1][0x4148] == 0x84a and ww[2][0x4104] == 0x842
         if count >= 6:
@@ -183,6 +188,35 @@ def main():
             # addend.  It is one u64, not two copies of the low offset.
             assert (ww[3][0x5108],ww[3][0x510c]) == (0x1c0000,0)
             assert (ww[4][0x4d10],ww[4][0x4d14]) == (0x1c0000,0)
+
+    # The v7 two-task packages isolate one field group at a time.  The
+    # legacy control differs from the correction only in the terminal direct
+    # bit; the other two hybrids independently import the linear program's
+    # KernelDMA mode or the passing sentinel's first-edge staging geometry.
+    _, corrected = run('mobilenet-prefix-1',2)
+    cw = words(corrected)
+    for mode, expected in (
+        ('mobilenet-hybrid-legacy-terminal', {(1,0x4148)}),
+        ('mobilenet-hybrid-linear-kernel', {(0,0x5500)}),
+        ('mobilenet-hybrid-sentinel-geometry',
+         {(0,0x4110),(0,0x414c),(0,0x4154),
+          (1,0x4110),(1,0x4118),(1,0x414c)}),
+    ):
+        _, hybrid = run(mode,2)
+        hw = words(hybrid)
+        changed={(i,a) for i in range(2) for a in set(cw[i])|set(hw[i])
+                 if cw[i].get(a)!=hw[i].get(a)}
+        assert changed == expected, (mode,changed,expected)
+    _, legacy = run('mobilenet-hybrid-legacy-terminal',2)
+    _, kernel = run('mobilenet-hybrid-linear-kernel',2)
+    _, geometry = run('mobilenet-hybrid-sentinel-geometry',2)
+    assert words(legacy)[1][0x4148] == 0x14a
+    assert words(kernel)[0][0x5500] & 0x20 == 0
+    gw=words(geometry)
+    assert gw[0].get(0x4110,0)==0 and gw[0][0x414c]==0x49800
+    assert gw[0][0x4154]==0x1c80
+    assert (gw[1][0x4110],gw[1][0x4118],gw[1][0x414c]) == \
+           (0x49800,0x1c80,0x111000)
 
     _, baseline_spill = run('mobilenet-baseline-spill')
     bw = words(baseline_spill)

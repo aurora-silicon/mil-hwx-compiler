@@ -67,6 +67,14 @@ Description describeDramChain(Generation generation, const std::vector<Layer> &l
 // and compact register write set.  These policies deliberately refuse every
 // graph except the named 28-layer MobileNetV1 224 shape.
 enum class MobileNetL2Policy { Placement, Schedule, Header };
+// One-field-group swaps used only to bisect the first resident MobileNet
+// edge against the proven linear and resident encodings.
+enum class MobileNetL2FieldSwap {
+    None,
+    LegacyTerminalDirect,
+    LinearKernelDMA,
+    SentinelFirstEdgeGeometry,
+};
 struct MobileNetL2Variant {
     MobileNetL2Policy policy = MobileNetL2Policy::Placement;
     // Number of resident edges enabled in Apple placement order
@@ -78,6 +86,7 @@ struct MobileNetL2Variant {
     // bridges.  False is retained only for the old-form negative control.
     bool measuredSpill = true;
     std::uint32_t scratchRegionBytes = 0x1c0000;
+    MobileNetL2FieldSwap fieldSwap = MobileNetL2FieldSwap::None;
 };
 Description describeMobileNetL2(Generation generation,
                                 const std::vector<Layer> &layers,

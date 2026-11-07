@@ -3002,7 +3002,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     NSSet<NSString *> *mobileL2Schedules = [NSSet setWithArray:@[
         @"linked-l2", @"linked-l2-schedule", @"linked-l2-header",
         @"linked-l2-prefix-1", @"linked-l2-prefix-2", @"linked-l2-prefix-4",
-        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill"]];
+        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill",
+        @"linked-l2-hybrid-legacy-terminal", @"linked-l2-hybrid-linear-kernel",
+        @"linked-l2-hybrid-sentinel-geometry"]];
     BOOL mobileL2 = [target isEqualToString:@"H16G"] &&
         [mobileL2Schedules containsObject:schedule];
     if (![schedule isEqualToString:@"per-op"] &&
@@ -3034,7 +3036,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     NSSet<NSString *> *h16MobileL2Schedules = [NSSet setWithArray:@[
         @"linked-l2", @"linked-l2-schedule", @"linked-l2-header",
         @"linked-l2-prefix-1", @"linked-l2-prefix-2", @"linked-l2-prefix-4",
-        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill"]];
+        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill",
+        @"linked-l2-hybrid-legacy-terminal", @"linked-l2-hybrid-linear-kernel",
+        @"linked-l2-hybrid-sentinel-geometry"]];
     BOOL requestedH16MobileL2 = ![schedule isEqualToString:@"linked-l2"] &&
         [h16MobileL2Schedules containsObject:schedule];
     if (![schedule isEqualToString:@"per-op"] &&
@@ -3056,7 +3060,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     const BOOL linkedL2 = [schedule isEqualToString:@"linked-l2"] ||
         requestedH16MobileL2;
     const BOOL bisectL2 = [schedule hasPrefix:@"linked-l2-prefix-"] ||
-        [schedule isEqualToString:@"linked-l2-baseline-spill"];
+        [schedule isEqualToString:@"linked-l2-baseline-spill"] ||
+        [schedule hasPrefix:@"linked-l2-hybrid-"];
     // Every resident prefix needs an explicit spill bridge where it returns
     // to DRAM.  The baseline-spill spelling is retained only as the old-form
     // negative control.
@@ -4534,8 +4539,17 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 unsigned prefix=26;
                 if ([schedule hasPrefix:@"linked-l2-prefix-"])
                     prefix=static_cast<unsigned>([[schedule substringFromIndex:17] integerValue]);
+                else if ([schedule hasPrefix:@"linked-l2-hybrid-"])
+                    prefix=1;
+                const auto swap=[schedule isEqualToString:@"linked-l2-hybrid-legacy-terminal"]
+                    ? ane::h16::MobileNetL2FieldSwap::LegacyTerminalDirect
+                    : [schedule isEqualToString:@"linked-l2-hybrid-linear-kernel"]
+                    ? ane::h16::MobileNetL2FieldSwap::LinearKernelDMA
+                    : [schedule isEqualToString:@"linked-l2-hybrid-sentinel-geometry"]
+                    ? ane::h16::MobileNetL2FieldSwap::SentinelFirstEdgeGeometry
+                    : ane::h16::MobileNetL2FieldSwap::None;
                 combined=ane::h16::linkMobileNetL2(convGeneration(),gConvLayers,
-                    chainPrograms,{policy,prefix,bool(measuredSpillL2),0x1c0000},&layout);
+                    chainPrograms,{policy,prefix,bool(measuredSpillL2),0x1c0000,swap},&layout);
             } else if (gConvGeneration) {
                 combined=ane::h16::linkDramChain(
                     convGeneration(),gConvLayers,chainPrograms,&layout);

@@ -583,6 +583,17 @@ std::uint64_t mobileSpan(unsigned edge) {
     return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
 }
 
+U32 mobileLinearFirstBase() {
+    const auto &s=mobileNetV1[0];
+    return align64(2*s.width)*s.cin*s.width;
+}
+
+U32 mobileLinearFirstR() {
+    const auto &s=mobileNetV1[0];
+    const U32 width=(s.width+s.stride-1)/s.stride;
+    return s.cout*(2*width)+4*(align64(2*width)-2*width);
+}
+
 bool mobileRingOverlap(std::uint64_t a, std::uint64_t an,
                        std::uint64_t b, std::uint64_t bn) {
     constexpr std::uint64_t ring=0x200000;
@@ -654,6 +665,8 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
     if (variant.residentPrefix>26)
         throw std::invalid_argument("the MobileNet linked-L2 resident prefix must be 0..26");
     requireMobileNet(layers);
+    if (variant.fieldSwap!=MobileNetL2FieldSwap::None && layers.size()!=2)
+        throw std::invalid_argument("MobileNet first-edge field swaps require exactly two tasks");
     if (variant.residentPrefix==26) proveMobilePlacement();
     const auto policy=variant.policy;
     Description out;
@@ -679,16 +692,25 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
         // interpreted the stem and four downsampling kernels incorrectly.
         r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240) |
                   (layers[i].shape.stride==2 ? 0x20 : 0);
+        if (variant.fieldSwap==MobileNetL2FieldSwap::LinearKernelDMA && i==0)
+            r[0x5500]&=~0x20u;
         for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
 
         // Source edge: external input, the sole spill read, or an L2 tuple.
         if (first) {
             // Keep the ordinary external source DMA emitted by task().
-            r[0x4110]=static_cast<U32>(mobileSpan(0));
+            if (variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry)
+                r.erase(0x4110);
+            else
+                r[0x4110]=static_cast<U32>(mobileSpan(0));
         } else if (mobileResident(i-1,variant.residentPrefix)) {
             const unsigned edge=i-1;
-            setSourceTuple(r,mobileSourceCfg(edge),mobileResultBase[edge],
-                           mobileNetV1[i].cin,mobileNetV1[i].width,mobileResultR[edge]);
+            const bool linearFirst = edge==0 &&
+                variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            setSourceTuple(r,mobileSourceCfg(edge),
+                           linearFirst ? mobileLinearFirstBase() : mobileResultBase[edge],
+                           mobileNetV1[i].cin,mobileNetV1[i].width,
+                           linearFirst ? mobileLinearFirstR() : mobileResultR[edge]);
             eraseRange(r,0x4d00,0x4dff);
         } else if (mobileSpillBridge(i-1,variant)) {
             // A spill bridge stages into a fresh task-local L2 region.  If
@@ -716,15 +738,33 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
 
         // Result edge: one spill, 26 resident edges, or the external output.
         if (last) {
-            r[0x4148]=0x14a;
-            r[0x414c]=mobileResultBase[i-1]+mobileSpan(i-1);
+            // Preserve the terminal task's measured direct/staged result
+            // class.  The complete MobileNet ends in a direct 1x1 task and
+            // therefore uses 0x14a.  A leading prefix can instead end in a
+            // staged task (notably dw32 and pw32->64); forcing the full
+            // graph's direct bit onto those tasks produces plausible output
+            // once, but leaves result state armed and wedges the following
+            // EXECUTE.  This is the linked equivalent of task()'s
+            // 0x50017a/0x500172 distinction.
+            r[0x4148]=variant.fieldSwap==MobileNetL2FieldSwap::LegacyTerminalDirect
+                ? 0x14a : (schedule(layers[i].shape)->direct ? 0x14a : 0x142);
+            if (i==1 && variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry) {
+                const U32 width=(mobileNetV1[0].width+mobileNetV1[0].stride-1)/
+                                mobileNetV1[0].stride;
+                r[0x414c]=mobileLinearFirstBase()+width*mobileLinearFirstR();
+            } else {
+                r[0x414c]=mobileResultBase[i-1]+mobileSpan(i-1);
+            }
             r[0x5100]=(r[0x5100]&0xff00ffffu) | i<<16;
             r[0x5908]=i<<16 | 0xe0;
         } else if (mobileResident(i,variant.residentPrefix)) {
             const U32 cfg=i==0 ? 0x500170 : 0x140;
             const U32 outWidth=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
-            setResultTuple(r,cfg,mobileResultBase[i],mobileNetV1[i].cout,
-                           outWidth,mobileResultR[i]);
+            const bool linearFirst = i==0 &&
+                variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            setResultTuple(r,cfg,linearFirst ? mobileLinearFirstBase() : mobileResultBase[i],
+                           mobileNetV1[i].cout,outWidth,
+                           linearFirst ? mobileLinearFirstR() : mobileResultR[i]);
             eraseRange(r,0x5100,0x51ff);
             eraseRange(r,0x5900,0x59ff);
         } else if (mobileSpillBridge(i,variant)) {
@@ -894,11 +934,17 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
                 measuredWrite ? 0u : U32(i%2)*variant.scratchRegionBytes};
             entry.inputEdge=i ? edgeCode(i-1) : 0;
             entry.outputEdge=i+1<programs.size() ? edgeCode(i) : 0;
-            if (entry.inputEdge) entry.l2Source=mobileResultBase[i-1];
+            const bool linearFirst=variant.fieldSwap==
+                MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            if (entry.inputEdge)
+                entry.l2Source=linearFirst && i==1
+                    ? mobileLinearFirstBase() : mobileResultBase[i-1];
             if (entry.outputEdge) {
-                entry.l2Result=mobileResultBase[i];
+                entry.l2Result=linearFirst && i==0
+                    ? mobileLinearFirstBase() : mobileResultBase[i];
                 const U32 outHeight=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
-                entry.l2ResultBytes=std::uint64_t(outHeight)*mobileResultR[i];
+                entry.l2ResultBytes=std::uint64_t(outHeight)*
+                    (linearFirst && i==0 ? mobileLinearFirstR() : mobileResultR[i]);
             }
             layout->push_back(entry);
         }
