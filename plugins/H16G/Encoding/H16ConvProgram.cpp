@@ -490,7 +490,7 @@ constexpr std::array<MobileLayerShape,28> mobileNetV1 = {{
     {1024,1024,7,1,1,1}, {1024,1024,7,1,1,1},
 }};
 
-// Result R strides and bases from the t-4603 H16G full-edge decode.  A zero
+// Result R strides and bases from the decoded H16G full-edge form.  A zero
 // base is deliberately omitted by the encoder: zero is the task-local
 // default.  Edge 1 is the sole DRAM spill and therefore has no ring base.
 constexpr std::array<U32,27> mobileResultR = {{
