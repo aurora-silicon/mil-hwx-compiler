@@ -16,8 +16,12 @@ from pathlib import Path
 
 OWNER_SHA256 = "231f54c28ea6b14a2867fac78eac1a2cb22aa3b0eeaa28113ed03c520b83a1d3"
 U64_MAX = (1 << 64) - 1
+# Includes the public structured encoders' measured 1024/2048 square-view
+# forms: LUT 0x3d/0xf5 and binary ALU 0x5c/0x170. These are opaque program
+# metadata, not task sizes; task_stream remains the structural authority.
 FORMATS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17,
-           18, 20, 21, 23, 27, 30, 31, 36, 41, 43, 72, 145}
+           18, 20, 21, 23, 27, 30, 31, 36, 41, 43, 61, 72, 92, 145,
+           245, 368}
 REGISTER_BLOCKS = ((0, 0x5c), (0x4100, 0x41a4), (0x44d0, 0x44d4),
                    (0x4500, 0x453c), (0x4900, 0x4930), (0x4d00, 0x4e44),
                    (0x5100, 0x5154), (0x5500, 0x5620), (0x5900, 0x5930))
