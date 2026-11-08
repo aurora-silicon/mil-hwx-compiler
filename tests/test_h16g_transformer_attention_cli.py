@@ -87,6 +87,7 @@ def main() -> None:
         "qkT_wbase": matmul("qkT", 1500, 8, 64),
         "pv_wtiny": matmul("pv", 1500, 6, 64),
         "softmax_wbase": softmax(1500, 8),
+        "softmax_wtiny": softmax(1500, 6),
         "attn_wtiny": fused(1500, 6, 64),
         "softmax_bert_prediction": softmax(128, 12),
         "split_held_prediction": layout("split", 64, 2, 80),

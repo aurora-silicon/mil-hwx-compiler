@@ -40,6 +40,27 @@ S=1500 scratch offsets and are now refused.  Device qualification for the
 corrected rows is pending.  Affine last-axis layer normalization is still
 outside the formula envelope.
 
+The first corrected Whisper-tiny device run made the numerical and scheduling
+boundaries more precise.  Split/split-transpose/merge were bit exact, QK and
+transpose-y QK had relative L2 error `4.6e-5`, and all programs produced zero
+DART faults.  Standalone PV had relative L2 error `2.6e-2`.  Its error was
+uniform across all six heads with near-zero bias; omitting the 92-element
+tail, any periodic 128-element tile lane, or shifting rows made the result
+worse.  The standalone encoder therefore stages normalized probabilities at
+the exact fp16 scale 128 and folds the exact 1/128 reciprocal into the head
+result.  This changes only the two decoded scale words; structural parity is
+retained after normalizing that intentional numeric pair.  The fused path
+does not cross the external fp16 probability boundary and keeps its captured
+unit-scale tasks.
+
+The same run found that the unrevealed H=6 softmax loaded but never completed.
+The exponential task still carried the captured H=8 dependency mask `0x3ff`.
+That mask covers two fixed predecessors and one completion per head, so H=6
+requires `0xff`; waiting for the two absent head completions wedges EXECUTE.
+The mask is now `(1 << (heads + 2)) - 1`, bounded to the 32-bit dependency
+field.  The H=8 measured row remains byte-identical.  Numerical qualification
+of the rescaled PV and execution qualification of H=6 softmax remain pending.
+
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
 the preceding slot numbers, which left the first source unbound and aliased
