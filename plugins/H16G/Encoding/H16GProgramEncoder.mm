@@ -278,6 +278,129 @@ static ANEHWXArtifact *encodeTransformerLinearProgram(
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }
 
+static BOOL fp16VectorIs(NSData *data,uint16_t expected) {
+    if(data.length%sizeof(uint16_t)) return NO;
+    const uint16_t *values=static_cast<const uint16_t *>(data.bytes);
+    for(NSUInteger index=0;index<data.length/sizeof(uint16_t);++index)
+        if(values[index]!=expected) return NO;
+    return YES;
+}
+
+static ANEHWXArtifact *encodeTransformerLayerNormProgram(
+    ANEOperationGraph *graph,NSURL *modelRoot,
+    ANEDiagnosticEngine *diagnostics) {
+    if(graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEOperationNode *normalization=nil;
+    NSUInteger active=0;
+    for(ANEOperationNode *node in graph.nodes) {
+        if(node.kind==ANEOperationKindConstant) continue;
+        ++active;
+        if([node.operationName isEqualToString:@"layer_norm"] ||
+           [node.sourceOperation.operationName isEqualToString:@"layer_norm"])
+            normalization=node;
+    }
+    BOOL decomposed=active==7 &&
+        [normalization.sourceOperation.operationName isEqualToString:@"layer_norm"];
+    if((active!=1 && !decomposed) || !normalization) return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    NSArray<NSNumber *> *shape=input.type.shape;
+    if(input.type.elementType!=ANEElementTypeFP16 || shape.count!=3 ||
+       shape[0].unsignedIntegerValue!=1 ||
+       ![normalization.outputType.shape isEqualToArray:shape]) {
+        emitError(diagnostics,@"h16g.encode.transformer-layer-norm-shape",
+            @"last-axis layer_norm requires equal fp16 [1,S,C] input and output",
+            normalization);
+        return nil;
+    }
+    if(!constantListOperandIs(graph,normalization,@"axes",@[@"-1"])) {
+        emitError(diagnostics,@"h16g.encode.transformer-layer-norm-axis",
+            @"transformer layer_norm requires axes=[-1]",normalization);
+        return nil;
+    }
+    uint16_t epsilon=0;
+    ANEGraphArgument *epsilonArgument=
+        normalization.sourceOperation.arguments[@"epsilon"] ?:
+        normalization.sourceOperation.attributes[@"epsilon"];
+    if(!fp16ScalarFromArgument(graph,epsilonArgument,&epsilon) ||
+       epsilon!=0x00a8) {
+        emitError(diagnostics,@"h16g.encode.transformer-layer-norm-epsilon",
+            @"transformer layer_norm requires epsilon=fp16(1e-5)",normalization);
+        return nil;
+    }
+    const NSUInteger channels=shape[2].unsignedIntegerValue;
+    for(NSString *name in @[@"gamma",@"beta"]) {
+        ANEOperationNode *constant=producerForOperand(graph,normalization,name);
+        if(!constant) continue;
+        if(!constant.sourceOperation ||
+           ![constant.outputType.shape isEqualToArray:@[@(channels)]]) {
+            emitError(diagnostics,@"h16g.encode.transformer-layer-norm-affine",
+                @"gamma and beta must be fp16 vectors with C elements",normalization);
+            return nil;
+        }
+        NSData *raw=[ANEBlobResolver loadConstantForOperation:constant.sourceOperation
+            expectedBytes:channels*2 modelRoot:modelRoot diagnostics:diagnostics];
+        const uint16_t expected=[name isEqualToString:@"gamma"]?0x3c00:0;
+        if(!raw || !fp16VectorIs(raw,expected)) {
+            emitError(diagnostics,@"h16g.encode.transformer-layer-norm-affine-unproved",
+                @"the supplied H16G ANE corpus proves only identity gamma and zero beta",
+                normalization);
+            return nil;
+        }
+    }
+    ane::h16::TransformerLayerNormProgram encoded;
+    try {
+        encoded=ane::h16::encodeTransformerLayerNorm(
+            (uint32_t)shape[1].unsignedIntegerValue,(uint32_t)channels);
+    } catch(const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.transformer-layer-norm-fields",
+            [NSString stringWithUTF8String:exception.what()],normalization);
+        return nil;
+    }
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType
+            shape:shape],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[normalization.identifier stringByAppendingString:@"@output"]
+            shortName:normalization.identifier role:HWXObjectBindingRoleOutput
+            elementType:normalization.outputType.elementType shape:shape],
+    ];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.scratchBytes
+        scratchAllocationByteLength:encoded.scratchBytes
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:objectBindings
+        kernelRelocationOffsets:@[] programInfo:info error:&error];
+    if(!image) {
+        emitError(diagnostics,@"h16g.encode.transformer-layer-norm-object",
+            error.localizedDescription ?: @"cannot construct transformer layer_norm HWX",
+            normalization);
+        return nil;
+    }
+    const NSUInteger bytes=tensorBytes(input.type);
+    const NSUInteger row=channels*2;
+    const NSUInteger plane=row*shape[1].unsignedIntegerValue;
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name
+            role:ANESurfaceRoleInput logicalByteLength:bytes
+            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:row planeStrideBytes:plane batchStrideBytes:bytes],
+        [[ANEHWXBinding alloc]initWithIdentifier:normalization.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:bytes
+            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:row planeStrideBytes:plane batchStrideBytes:bytes],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+}
+
 static ANEHWXArtifact *encodeWhisperStemProgram(
     ANEOperationGraph *graph, NSURL *modelRoot,
     ANEDiagnosticEngine *diagnostics) {
@@ -1844,9 +1967,13 @@ static ANEHWXArtifact *encodeLayoutProgram(
 
 @implementation H16GProgramEncoder
 + (ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
-                        scheduled:(ANEScheduledGraph *)scheduled
+                        scheduled:(ANEScheduledGraph * _Nullable)scheduled
                         modelRoot:(NSURL *)modelRoot
                       diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    for(ANEOperationNode *node in graph.nodes)
+        if([node.operationName isEqualToString:@"layer_norm"] ||
+           [node.sourceOperation.operationName isEqualToString:@"layer_norm"])
+            return encodeTransformerLayerNormProgram(graph,modelRoot,diagnostics);
     if (ANEHWXArtifact *attention=encodeTransformerFusedAttentionProgram(graph,diagnostics))
         return attention;
     if (ANEHWXArtifact *softmax=encodeTransformerSoftmaxProgram(graph,diagnostics))

@@ -173,6 +173,10 @@ def dma_extent(dma: dict, registers: dict, target: dict,
     # is nevertheless explicit and, with 0x24, proves the complete staged
     # allocation used by QK/PV loads.
     if target['kind'] == 'scratch':
+        if (family == 'layer_norm' and address == 0x4d28 and
+                all(key in registers for key in (4, 8, 12))):
+            return offset + product(product(registers[4], registers[8]),
+                                    product(registers[12], 2))
         if address == 0x5108 and registers.get(0x511c):
             planes = registers.get(0x24, 1)
             return offset + product(planes, registers[0x511c])
@@ -198,6 +202,10 @@ def dma_extent(dma: dict, registers: dict, target: dict,
         if all(key in registers for key in (4, 8, 12, 0x4d34, 0x4d3c)):
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d34], registers[0x4d3c])
+        if (family == 'layer_norm' and
+                all(key in registers for key in (4, 12, 0x4d34))):
+            return strided_extent(offset, registers[4], 1, registers[12], 0,
+                                  registers[0x4d34])
     elif address == 0x5108:
         if (family == 'positional' and
                 all(key in registers for key in (0x14, 0x18, 0x5110))):
@@ -226,6 +234,11 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             # of T rows, unlike the stem's channel-major padded surfaces.
             return strided_extent(offset, registers[0x1c], 1,
                                   registers[0x14], 0, registers[0x5114])
+        if (family == 'layer_norm' and
+                all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110))):
+            return strided_extent(offset, registers[0x14], registers[0x18],
+                                  registers[0x1c], registers[0x5110],
+                                  product(registers[0x18], registers[0x5110]))
         if all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110, 0x5114)):
             inner, middle, outer = (registers[0x14], registers[0x18],
                                     registers[0x1c])
@@ -333,6 +346,23 @@ def positional_program(tasks: list[dict], task_count: int,
     return (registers.get(4) == registers.get(8) ==
             registers.get(0x14) == registers.get(0x18) == 1024 and
             {0x4d10, 0x4d28, 0x5108}.issubset(addresses))
+
+
+def layer_norm_program(tasks: list[dict], task_count: int,
+                       record_code: int, format_code: int) -> bool:
+    """Recognize the standalone BERT/Whisper last-axis normalization family."""
+    if (len(tasks) != task_count or task_count not in (5, 11) or
+            record_code != 0x10 or format_code != 20):
+        return False
+    first_addresses = {dma['address'] for dma in tasks[0]['dma']}
+    final_addresses = {dma['address'] for dma in tasks[-1]['dma']}
+    boundary_addresses = {dma['address'] for dma in tasks[-2]['dma']}
+    epsilon_tasks = [task for task in tasks
+                     if task['registers'].get(0x450c) == 0x37280000]
+    return (bool(first_addresses & {0x4d10, 0x4d28}) and
+            0x4d28 in boundary_addresses and
+            {0x4d28, 0x5108}.issubset(final_addresses) and
+            bool(epsilon_tasks))
 
 
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
@@ -618,7 +648,9 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
               'linear' if linear_program(task_facts, tasks, record_code, fmt) else
               whisper_family or
               ('positional' if positional_program(
-                  task_facts, tasks, record_code, fmt) else None))
+                  task_facts, tasks, record_code, fmt) else
+               'layer_norm' if layer_norm_program(
+                   task_facts, tasks, record_code, fmt) else None))
     dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")

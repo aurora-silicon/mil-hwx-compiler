@@ -78,8 +78,7 @@ matmul axes as unrevealed predictions.  They pass the structural validator
 but do not claim descriptor or numerical parity.  Fused attention is limited
 to the measured S=1500, D=64, H=6/8 forms: its smaller predictions reused
 S=1500 scratch offsets and are now refused.  Device qualification for the
-corrected rows is pending.  Affine last-axis layer normalization is still
-outside the formula envelope.
+corrected rows is pending.
 
 The first corrected Whisper-tiny device run made the numerical and scheduling
 boundaries more precise.  Split/split-transpose/merge were bit exact, QK and
@@ -116,6 +115,39 @@ at the end of the score surface.  `h16g_validate.py` recognizes the decoded
 attention and transformer-linear task families, checks source and result
 direction, and bounds every DMA extent for which the task supplies complete
 geometry.
+
+## Native last-axis layer normalization
+
+The H16G route emits the identity-affine normalization used by the captured
+BERT and Whisper encoder programs:
+
+| Shape | Tasks | Measured part | Predicted part |
+| --- | ---: | --- | --- |
+| `[1,128,768]` | 5 | three-task external-input prefix | standalone two-task output boundary |
+| `[1,1500,384]` | 11 | nine-task tiled prefix and two-task standalone boundary | none |
+| `[1,1500,512]` | 11 | nine-task tiled prefix | standalone two-task output boundary |
+
+The long form splits 1500 rows into three 384-row tiles and one 348-row tail.
+It encodes the fp16 value of `1e-5`, promoted to fp32 in the task, and fp32
+`1/d` for the reduction.  Reciprocal square root uses the task's direct
+normalization unit; there is no external reciprocal or rsqrt lookup table.
+The standalone boundary materializes a row-latency staging window and then
+writes the external result.  Its scratch allocation is `2*S*d + 0x3300`
+bytes.
+
+Packaged objects use BAR 6 for the external input, BAR 3 for scratch, and BAR
+7 for the external output.  The fail-closed validator recognizes the family,
+checks direction and aperture binding, and bounds four BERT or twelve Whisper
+DMA extents.  All three objects also pass the independent host HWX harness.
+Device numerical qualification is pending.
+
+The full encoder capture stores each explicit affine pair as contiguous fp16
+`gamma` followed by fp16 `beta`.  Every pair in that capture is identity/zero,
+and the isolated random-affine probes were CPU-only.  The public compiler
+therefore accepts omitted parameters or explicit identity gamma and zero beta,
+and refuses non-identity values with
+`h16g.encode.transformer-layer-norm-affine-unproved`.  It does not pretend
+that locating constants proves how a non-identity pair is consumed.
 
 ## What the staged H16G backend already encodes
 
@@ -168,7 +200,7 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| `layer_norm` (2) | `[1,128,768]` last axis | refused | host | facts | layer_norm at transformer widths |
+| `layer_norm` (2) | `[1,128,768]` last axis | native identity-affine formula | five-task standalone program | compiler; predicted output boundary, device pending | non-identity affine facts |
 | `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
 | `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
@@ -189,7 +221,7 @@ work; **facts** = needs new field facts for this geometry.
 | conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | corrected v3 device run pending | done for d=384/512 |
 | `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | corrected v3 device run pending | done |
 | `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | compiler; device pending | device qualification |
-| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused (planner SRAM overflow) | host | facts | tiled layer_norm |
+| `layer_norm` (2, +1 final) | `[1,1500,d]` | native identity-affine formula | eleven-task tiled program | compiler; tiny boundary measured, base boundary predicted, device pending | non-identity affine facts |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
 | `softmax` (1) | `[1,h,1500,1500]` | refused (SRAM overflow) | none | facts | tiled row softmax |
@@ -214,7 +246,7 @@ today:
 | Projections and FFN matmuls | only through 512-square tiles plus adds |
 | Residual add, BERT shapes | yes (512 view) |
 | FFN GELU `[1,128,3072]` | yes as two 512 views; the 1024 view is refused |
-| layer_norm | no form |
+| layer_norm | native identity-affine BERT/Whisper objects; device run pending |
 
 Once the loader accepts these words by their meaning, the padded BERT
 self-attention and FFN sub-blocks built from the forms above need no compiler
@@ -222,7 +254,8 @@ change.
 
 ## What is needed next
 
-The remaining formula gap is affine native layer_norm.  S=1500 softmax,
+The remaining normalization gap is non-identity affine gamma/beta consumption.
+S=1500 softmax,
 attention data movement and batched runtime matmul over heads now have native
 encoders; the corrected objects still need device qualification.  The two
 Whisper stem convolutions and encoder-axis transpose have measured descriptor
