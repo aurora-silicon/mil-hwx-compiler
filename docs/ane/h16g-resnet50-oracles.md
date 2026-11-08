@@ -67,13 +67,42 @@ stride-one packing reproduces the captured sections, as does the H16G sparse
 output-lane regions; each region carries the four outputs' biases and three
 input-channel repetitions of sixteen phase-mask groups covering all 49 taps.
 
-One full graph does **not** separate every encoder field. In particular it
-does not establish a generic ExeCycles formula, dependency/live-mask formula,
-L2 branch allocation policy, or standalone forms of pool, add, mean, and
-linear. Position-dependent values are kept as full-program facts and are not
-promoted to general operation formulas. A compiler must either encode this
-exact 82-task DAG or obtain isolated/perturbed captures before claiming a
-generic primitive encoder.
+## Perturbation results and exact encoder
+
+The six 2026-11-09 on-ANE perturbation programs separate scheduling from
+source construction order. Projection-before and projection-after compile to
+identical task descriptors. Task-position-head and task-position-tail are
+also identical. The compiler canonicalizes both pairs, so construction order
+is not an encoder input. The branch-lifetime pair changes the residual add
+from an internal producer to the terminal task, but in both programs the
+projection convolution is delayed until immediately before its add.
+
+Header word 7 is schedule-derived dependency/live-bank state rather than a
+primitive constant. Resident source/result ranges contribute the 64-KiB banks
+they occupy in the 2-MiB circular L2 arena; overlapping live values OR their
+bits. Source, second-source, and result bases are selected independently, and
+dead intermediates are reused while a residual input remains allocated
+through its add. Special branch hand-offs and terminal tasks use their
+TileDMA/Common completion fields rather than a nonzero live-bank mask.
+
+This evidence admits the exact public 121-operation graph, not a generic DAG
+allocator. The formula encoder emits its measured 82-task stream and refuses
+other graphs. The four isolated non-convolution probes went to the CPU, so
+max-pool, add+ReLU, global mean, and the head are likewise admitted only in
+the exact full-program table.
+
+All constants are formula-built from public model weights. Dense task slices
+use one interleave width per compiler slice; stride-two 3x3 planes use padded
+phase slots and 16-bit nonzero masks with a 24-bit body length; stride-two
+1x1 planes use the alternating phase grammar exposed by the wide projection.
+The 1000-output head distributes its tail as 63 lanes in the first eight
+regions and 62 in the last eight. Together these formulas reproduce every
+convolution and head region byte-for-byte.
+
+Packaged objects follow the object-writer BAR law: input slot 6, output slot
+7, and `__KERN_0` slot 8; the fixed scratch arena remains slot 3. The offline
+validator recognizes only the exact 82-task/record/format triple, bounds both
+external DMA extents, and rejects unbound or misdirected apertures.
 
 ## Admission gate
 

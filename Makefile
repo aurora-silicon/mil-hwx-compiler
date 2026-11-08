@@ -370,7 +370,7 @@ test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
 	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
 
 H16_CONV_SOURCES := $(H16_FORMULA_SOURCES)
-$(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/H13Program.h | $(BUILD)
+$(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H16G/Encoding/H16ResNet50Facts.inc plugins/H13/H13Program.h | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
 $(BUILD)/h16_conv_support.o: plugins/H13/H13Program.cpp plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
@@ -384,10 +384,13 @@ $(BUILD)/h16_transformer_attention_dump: tests/h16_transformer_attention_dump.cp
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 $(BUILD)/test_h16g_resnet50_packing: tests/test_h16g_resnet50_packing.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
+$(BUILD)/test_h16g_resnet50_program: tests/test_h16g_resnet50_program.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
-test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump $(BUILD)/h16_transformer_attention_dump
+test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/test_h16g_resnet50_program $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump $(BUILD)/h16_transformer_attention_dump
 	$(BUILD)/test_h16g_resnet50_packing
+	$(BUILD)/test_h16g_resnet50_program
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
 	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py

@@ -51,5 +51,24 @@ int main() {
     auto projectionPacked=ane::h16::packResNetStride2(
         projection,projectionWeights.data(),projectionBias.data(),chunks);
     if (projectionPacked.size()!=862208 || !equalChunks(chunks,53888)) return 3;
+
+    auto wide3=shape(512,512,14,3);
+    auto wide3Weights=halves(512*512*9),wide3Bias=halves(512);
+    auto wide3Packed=ane::h16::packResNetStride2(
+        wide3,wide3Weights.data(),wide3Bias.data(),chunks);
+    if (wide3Packed.size()!=5244928 || !equalChunks(chunks,0x50080)) return 4;
+
+    auto wide1=shape(1024,2048,14,1);
+    auto wide1Weights=halves(1024*2048),wide1Bias=halves(2048);
+    auto wide1Packed=ane::h16::packResNetStride2(
+        wide1,wide1Weights.data(),wide1Bias.data(),chunks);
+    if (wide1Packed.size()!=5248000 || !equalChunks(chunks,0x50140)) return 5;
+
+    auto headWeights=halves(2048*1000),headBias=halves(1000);
+    auto headPacked=ane::h16::packResNetLinearHead(
+        2048,1000,headWeights.data(),headBias.data(),chunks);
+    if (headPacked.size()!=4098048) return 6;
+    for (unsigned i=0;i<16;++i)
+        if (chunks[i]!=(i<8 ? 0x3f080u : 0x3e080u)) return 7;
     std::cout << "resnet50 kernel packing passed\n";
 }

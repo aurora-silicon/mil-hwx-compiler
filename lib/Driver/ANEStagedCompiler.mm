@@ -49,8 +49,23 @@ static ANESourceRange syntheticRange(void) {
     if (!graph ||
         ![ANENormalizePass runOnGraph:graph diagnostics:diagnostics] ||
         ![ANEDecomposePass runOnGraph:graph diagnostics:diagnostics] ||
-        ![ANEFusionPass runOnGraph:graph target:target diagnostics:diagnostics] ||
-        ![ANEH16GLegalizePass runOnGraph:graph target:target
+        ![ANEFusionPass runOnGraph:graph target:target diagnostics:diagnostics])
+        return nil;
+    // The exact ResNet-50 encoder owns its decoded 82-task DAG, including
+    // max-pool, residual live ranges, mean, and head.  Admit that graph before
+    // primitive scheduling, whose intentionally smaller capability table has
+    // no standalone max-pool row.
+    if (ANEHWXArtifact *resnet=[H16GProgramEncoder
+            encodeExactResNetGraph:graph modelRoot:modelRoot
+            diagnostics:diagnostics])
+        return [[ANEExecutableBundle alloc] initWithTarget:targetName
+            artifacts:@[resnet] dispatchPlan:@[@0] passTrace:@[
+                @"mil.import-operation-graph", @"ane.normalize", @"ane.decompose",
+                @"ane.fuse", @"h16g.resnet50-exact-dag", @"h16g.write-object",
+            ] compositionTrace:@[
+                @"one exact ResNet-50 program; decoded residual DAG and L2 lifetime policy",
+            ]];
+    if (![ANEH16GLegalizePass runOnGraph:graph target:target
                               diagnostics:diagnostics] ||
         ![ANEFusionPass runOnGraph:graph target:target diagnostics:diagnostics])
         return nil;

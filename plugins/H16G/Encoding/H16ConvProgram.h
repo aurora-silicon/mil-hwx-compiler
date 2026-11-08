@@ -172,10 +172,38 @@ std::vector<std::uint8_t> packResNetStride2(ConvShape shape,
                                             const std::uint8_t *weights,
                                             const std::uint8_t *bias,
                                             std::array<std::uint32_t,16> &chunkBytes);
+std::vector<std::uint8_t> packResNetDense(ConvShape shape,
+                                          const std::uint8_t *weights,
+                                          const std::uint8_t *bias,
+                                          std::array<std::uint32_t,16> &chunkBytes);
+std::vector<std::uint8_t> packResNetLinearHead(
+    std::uint32_t inputChannels, std::uint32_t outputChannels,
+    const std::uint8_t *weights, const std::uint8_t *bias,
+    std::array<std::uint32_t,16> &chunkBytes);
 std::vector<std::uint8_t> packResNetStem7x7(ConvShape shape,
                                             const std::uint8_t *weights,
                                             const std::uint8_t *bias,
                                             std::array<std::uint32_t,16> &chunkBytes);
+struct ResNet50ConvWeights {
+    ConvShape shape;
+    const std::uint8_t *weights = nullptr;
+    std::size_t weightBytes = 0;
+    const std::uint8_t *bias = nullptr;
+    std::size_t biasBytes = 0;
+};
+struct ResNet50Program {
+    h13::Program program;
+    std::uint32_t programRecordCount = 0;
+    std::uint32_t programFormatCode = 0;
+    std::size_t scratchBytes = 0;
+};
+// Exact public random-weight ResNet-50 topology: 53 biased convolutions,
+// max-pool, sixteen residual add+ReLUs, global mean, and a 2048->1000 head.
+// Convolution entries are supplied in the measured task-schedule order.
+ResNet50Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes);
 // A chain of measured standalone tasks whose intermediates go through the
 // scratch BAR (slot 3) in DRAM, ping-ponging between two regions. Measured
 // uses the r2 DRAM-chain producer/consumer fields; DependencyOnly sets only

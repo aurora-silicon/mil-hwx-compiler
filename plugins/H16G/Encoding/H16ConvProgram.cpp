@@ -1023,12 +1023,16 @@ const std::array<TapGroup,16> resnet7x7PhaseGroups = {
     TapGroup{36,38,40}, TapGroup{},
 };
 
-std::vector<unsigned> sparseLaneChunks(unsigned outputs) {
+std::vector<unsigned> resnetLaneChunks(unsigned outputs, unsigned cap) {
     unsigned lanes=outputs/16;
     std::vector<unsigned> chunks;
-    while (lanes>16) { chunks.push_back(16); lanes-=16; }
+    while (lanes>cap) { chunks.push_back(cap); lanes-=cap; }
     if (lanes) chunks.push_back(lanes);
     return chunks;
+}
+
+unsigned resnetOneTapMaskBytes(unsigned lanes) {
+    return (lanes+7)/8;
 }
 
 template <std::size_t N>
@@ -1043,28 +1047,134 @@ void appendPhasePlane(std::vector<std::uint8_t> &out,
     out.push_back(0); out.push_back(0); out.push_back(0);
     const unsigned maxTaps=std::max_element(groups.begin(),groups.end(),
         [](const TapGroup &a,const TapGroup &b){return a.size()<b.size();})->size();
-    const unsigned maskBytes=(maxTaps*lanes+7)/8;
     const std::size_t bodyAt=out.size();
     for (unsigned input=0;input<cin;++input) {
-        for (const auto &group:groups) {
-            std::vector<std::uint8_t> masks(maskBytes,0),values;
-            unsigned bit=0;
-            for (unsigned tap:group)
-                for (unsigned lane=0;lane<lanes;++lane,++bit) {
-                    const auto *value=weights+2*((std::size_t(first+lane)*cin+input)*taps+tap);
+        unsigned structural=0;
+        if constexpr (N==1) {
+            if (lanes<=8 || (lanes<=16 && (lanes%8==0 || !(input&1)))) {
+                const unsigned maskBytes=resnetOneTapMaskBytes(lanes);
+                std::vector<std::uint8_t> masks(maskBytes,0),values;
+                for (unsigned lane=0;lane<lanes;++lane) {
+                    const auto *value=weights+2*((std::size_t(first+lane)*cin+input)*taps);
                     if (!nonzeroHalf(value)) continue;
-                    masks[bit/8]|=std::uint8_t(1u<<(bit%8));
+                    masks[lane/8]|=std::uint8_t(1u<<(lane%8));
                     half(values,value);
                 }
-            out.insert(out.end(),masks.begin(),masks.end());
-            out.insert(out.end(),values.begin(),values.end());
+                out.insert(out.end(),masks.begin(),masks.end());
+                if (lanes<=8 && perInputPadding) { out.push_back(0); structural=1; }
+                out.insert(out.end(),values.begin(),values.end());
+            } else {
+                unsigned consumed=0;
+                const unsigned cap=lanes>16 ? 16 : 8;
+                while (consumed<lanes) {
+                    const unsigned width=std::min(cap,lanes-consumed);
+                    std::vector<std::uint8_t> masks((width+7)/8,0);
+                    std::vector<std::uint8_t> values;
+                    for (unsigned lane=0;lane<width;++lane) {
+                        const auto *value=weights+2*((std::size_t(first+consumed+lane)*cin+input)*taps);
+                        if (!nonzeroHalf(value)) continue;
+                        masks[lane/8]|=std::uint8_t(1u<<(lane%8));
+                        half(values,value);
+                    }
+                    out.insert(out.end(),masks.begin(),masks.end());
+                    if (width<cap && perInputPadding) { out.push_back(0); structural=1; }
+                    out.insert(out.end(),values.begin(),values.end());
+                    consumed+=width;
+                }
+            }
+        } else {
+            // Every phase row is padded to the next even lane count and to
+            // the widest tap group.  The resulting structural slot stream
+            // is encoded in 16-bit nonzero-mask vectors.  This unifies the
+            // 1-, 4-, 8-, 11- and 32-lane ResNet stride-two forms.
+            const unsigned evenLanes=(lanes+1)&~1u;
+            std::vector<const std::uint8_t *> slots;
+            for (const auto &group:groups) {
+                for (unsigned tapIndex=0;tapIndex<maxTaps;++tapIndex)
+                    for (unsigned lane=0;lane<evenLanes;++lane)
+                        slots.push_back(tapIndex<group.size() && lane<lanes
+                            ? weights+2*((std::size_t(first+lane)*cin+input)*taps+group[tapIndex])
+                            : nullptr);
+            }
+            if (slots.size()%16) throw std::logic_error(
+                "ResNet phase slots are not a whole mask vector");
+            for (std::size_t at=0;at<slots.size();at+=16) {
+                std::uint16_t mask=0;
+                for (unsigned bit=0;bit<16;++bit)
+                    if (slots[at+bit] && nonzeroHalf(slots[at+bit])) mask|=std::uint16_t(1u<<bit);
+                out.push_back(std::uint8_t(mask)); out.push_back(std::uint8_t(mask>>8));
+                for (unsigned bit=0;bit<16;++bit)
+                    if (mask&(1u<<bit)) half(out,slots[at+bit]);
+            }
         }
-        out.insert(out.end(),perInputPadding,0);
+        unsigned trailingPadding=perInputPadding;
+        if constexpr (N==1)
+            if (structural) --trailingPadding;
+        out.insert(out.end(),trailingPadding,0);
     }
     const std::size_t bytes=out.size()-bodyAt;
-    if (bytes>0xffff) throw std::invalid_argument("ResNet sparse plane exceeds u16 length");
+    if (bytes>0xffffff) throw std::invalid_argument("ResNet sparse plane exceeds u24 length");
     out[lengthAt]=std::uint8_t(bytes); out[lengthAt+1]=std::uint8_t(bytes>>8);
+    out[lengthAt+2]=std::uint8_t(bytes>>16);
 }
+}
+
+std::vector<std::uint8_t> packResNetDense(
+    ConvShape s, const std::uint8_t *weights, const std::uint8_t *bias,
+    std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=1 || !s.bias || !weights || !bias ||
+        !s.output.channels || s.output.channels%16)
+        throw std::invalid_argument(
+            "ResNet dense packing requires biased groups-1 stride-one and Cout%16=0");
+    const unsigned reduction=s.input.channels*s.kernel*s.kernelWidth;
+    const unsigned cap=std::max(s.output.width,s.output.height)<=8 ? 32 : 16;
+    const auto chunks=resnetLaneChunks(s.output.channels,cap);
+    std::vector<std::uint8_t> out;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        unsigned first=0;
+        for (unsigned lanes:chunks) {
+            for (unsigned lane=0;lane<lanes;++lane) half(out,bias+2*(first+region*lanes+lane));
+            for (unsigned input=0;input<reduction;++input)
+                for (unsigned lane=0;lane<lanes;++lane) {
+                    const unsigned output=first+region*lanes+lane;
+                    half(out,weights+2*(std::size_t(output)*reduction+input));
+                }
+            first+=16*lanes;
+        }
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> packResNetLinearHead(
+    U32 cin, U32 cout, const std::uint8_t *weights,
+    const std::uint8_t *bias, std::array<U32,16> &chunkBytes) {
+    if (!cin || !cout || !weights || !bias)
+        throw std::invalid_argument("ResNet linear head needs nonzero dimensions, weights, and bias");
+    const unsigned fullChunks=cout/256;
+    const unsigned tail=cout-fullChunks*256;
+    const unsigned tailLanes=tail/16,tailExtra=tail%16;
+    std::vector<std::uint8_t> out;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t regionStart=out.size();
+        const auto append=[&](unsigned at,unsigned lanes) {
+            for (unsigned lane=0;lane<lanes;++lane) half(out,bias+2*(at+lane));
+            for (unsigned input=0;input<cin;++input)
+                for (unsigned lane=0;lane<lanes;++lane)
+                    half(out,weights+2*(std::size_t(at+lane)*cin+input));
+        };
+        for (unsigned chunk=0;chunk<fullChunks;++chunk)
+            append(chunk*256+region*16,16);
+        const unsigned lanes=tailLanes+(region<tailExtra);
+        if (lanes)
+            append(fullChunks*256+region*tailLanes+
+                   std::min(region,tailExtra),lanes);
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-regionStart);
+    }
+    return out;
 }
 
 std::vector<std::uint8_t> packResNetStride2(ConvShape s,
@@ -1076,9 +1186,8 @@ std::vector<std::uint8_t> packResNetStride2(ConvShape s,
         !s.output.channels || s.output.channels%16)
         throw std::invalid_argument("ResNet stride-2 packing requires biased dense 1x1/3x3 and Cout%16=0");
     std::vector<std::uint8_t> out;
-    const auto chunks=s.kernel==3
-        ? std::vector<unsigned>{s.output.channels/16}
-        : sparseLaneChunks(s.output.channels);
+    const unsigned cap=std::max(s.output.width,s.output.height)<=8 ? 32 : 16;
+    const auto chunks=resnetLaneChunks(s.output.channels,cap);
     for (unsigned region=0;region<16;++region) {
         const std::size_t start=out.size();
         unsigned base=0;
@@ -1089,8 +1198,9 @@ std::vector<std::uint8_t> packResNetStride2(ConvShape s,
                                  lanes,first,9,weights,bias,0);
             } else {
                 const std::array<TapGroup,1> one={TapGroup{0}};
+                const unsigned masks=resnetOneTapMaskBytes(lanes);
                 appendPhasePlane(out,one,s.input.channels,lanes,first,1,
-                                 weights,bias,lanes>=4 ? lanes/2-2 : 0);
+                                 weights,bias,lanes/2>masks ? lanes/2-masks : 0);
             }
             base+=16*lanes;
         }
@@ -1118,6 +1228,107 @@ std::vector<std::uint8_t> packResNetStem7x7(ConvShape s,
         chunkBytes[region]=U32(out.size()-start);
     }
     return out;
+}
+
+namespace {
+struct ResNetRecordFact { U32 header,valueStart,valueCount; };
+struct ResNetTaskFact {
+    std::array<U32,9> header;
+    U32 recordStart,recordCount;
+};
+#include "H16ResNet50Facts.inc"
+
+std::vector<std::pair<U32,U32>> resnetOutputSlices(ConvShape s) {
+    if (s.stride==2 && s.kernel==3 && s.input.channels==256 &&
+        s.output.channels==256 && s.input.width==28)
+        return {{192,64},{0,176},{176,16}};
+    if (s.stride==2 && s.kernel==1 && s.input.channels==512 &&
+        s.output.channels==1024 && s.input.width==28)
+        return {{800,224},{0,672},{672,128}};
+    if (s.stride==1 && s.kernel==3 && s.input.channels==256 &&
+        s.output.channels==256 && s.input.width==14)
+        return {{224,32},{0,224}};
+    if (s.stride==1 && s.kernel==1 && s.input.channels==1024 &&
+        s.output.channels==512 && s.input.width==14)
+        return {{256,256},{0,256}};
+    return {{0,s.output.channels}};
+}
+
+U32 resnetRecordBase(U32 header) { return (header&0x7fffu)*4; }
+U32 resnetPackagedRecordHeader(U32 header) {
+    const U32 base=resnetRecordBase(header),flags=header&0x3f800000u;
+    if (base==0x5510 && flags==0x23800000u)
+        return (header&~0x3f800000u)|taskBar(8);
+    if (base==0x5108 && flags==0x22800000u)
+        return (header&~0x3f800000u)|taskBar(7);
+    return header;
+}
+}
+
+ResNet50Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes) {
+    if (convolutions.size()!=53)
+        throw std::invalid_argument("ResNet-50 needs 53 scheduled convolution operations");
+    ResNet50Program result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    for (const auto &conv:convolutions) {
+        const auto &s=conv.shape;
+        const std::size_t reduction=std::size_t(s.input.channels)*s.kernel*s.kernelWidth;
+        if (s.groups!=1 || !s.bias || !conv.weights || !conv.bias ||
+            conv.weightBytes!=std::size_t(s.output.channels)*reduction*2 ||
+            conv.biasBytes!=std::size_t(s.output.channels)*2)
+            throw std::invalid_argument("ResNet convolution weights do not match its biased groups-1 shape");
+        for (const auto &[first,count]:resnetOutputSlices(s)) {
+            ConvShape slice=s; slice.output.channels=count;
+            std::array<U32,16> chunks{};
+            const auto *weights=conv.weights+2*std::size_t(first)*reduction;
+            const auto *bias=conv.bias+2*first;
+            std::vector<std::uint8_t> packed;
+            if (s.kernel==7)
+                packed=packResNetStem7x7(slice,weights,bias,chunks);
+            else if (s.stride==2)
+                packed=packResNetStride2(slice,weights,bias,chunks);
+            else
+                packed=packResNetDense(slice,weights,bias,chunks);
+            program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        }
+    }
+    if (!headWeights || !headBias || headWeightBytes!=std::size_t(2048)*1000*2 ||
+        headBiasBytes!=std::size_t(1000)*2)
+        throw std::invalid_argument("ResNet-50 head needs [1000,2048] weights and [1000] bias");
+    std::array<U32,16> headChunks{};
+    auto head=packResNetLinearHead(2048,1000,headWeights,headBias,headChunks);
+    program.constants.insert(program.constants.end(),head.begin(),head.end());
+    if (program.constants.size()!=53177344)
+        throw std::logic_error("ResNet-50 packed constants do not match the measured section extent");
+
+    for (const auto &task:resnetTaskFacts) {
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        for (U32 value:task.header) word(program.task,value);
+        for (U32 index=0;index<task.recordCount;++index) {
+            const auto &record=resnetRecordFacts[task.recordStart+index];
+            const U32 base=resnetRecordBase(record.header);
+            word(program.task,resnetPackagedRecordHeader(record.header));
+            if (base==0x5510)
+                program.kernelRelocations.push_back(program.task.size());
+            for (U32 value=0;value<record.valueCount;++value)
+                word(program.task,resnetRecordValues[record.valueStart+value]);
+        }
+    }
+    if (program.kernelRelocations.size()!=64)
+        throw std::logic_error("ResNet-50 task facts do not expose 64 kernel relocations");
+    program.taskCount=82;
+    program.firstTaskBytes=program.task.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=0x188000;
+    program.formulaBuilt=true;
+    result.programRecordCount=0xa5;
+    result.programFormatCode=0x4c;
+    result.scratchBytes=0x188000;
+    return result;
 }
 Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
                               DramEdgeForm form, U32 scratchRegionBytes) {

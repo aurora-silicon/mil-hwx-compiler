@@ -22,7 +22,7 @@ U64_MAX = (1 << 64) - 1
 FORMATS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17,
            18, 20, 21, 23, 27, 30, 31, 36, 41, 43, 61, 72, 92, 145,
            245, 368, 33, 44, 45, 66, 67, 68, 69, 101, 104, 167, 174,
-           200, 209, 263, 266, 278, 395, 398, 419, 659, 791, 1054, 1583}
+           76, 200, 209, 263, 266, 278, 395, 398, 419, 659, 791, 1054, 1583}
 REGISTER_BLOCKS = ((0, 0x5c), (0x4100, 0x41a4), (0x44d0, 0x44d4),
                    (0x4500, 0x453c), (0x4900, 0x4930), (0x4d00, 0x4e44),
                    (0x5100, 0x5154), (0x5500, 0x5620), (0x5900, 0x5930))
@@ -191,6 +191,9 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d34], registers[0x4d3c])
     elif address == 0x5108:
+        if (family == 'resnet50' and registers.get(0x1c) == 1000 and
+                registers.get(0x14) == registers.get(0x18) == 1):
+            return offset + ((2 * registers[0x1c] + 63) // 64) * 64
         if registers.get(0x511c):
             return offset + product(registers.get(0x24, 1), registers[0x511c])
         if (family == 'linear' and
@@ -264,6 +267,12 @@ def linear_program(tasks: list[dict], task_count: int,
                 not {0x5108, 0x5510}.issubset(addresses)):
             return False
     return True
+
+
+def resnet50_program(task_count: int, record_code: int,
+                     format_code: int) -> bool:
+    """Recognize only the measured full ResNet-50 task stream."""
+    return task_count == 82 and record_code == 0xa5 and format_code == 0x4c
 
 
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
@@ -478,7 +487,7 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     # Materialized transposes and the transformer families add bounded
     # measured record codes to the convolution/linear set.
     require(u32(p, 0x860) in (3, 7, 9, 11, 13, 15, 16, 18, 19, 27, 31, 32,
-                              35, 39, 45),
+                              35, 39, 45, 165),
             "program-record-code")
     fmt = u32(p, 0x8b0 if mixed else 0x890)
     require(fmt in FORMATS, "program-format-code")
@@ -543,7 +552,8 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
                                 prot=kernel['prot'], kind='kernel'))
     record_code = u32(p, 0x860)
     family = ('attention' if attention_program(tasks, record_code, fmt) else
-              'linear' if linear_program(task_facts, tasks, record_code, fmt) else None)
+              'linear' if linear_program(task_facts, tasks, record_code, fmt) else
+              'resnet50' if resnet50_program(tasks, record_code, fmt) else None)
     dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")

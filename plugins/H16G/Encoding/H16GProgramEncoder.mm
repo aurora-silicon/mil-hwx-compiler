@@ -144,6 +144,186 @@ static BOOL fp16ScalarFromArgument(ANEOperationGraph *graph,
     return constant && fp16ScalarFromConstant(constant,bits);
 }
 
+static NSString *operationLabel(ANEOperationNode *node) {
+    return node.sourceOperation
+        ? scalarLiteral(node.sourceOperation.attributes[@"name"]) : nil;
+}
+
+static ANEOperationNode *nodeWithLabel(ANEOperationGraph *graph,
+                                       NSString *label) {
+    for (ANEOperationNode *node in graph.nodes)
+        if ([[operationLabel(node) stringByTrimmingCharactersInSet:
+                [NSCharacterSet characterSetWithCharactersInString:@"\""]]
+                isEqualToString:label]) return node;
+    return nil;
+}
+
+static ANEHWXArtifact *encodeResNet50Program(
+    ANEOperationGraph *graph, NSURL *modelRoot,
+    ANEDiagnosticEngine *diagnostics) {
+    struct ConvSpec { __unsafe_unretained NSString *name; uint32_t cin,cout,spatial,kernel,stride; };
+    static const ConvSpec specs[] = {
+        {@"conv_0",3,64,224,7,2}, {@"conv_1",64,64,56,1,1},
+        {@"conv_2",64,64,56,3,1}, {@"conv_3",64,256,56,1,1},
+        {@"conv_4",64,256,56,1,1}, {@"conv_5",256,64,56,1,1},
+        {@"conv_6",64,64,56,3,1}, {@"conv_7",64,256,56,1,1},
+        {@"conv_8",256,64,56,1,1}, {@"conv_9",64,64,56,3,1},
+        {@"conv_10",64,256,56,1,1}, {@"conv_14",256,512,56,1,2},
+        {@"conv_11",256,128,56,1,1}, {@"conv_12",128,128,56,3,2},
+        {@"conv_13",128,512,28,1,1}, {@"conv_15",512,128,28,1,1},
+        {@"conv_16",128,128,28,3,1}, {@"conv_17",128,512,28,1,1},
+        {@"conv_18",512,128,28,1,1}, {@"conv_19",128,128,28,3,1},
+        {@"conv_20",128,512,28,1,1}, {@"conv_21",512,128,28,1,1},
+        {@"conv_22",128,128,28,3,1}, {@"conv_23",128,512,28,1,1},
+        {@"conv_24",512,256,28,1,1}, {@"conv_25",256,256,28,3,2},
+        {@"conv_27",512,1024,28,1,2}, {@"conv_26",256,1024,14,1,1},
+        {@"conv_28",1024,256,14,1,1}, {@"conv_29",256,256,14,3,1},
+        {@"conv_30",256,1024,14,1,1}, {@"conv_31",1024,256,14,1,1},
+        {@"conv_32",256,256,14,3,1}, {@"conv_33",256,1024,14,1,1},
+        {@"conv_34",1024,256,14,1,1}, {@"conv_35",256,256,14,3,1},
+        {@"conv_36",256,1024,14,1,1}, {@"conv_37",1024,256,14,1,1},
+        {@"conv_38",256,256,14,3,1}, {@"conv_39",256,1024,14,1,1},
+        {@"conv_40",1024,256,14,1,1}, {@"conv_41",256,256,14,3,1},
+        {@"conv_42",256,1024,14,1,1}, {@"conv_46",1024,2048,14,1,2},
+        {@"conv_43",1024,512,14,1,1}, {@"conv_44",512,512,14,3,2},
+        {@"conv_45",512,2048,7,1,1}, {@"conv_47",2048,512,7,1,1},
+        {@"conv_48",512,512,7,3,1}, {@"conv_49",512,2048,7,1,1},
+        {@"conv_50",2048,512,7,1,1}, {@"conv_51",512,512,7,3,1},
+        {@"conv_52",512,2048,7,1,1},
+    };
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1 ||
+        ![graph.sourceFunction.inputs.firstObject.type.shape
+            isEqualToArray:@[@1,@3,@224,@224]]) return nil;
+    NSUInteger convCount=0,addCount=0,reluCount=0,poolCount=0,meanCount=0,linearCount=0;
+    for (ANEOperationNode *node in graph.nodes) {
+        convCount += [node.operationName isEqualToString:@"conv"];
+        addCount += [node.operationName isEqualToString:@"add"];
+        reluCount += [node.operationName isEqualToString:@"relu"];
+        poolCount += [node.operationName isEqualToString:@"max_pool"];
+        meanCount += [node.operationName isEqualToString:@"reduce_mean"];
+        linearCount += [node.operationName isEqualToString:@"linear"];
+    }
+    if (convCount!=53 || addCount!=16 || reluCount!=49 || poolCount!=1 ||
+        meanCount!=1 || linearCount!=1) return nil;
+
+    NSMutableArray<NSData *> *storage=[NSMutableArray array];
+    std::vector<ane::h16::ResNet50ConvWeights> convolutions;
+    convolutions.reserve(53);
+    for (const auto &spec:specs) {
+        ANEOperationNode *conv=nodeWithLabel(graph,spec.name);
+        if (!conv || ![conv.operationName isEqualToString:@"conv"])
+            return nil;
+        ANEOperationNode *weight=producerForOperand(graph,conv,@"weight");
+        ANEOperationNode *bias=producerForOperand(graph,conv,@"bias");
+        if (!weight || !bias) return nil;
+        NSArray<NSNumber *> *inputShape=conv.sourceOperation.operands[@"x"].value.type.shape;
+        NSArray<NSNumber *> *outputShape=conv.outputType.shape;
+        NSArray<NSNumber *> *weightShape=weight.outputType.shape;
+        if (![inputShape isEqualToArray:@[@1,@(spec.cin),@(spec.spatial),@(spec.spatial)]] ||
+            ![outputShape isEqualToArray:@[@1,@(spec.cout),
+                @((spec.spatial+spec.stride-1)/spec.stride),
+                @((spec.spatial+spec.stride-1)/spec.stride)]] ||
+            ![weightShape isEqualToArray:@[@(spec.cout),@(spec.cin),
+                                           @(spec.kernel),@(spec.kernel)]] ||
+            ![bias.outputType.shape isEqualToArray:@[@(spec.cout)]] ||
+            !constantListOperandIs(graph,conv,@"strides",
+                                   @[[NSString stringWithFormat:@"%u",spec.stride],
+                                     [NSString stringWithFormat:@"%u",spec.stride]]) ||
+            !constantScalarOperandIs(graph,conv,@"groups",@"1")) return nil;
+        const NSUInteger weightBytes=(NSUInteger)spec.cout*spec.cin*spec.kernel*spec.kernel*2;
+        NSData *rawWeight=[ANEBlobResolver loadConstantForOperation:weight.sourceOperation
+            expectedBytes:weightBytes modelRoot:modelRoot diagnostics:diagnostics];
+        NSData *rawBias=[ANEBlobResolver loadConstantForOperation:bias.sourceOperation
+            expectedBytes:spec.cout*2 modelRoot:modelRoot diagnostics:diagnostics];
+        if (!rawWeight || !rawBias) return nil;
+        [storage addObject:rawWeight]; [storage addObject:rawBias];
+        ane::h16::ConvShape shape;
+        shape.input={spec.cin,spec.spatial,spec.spatial};
+        const uint32_t out=(spec.spatial+spec.stride-1)/spec.stride;
+        shape.output={spec.cout,out,out}; shape.kernel=shape.kernelWidth=spec.kernel;
+        shape.stride=spec.stride; shape.groups=1; shape.bias=true;
+        convolutions.push_back({shape,
+            static_cast<const uint8_t *>(rawWeight.bytes),rawWeight.length,
+            static_cast<const uint8_t *>(rawBias.bytes),rawBias.length});
+    }
+    ANEOperationNode *linear=nodeWithLabel(graph,@"linear_0");
+    if (!linear || ![linear.operationName isEqualToString:@"linear"])
+        return nil;
+    ANEOperationNode *headWeight=producerForOperand(graph,linear,@"weight");
+    ANEOperationNode *headBias=producerForOperand(graph,linear,@"bias");
+    if (!headWeight || !headBias) return nil;
+    if (![linear.outputType.shape isEqualToArray:@[@1,@1000]] ||
+        ![headWeight.outputType.shape isEqualToArray:@[@1000,@2048]] ||
+        ![headBias.outputType.shape isEqualToArray:@[@1000]]) return nil;
+    NSData *rawHeadWeight=[ANEBlobResolver loadConstantForOperation:headWeight.sourceOperation
+        expectedBytes:1000*2048*2 modelRoot:modelRoot diagnostics:diagnostics];
+    NSData *rawHeadBias=[ANEBlobResolver loadConstantForOperation:headBias.sourceOperation
+        expectedBytes:1000*2 modelRoot:modelRoot diagnostics:diagnostics];
+    if (!rawHeadWeight || !rawHeadBias) return nil;
+    [storage addObject:rawHeadWeight]; [storage addObject:rawHeadBias];
+
+    ane::h16::ResNet50Program encoded;
+    try {
+        encoded=ane::h16::encodeResNet50(convolutions,
+            static_cast<const uint8_t *>(rawHeadWeight.bytes),rawHeadWeight.length,
+            static_cast<const uint8_t *>(rawHeadBias.bytes),rawHeadBias.length);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.resnet50-fields",
+            [NSString stringWithUTF8String:exception.what()],linear);
+        return nil;
+    }
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSData *constants=[NSData dataWithBytes:encoded.program.constants.data()
+        length:encoded.program.constants.size()];
+    NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+    for (std::size_t offset:encoded.program.kernelRelocations)
+        [relocations addObject:@(offset)];
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    NSArray<NSNumber *> *outputObjectShape=@[@1,@1,@1,@1000];
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType
+            shape:input.type.shape rowStrideBytes:448 planeStrideBytes:100352
+            batchStrideBytes:301056 storageByteLength:301056],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[linear.identifier stringByAppendingString:@"@output"]
+            shortName:linear.identifier role:HWXObjectBindingRoleOutput
+            elementType:linear.outputType.elementType shape:outputObjectShape
+            rowStrideBytes:2048 planeStrideBytes:2048
+            batchStrideBytes:2048 storageByteLength:2048],
+    ];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:82 recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode scratchByteLength:encoded.scratchBytes
+        scratchAllocationByteLength:encoded.scratchBytes
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    info.kernelRegionConstants=YES;
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:constants bindings:objectBindings
+        kernelRelocationOffsets:relocations programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.resnet50-object",
+            error.localizedDescription ?: @"cannot construct ResNet-50 HWX",linear);
+        return nil;
+    }
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name role:ANESurfaceRoleInput
+            logicalByteLength:301056 allocationByteLength:alignUp(301056,0x4000)
+            ioSurfaceIndex:0 rowStrideBytes:448 planeStrideBytes:100352
+            batchStrideBytes:301056],
+        [[ANEHWXBinding alloc]initWithIdentifier:@"resnet50@weights"
+            role:ANESurfaceRoleWeight logicalByteLength:constants.length
+            allocationByteLength:constants.length ioSurfaceIndex:-1],
+        [[ANEHWXBinding alloc]initWithIdentifier:linear.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:2000
+            allocationByteLength:alignUp(2048,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:2048 planeStrideBytes:2048 batchStrideBytes:2048],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+}
+
 static ANEHWXArtifact *encodeTransformerLinearProgram(
     ANEOperationGraph *graph, ANEScheduledGraph *scheduled,
     NSURL *modelRoot, ANEDiagnosticEngine *diagnostics) {
@@ -1836,10 +2016,17 @@ static ANEHWXArtifact *encodeLayoutProgram(
 }
 
 @implementation H16GProgramEncoder
++ (ANEHWXArtifact *)encodeExactResNetGraph:(ANEOperationGraph *)graph
+                                  modelRoot:(NSURL *)modelRoot
+                                diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    return encodeResNet50Program(graph,modelRoot,diagnostics);
+}
 + (ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
                         scheduled:(ANEScheduledGraph *)scheduled
                         modelRoot:(NSURL *)modelRoot
                       diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    if (ANEHWXArtifact *resnet=encodeResNet50Program(graph,modelRoot,diagnostics))
+        return resnet;
     if (ANEHWXArtifact *attention=encodeTransformerFusedAttentionProgram(graph,diagnostics))
         return attention;
     if (ANEHWXArtifact *softmax=encodeTransformerSoftmaxProgram(graph,diagnostics))
