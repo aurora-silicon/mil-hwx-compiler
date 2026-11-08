@@ -69,13 +69,17 @@ retained after normalizing that intentional numeric pair.  The fused path
 does not cross the external fp16 probability boundary and keeps its captured
 unit-scale tasks.
 
-The same run found that the unrevealed H=6 softmax loaded but never completed.
-The exponential task still carried the captured H=8 dependency mask `0x3ff`.
-That mask covers two fixed predecessors and one completion per head, so H=6
-requires `0xff`; waiting for the two absent head completions wedges EXECUTE.
-The mask is now `(1 << (heads + 2)) - 1`, bounded to the 32-bit dependency
-field.  The H=8 measured row remains byte-identical.  Numerical qualification
-of the rescaled PV and execution qualification of H=6 softmax remain pending.
+The first run found that the unrevealed H=6 softmax loaded but never completed.
+Its exponential task retained the captured H=8 dependency mask `0x3ff`; the
+head-derived `0xff` correction alone did not resolve the wedge.  The remaining
+difference was the five task-header schedule words.  The H=6 prediction had
+copied the short `0x68`/`0x28` form from the contextual 219-task Whisper
+program, although standalone softmax is a serialized five-task program.  It
+now retains the captured standalone sequence `0x00fff868`, three
+`0x00fff820` words and terminal `0x00fff860`, independent of head count.  The
+dependency mask remains `(1 << (heads + 2)) - 1`, bounded to the 32-bit field.
+The H=8 measured row remains byte-identical.  Device qualification of the
+corrected H=6 softmax and fused attention remains pending.
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used

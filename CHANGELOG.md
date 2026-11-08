@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: keep standalone softmax on its captured serialized five-task schedule
+  for every head count.  The H=6 prediction had copied contextual
+  `0x68`/`0x28` schedule words from the full Whisper program, so correcting
+  the exponential dependency mask alone still left EXECUTE wedged.
 - H16G: bind formula-built transformer-linear source, result and packed
   weight/bias/post-op DMA records to the standalone object's BAR 6/7/8
   apertures.  Extend strict DMA direction and extent validation to the
