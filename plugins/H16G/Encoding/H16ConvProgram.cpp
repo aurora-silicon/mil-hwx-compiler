@@ -1702,6 +1702,15 @@ std::size_t appendAttentionTask(std::vector<std::uint8_t> &stream,Task &task) {
     return start;
 }
 
+// A standalone PV stages probabilities through fp16 scratch before the matrix
+// engine consumes them.  At S=1500 the normalized values are small enough
+// that the unit-scale staging path loses useful accumulator precision.  A
+// power-of-two scale is exact in fp16: stage P*128 and fold 1/128 into the PV
+// output scale.  The fused path keeps its softmax intermediate resident and
+// therefore retains the captured unit-scale PV tail.
+constexpr U32 pvProbabilityStageScale=0x5800; // fp16 128
+constexpr U32 pvResultScale=0x2000;           // fp16 1/128
+
 void packQKLoad(Task &task) {
     task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
     record(task,{0x0004,0x0008,0x000c});
@@ -1878,7 +1887,7 @@ Task pvLoadTask(U32 tokens,U32 heads) {
     r[0x4104]=0x500172;r[0x4108]=0x500130;r[0x4114]=0x100;
     r[0x4118]=tokens*0x100;r[0x411c]=tokens*0x100;r[0x4120]=tokens*0x100;
     r[0x4148]=0x50087a;r[0x414c]=tokens*0x100;
-    r[0x4904]=0x103c0c;r[0x4910]=0x3c00;
+    r[0x4904]=0x103c0c;r[0x4910]=pvProbabilityStageScale;
     r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
     r[0x4d1c]=paddedRow;r[0x4d24]=scorePlane;r[0x4d68]=0x1002031;
     r[0x5100]=0x10000f1;r[0x5108]=0;r[0x510c]=0;
@@ -1909,7 +1918,8 @@ Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
     r[0x4104]=0x142|(fused&&stage==1?0x100000:0);r[0x4114]=rowBytes;r[0x4118]=planeBytes;
     r[0x411c]=planeBytes;r[0x4120]=planeBytes;
     r[0x4148]=0x14a|(fused&&stage==1&&heads==8?0x100000:0);r[0x414c]=planeBytes;
-    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;
+    r[0x4910]=fused ? 0x3c00 : pvResultScale;
     r[0x4d00]=(taskIndex<<16)|0x21;r[0x4d08]=0xce;r[0x4d10]=remaining*planeBytes;
     r[0x4d14]=0;r[0x4d1c]=rowBytes;r[0x4d68]=0x1002031;
     r[0x5100]=0x01000031|(taskIndex<<16);r[0x5108]=remaining*planeBytes;
@@ -2133,7 +2143,12 @@ Task softmaxMaxTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxExpTask(U32 tokens,U32 heads) {
-    Task task;task.header={2,0,0,0,heads==8?0x00fff820u:0x28u,0,0,0x3ff,0x00050001};auto &r=task.registers;
+    // The captured H=8 dependency mask is 0x3ff: two fixed predecessors plus
+    // one completion per head.  Keeping that literal for H=6 waits for two
+    // completions which can never be produced and wedges EXECUTE.
+    const U32 dependencyMask=(U32(1)<<(heads+2))-1;
+    Task task;task.header={2,0,0,0,heads==8?0x00fff820u:0x28u,0,0,
+        dependencyMask,0x00050001};auto &r=task.registers;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x30]=0x14000;r[0x34]=tokens;r[0x3c]=0x1c4400;r[0x40]=heads;r[0x4c]=0x100000;
     r[0x4104]=0x103;r[0x4110]=heads*tokens*16;r[0x4114]=4*heads;
@@ -2250,6 +2265,7 @@ TransformerAttentionProgram encodeAttentionMatmul(
 
 std::string attentionSoftmaxRefusal(U32 tokens,U32 heads) {
     if(!heads)return "softmax head count must be nonzero";
+    if(heads>29)return "softmax head count exceeds the dependency mask";
     if(tokens!=1500&&tokens!=128)return "softmax sequence has no measured or predicted law";
     return {};
 }

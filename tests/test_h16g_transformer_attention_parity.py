@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -51,7 +52,14 @@ FUSED_CASES = [
 ]
 
 
-def canonical(task: bytes) -> bytes:
+def task_word(decoded: dict, address: str) -> str:
+    for block in decoded["blocks"].values():
+        if address in block["words"]:
+            return block["words"][address]
+    raise AssertionError(f"task has no register {address}")
+
+
+def canonical(task: bytes, normalize_pv_scale: bool = False) -> bytes:
     decoded = decode_task(task, "h16")
     # Captured attention packets number external and table BARs one slot
     # earlier than the validated standalone-object aperture layout.  Packaged
@@ -64,6 +72,13 @@ def canonical(task: bytes) -> bytes:
         header = int(record["header"], 16)
         if header & (1 << 29) and (header >> 23) & 0x3f >= 6:
             record["header"] = f"0x{header - 0x00800000:08x}"
+    if normalize_pv_scale:
+        # The standalone PV numerical fix scales probabilities by 128 while
+        # staging and folds the exact reciprocal into each head result.  The
+        # captured unit-scale task is otherwise the byte-parity contract.
+        for block in decoded["blocks"].values():
+            if "0x04910" in block["words"]:
+                block["words"]["0x04910"] = "0x00003c00"
     value = {
         "header": decoded["header_words"][:1] + decoded["header_words"][2:],
         "blocks": decoded["blocks"],
@@ -95,8 +110,14 @@ def main() -> None:
     for operation, heads, sizes, digest in MATMUL_CASES:
         tasks = emit_matmul(operation, 1500, heads, 64)
         assert [len(task) for task in tasks] == sizes
+        if operation == "pv":
+            decoded = [decode_task(task, "h16") for task in tasks]
+            assert task_word(decoded[0], "0x04910") == "0x00005800"
+            assert all(task_word(task, "0x04910") == "0x00002000"
+                       for task in decoded[1:])
         encoded = json.dumps([
-            json.loads(canonical(task)) for task in tasks], sort_keys=True,
+            json.loads(canonical(task, operation == "pv")) for task in tasks],
+            sort_keys=True,
             separators=(",", ":")).encode()
         assert hashlib.sha256(encoded).hexdigest() == digest
     for sequence, heads, sizes, digest in SOFTMAX_CASES:
@@ -108,7 +129,10 @@ def main() -> None:
         assert hashlib.sha256(encoded).hexdigest() == digest
     for sequence, heads in ((1500, 1), (1500, 6), (128, 1), (128, 12)):
         stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
-        assert len(split_h14_tasks(stream[16:])) == 5
+        tasks = split_h14_tasks(stream[16:])
+        assert len(tasks) == 5
+        dependency_mask = struct.unpack_from("<9I", tasks[2])[7]
+        assert dependency_mask == (1 << (heads + 2)) - 1
     for heads, sizes, digest in FUSED_CASES:
         stream = subprocess.check_output([DUMP, "fused", "1500", str(heads), "64"])
         tasks = split_h14_tasks(stream[16:])

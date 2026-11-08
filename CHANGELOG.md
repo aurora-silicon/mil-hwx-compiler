@@ -9,6 +9,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   apertures.  Extend strict DMA direction and extent validation to the
   recognized 1x1-convolution task family; the former one-slot-early objects
   are now rejected offline instead of reaching execution with unbound DMA.
+- H16G: derive the standalone S=1500 softmax exponential task's dependency
+  mask from the head count instead of retaining H=8's `0x3ff` mask for H=6.
+  Standalone PV now stages the small normalized probabilities at an exact
+  power-of-two scale and folds the reciprocal into each head result; the
+  resident fused path keeps its measured unit-scale task stream.
 - H16G: rebase attention DMA records onto the standalone object's actual BAR
   apertures (external surfaces from slot 6 and the following kernel slot), and
   include the fused Q/K staging planes in scratch.  The fail-closed validator
