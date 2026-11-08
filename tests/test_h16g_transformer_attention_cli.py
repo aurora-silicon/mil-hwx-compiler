@@ -92,7 +92,6 @@ def main() -> None:
         "split_held_prediction": layout("split", 64, 2, 80),
         "qk_held_prediction": matmul("qk", 64, 2, 80),
         "pv_held_prediction": matmul("pv", 64, 2, 80),
-        "attn_held_prediction": fused(64, 2, 80),
     }
     with tempfile.TemporaryDirectory(prefix="h16g-attention-") as temp:
         root = Path(temp)
@@ -107,9 +106,20 @@ def main() -> None:
             validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
                 "--manifest", str(output / "manifest.json")],
                 capture_output=True, text=True, timeout=30)
-            assert validation.returncode == 0, validation.stdout + validation.stderr
+            assert validation.returncode == 0, name + ": " + validation.stdout + validation.stderr
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
+        # The fused held-out formula carried S=1500 scratch offsets into
+        # smaller shapes.  Those objects are unsafe, so keep the isolated
+        # movement/matmul predictions but refuse an unrevealed fused chain.
+        mil = root / "attn_held_refused.mil"
+        mil.write_text(fused(64, 2, 80))
+        refused = subprocess.run([str(COMPILER), "--mil", str(mil),
+            "--model-root", str(root), "--target", "H16G",
+            "--output", str(root / "attn_held_refused")],
+            capture_output=True, text=True, timeout=120)
+        assert refused.returncode != 0
+        assert "fused attention is limited to measured Whisper geometry" in refused.stderr
     print(f"H16G transformer attention CLI PASS: {len(cases)} validated programs")
 
 

@@ -1568,6 +1568,7 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
 
 namespace {
 U32 attentionAlign64(U32 value) { return (value+63u)&~63u; }
+constexpr U32 attentionBar(U32 slot) { return 0x20000000u | (slot<<23); }
 
 void packAttentionLayoutTask(Task &task) {
     task.bytes.clear();
@@ -1585,8 +1586,8 @@ void packAttentionLayoutTask(Task &task) {
     record(task,{0x4904,0x4910});
     record(task,{0x5110,0x5114,0x5138});
     record(task,{0x5900,0x5904,0x5918,0x5928,0x592c});
-    record(task,{0x4d10,0x4d14},0x22800000);
-    record(task,{0x5108,0x510c},0x23000000);
+    record(task,{0x4d10,0x4d14},attentionBar(6));
+    record(task,{0x5108,0x510c},attentionBar(7));
     record(task,{0x4d00},0x22000000);
     record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16;
@@ -1707,13 +1708,13 @@ void packQKLoad(Task &task) {
     record(task,{0x4104,0x4108});
     record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
     record(task,{0x5114,0x511c,0x5138});
-    record(task,{0x4d10,0x4d14},0x22800000);
-    record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d10,0x4d14},attentionBar(6));
+    record(task,{0x5108,0x510c},attentionBar(3));
     record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16; store(task.bytes,0,task.header[0]);
 }
 
-void packQKCompute(Task &task,bool final,U32 resultFlags=0x23800000) {
+void packQKCompute(Task &task,bool final,U32 resultFlags=attentionBar(8)) {
     task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
     word(task.bytes,0); // extended H16 runtime/runtime matmul header
     record(task,{0x5500,0x5518,0x551c});
@@ -1728,8 +1729,8 @@ void packQKCompute(Task &task,bool final,U32 resultFlags=0x23800000) {
     record(task,{0x4900,0x4904,0x4910});
     record(task,{0x5114,0x511c,0x5138});
     if (final) record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
-    record(task,{0x5510,0x5514},0x21800000);
-    record(task,{0x4d10,0x4d14},0x23000000);
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x4d10,0x4d14},attentionBar(7));
     record(task,{0x5108,0x510c},resultFlags);
     record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
     for (U32 lane=0;lane<16;++lane)
@@ -1762,6 +1763,7 @@ Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) 
         final?0x0005000bu:0x00050003u};
     auto &r=task.registers; const U32 headPairs=(heads+1)/2;
     const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 halfPaddedPlane=paddedRow*headDimension/2;
     const U32 scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=headDimension;
     r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
@@ -1771,13 +1773,13 @@ Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) 
     r[0x4148]=0x14a;r[0x414c]=0x4000;
     r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
     r[0x4d00]=(stage<<16)|0x21;r[0x4d08]=0xce;
-    r[0x4d10]=final?0:heads*96256;r[0x4d14]=0;
+    r[0x4d10]=final?0:heads*halfPaddedPlane;r[0x4d14]=0;
     r[0x4d1c]=paddedRow;r[0x4d24]=paddedRow*headDimension;
     r[0x4d68]=0x1002031;
     r[0x5100]=0x01000031|(stage<<16);r[0x5108]=final?0:heads*scorePlane/2;
     r[0x510c]=0;r[0x5114]=paddedRow;r[0x511c]=scorePlane;
     r[0x5138]=0x1302031;
-    r[0x5500]=final?0x302c0:0x20240;r[0x5510]=final?0:heads*96256;
+    r[0x5500]=final?0x302c0:0x20240;r[0x5510]=final?0:heads*halfPaddedPlane;
     r[0x5514]=0;r[0x5518]=paddedRow*headDimension;r[0x551c]=0x4000;
     for (U32 lane=0;lane<15;++lane) r[0x5564+4*lane]=(lane+1)*0x400;
     for (U32 lane=0;lane<16;++lane) r[0x55a0+4*lane]=0x400;
@@ -1813,7 +1815,7 @@ Task qkTransposeStageTask(U32 tokens,U32 heads,U32 headDimension) {
     record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
     record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
     record(task,{0x4148,0x4150,0x415c});record(task,{0x4904,0x4910});
-    record(task,{0x4d10,0x4d14},0x23000000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(7));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|1;store(task.bytes,0,task.header[0]);
     return task;
 }
@@ -1832,14 +1834,14 @@ Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
     r[4]=tokens;r[8]=1;r[12]=headDimension;r[0x14]=tokens;
     r[0x18]=1;r[0x1c]=tokens;r[0x24]=pairs;r[0x34]=1;
     r[0x3c]=0x20200000;r[0x4c]=0x100000;
-    if (!final) {r[0x4104]=0x120;r[0x4110]=heads*96256;}
+    if (!final) {r[0x4104]=0x120;r[0x4110]=heads*paddedPlane/2;}
     r[0x4114]=paddedRow;r[0x4120]=paddedPlane;
     r[0x4148]=0x14a;r[0x414c]=heads*paddedPlane;
     r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
     r[0x5100]=0x01000031|(stage<<16);
     r[0x5108]=final?0:heads*scorePlane/2;r[0x510c]=0;
     r[0x5114]=paddedRow;r[0x511c]=scorePlane;r[0x5138]=0x1302031;
-    r[0x5500]=final?0x402c0:0x30240;r[0x5510]=final?0:heads*96256;
+    r[0x5500]=final?0x402c0:0x30240;r[0x5510]=final?0:heads*paddedPlane/2;
     r[0x5514]=0;r[0x5518]=paddedPlane;r[0x551c]=0x4000;
     for(U32 lane=0;lane<15;++lane)r[0x5564+4*lane]=(lane+1)*0x400;
     for(U32 lane=0;lane<16;++lane)r[0x55a0+4*lane]=0x400;
@@ -1857,8 +1859,8 @@ Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
     if(!final)record(task,{0x4148,0x414c});
     record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
     if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
-    record(task,{0x5510,0x5514},0x21800000);
-    record(task,{0x5108,0x510c},0x23800000);record(task,{0x5100},0x22000000);
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x5108,0x510c},attentionBar(8));record(task,{0x5100},0x22000000);
     for(U32 lane=0;lane<16;++lane)record(task,{0x5520+4*lane},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|stage;store(task.bytes,0,task.header[0]);
     return task;
@@ -1886,7 +1888,7 @@ Task pvLoadTask(U32 tokens,U32 heads) {
     record(task,{0x4104,0x4108});
     record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
     record(task,{0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
-    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x5108,0x510c},attentionBar(3));
     record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
 }
@@ -1927,9 +1929,9 @@ Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
     record(task,{0x4104,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
     record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x5138});
     if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
-    record(task,{0x5510,0x5514},0x21800000);
-    record(task,{0x4d10,0x4d14},fused?0x23800000:0x23000000);
-    record(task,{0x5108,0x510c},fused?0x24000000:0x23800000);
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x4d10,0x4d14},attentionBar(fused ? 8 : 7));
+    record(task,{0x5108,0x510c},attentionBar(fused ? 9 : 8));
     record(task,{0x4d00},0x22000000);
     record(task,{0x5100},0x22000000);for(U32 lane=0;lane<16;++lane)
         record(task,{0x5520+4*lane},0x22000000);
@@ -1946,7 +1948,7 @@ Task fusedQKLoadTask(U32 tokens,U32 heads,U32 headDimension) {
     record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
     record(task,{0x4104,0x4108});record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
     record(task,{0x4508});record(task,{0x5114,0x511c,0x5138});
-    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x5108,0x510c},attentionBar(3));
     record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
 }
@@ -1954,14 +1956,15 @@ Task fusedQKLoadTask(U32 tokens,U32 heads,U32 headDimension) {
 Task fusedQKComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage) {
     Task task=qkComputeTask(tokens,heads,headDimension,stage,false);auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    const U32 halfPaddedPlane=paddedRow*headDimension/2;
     task.header[4]=heads==6?0x28:0x00fff820;
     r[0x4148]=0x44a;r[0x5100]=0x010000f1|(stage<<16);
     r[0x5114]=4*paddedRow;r[0x5138]=0x04302031;
     r[0x5500]=((stage+1)<<16)|0x240;
-    r[0x5510]=heads*(scorePlane+(stage==1?96256:0));
+    r[0x5510]=heads*(scorePlane+(stage==1?halfPaddedPlane:0));
     if(stage==2){r[0x4104]=0x142;r[0x4d10]=0;r[0x5108]=0;
         for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=(stage<<16)|0x41;}
-    packQKCompute(task,false,0x21800000);return task;
+    packQKCompute(task,false,attentionBar(3));return task;
 }
 
 Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
@@ -1988,7 +1991,7 @@ Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
     std::vector<U32> l2;
     if(r.count(0x4148))l2.push_back(0x4148);if(r.count(0x414c))l2.push_back(0x414c);
     l2.push_back(0x4150);l2.push_back(0x415c);record(task,l2);record(task,{0x4500});
-    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2009,7 +2012,7 @@ Task fusedSoftmaxMaxTask(U32 tokens,U32 heads) {
     record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
     record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
     record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});record(task,{0x4500,0x4508});
-    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|7;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2036,8 +2039,8 @@ Task fusedSoftmaxExpTask(U32 tokens,U32 heads) {
     record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
     record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
     record(task,{0x4900,0x4904,0x4910});record(task,{0x5104,0x5110,0x5114,0x5138});
-    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},0x24800000);
-    record(task,{0x5108,0x510c},0x21800000);record(task,{0x5100},0x22000000);
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},attentionBar(10));
+    record(task,{0x5108,0x510c},attentionBar(3));record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|8;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2056,7 +2059,7 @@ Task fusedSoftmaxSumTask(U32 tokens,U32 heads) {
     record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
     record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
     record(task,{0x4150,0x415c});record(task,{0x4500});
-    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|9;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2079,7 +2082,7 @@ Task fusedSoftmaxNormalizeTask(U32 tokens,U32 heads) {
     record(task,{0x4104,0x4108});
     record(task,{0x4114,0x4120,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
     record(task,{0x4500});record(task,{0x5104,0x5114,0x511c,0x5138});
-    record(task,{0x4d28,0x4d2c},0x21800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d28,0x4d2c},attentionBar(3));record(task,{0x5108,0x510c},attentionBar(3));
     record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|10;store(task.bytes,0,task.header[0]);return task;
 }
@@ -2100,7 +2103,7 @@ Task softmaxSetupTask(U32 tokens,U32 heads) {
     record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
     record(task,{0x4100,0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120});
     record(task,{0x4148,0x4150,0x415c});record(task,{0x4500});
-    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2122,7 +2125,7 @@ Task softmaxMaxTask(U32 tokens,U32 heads) {
     record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
     record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
     record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
-    record(task,{0x4500,0x4508});record(task,{0x4d10,0x4d14},0x22800000);
+    record(task,{0x4500,0x4508});record(task,{0x4d10,0x4d14},attentionBar(6));
     record(task,{0x4d00},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|1;
     store(task.bytes,0,task.header[0]);return task;
 }
@@ -2146,8 +2149,8 @@ Task softmaxExpTask(U32 tokens,U32 heads) {
     record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x40,0x4c});
     record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
     record(task,{0x4900,0x4904,0x4910});record(task,{0x5110,0x5138});
-    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},0x23800000);
-    record(task,{0x5108,0x510c},0x21800000);record(task,{0x5100},0x22000000);
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},attentionBar(8));
+    record(task,{0x5108,0x510c},attentionBar(3));record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|2;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2165,7 +2168,7 @@ Task softmaxSumTask(U32 tokens,U32 heads) {
     record(task,{0x4d08,0x4d24});record(task,{0x4d68});
     record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
     record(task,{0x4150,0x415c});record(task,{0x4500});
-    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|3;store(task.bytes,0,task.header[0]);return task;
 }
 
@@ -2190,7 +2193,7 @@ Task softmaxNormalizeTask(U32 tokens,U32 heads) {
     record(task,{0x4114,0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
     record(task,{0x4500});record(task,{0x5110,0x5114,0x5138});
     record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
-    record(task,{0x4d28,0x4d2c},0x21800000);record(task,{0x5108,0x510c},0x23000000);
+    record(task,{0x4d28,0x4d2c},attentionBar(3));record(task,{0x5108,0x510c},attentionBar(7));
     record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|4;store(task.bytes,0,task.header[0]);return task;
 }
@@ -2270,6 +2273,8 @@ TransformerAttentionProgram encodeFusedAttention(
     U32 tokens,U32 heads,U32 headDimension) {
     if(auto why=attentionMatmulRefusal(tokens,heads,headDimension,
         AttentionMatmul::PV);!why.empty())throw std::invalid_argument(why);
+    if(tokens!=1500 || headDimension!=64 || (heads!=6 && heads!=8))
+        throw std::invalid_argument("fused attention is limited to measured Whisper geometry");
     TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
     std::vector<Task> tasks;tasks.push_back(fusedQKLoadTask(tokens,heads,headDimension));
     tasks.push_back(fusedQKComputeTask(tokens,heads,headDimension,1));
@@ -2287,8 +2292,13 @@ TransformerAttentionProgram encodeFusedAttention(
     }
     out.program.taskCount=U32(tasks.size());out.program.firstTaskBytes=tasks[0].bytes.size();
     out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
-    out.program.scratchAllocationBytes=std::uint64_t(heads)*tokens*
-        attentionAlign64(2*tokens);out.program.formulaBuilt=true;
+    // The fused program keeps both the padded score surface and Q/K staging
+    // planes in __DATA.  The old allocation stopped at the score surface even
+    // though task 0 begins its staging result there, so the first load DMA and
+    // later coefficient reads ran beyond the mapped scratch segment.
+    const std::uint64_t paddedRow=attentionAlign64(2*tokens);
+    out.program.scratchAllocationBytes=std::uint64_t(heads)*paddedRow*
+        (tokens+headDimension);out.program.formulaBuilt=true;
     out.programRecordCount=2*heads+23;out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
     out.revealed=headDimension==64&&(heads==6||heads==8);return out;
 }

@@ -24,7 +24,7 @@ def segment(label, vm, allocation, protection, fields, fileoff=0, filesize=0):
     return result
 
 
-def fixture(*, mixed=False, kernel=False, batch=1):
+def fixture(*, mixed=False, kernel=False, batch=1, dma=False):
     """A tiny legal-shaped object, deliberately unrelated to an Apple program.
 
     Task is a nine-word header and one write to a valid common register.
@@ -34,9 +34,25 @@ def fixture(*, mixed=False, kernel=False, batch=1):
     vm = base + (0x4000 if mixed else 0)
     textvm = vm + 0x8000
     kernvm = textvm + 0x8000
-    # Prologue plus one eleven-word task, ending exactly at its last word.
-    task = struct.pack('<15I', 1, 0, 0, 0, 11 << 16 | 1,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    # Prologue plus one task, ending exactly at its last word.
+    if dma:
+        records = [
+            (4 // 4 | 2 << 15, (2, 2, 3)),
+            (0x4d18 // 4 | 1 << 15, (4, 8)),
+            (0x4d10 // 4 | 1 << 15 | 0x23000000, (0, 0)),
+            (0x14 // 4 | 2 << 15, (2, 2, 3)),
+            (0x5110 // 4 | 1 << 15, (4, 8)),
+            (0x5108 // 4 | 1 << 15 | 0x23800000, (0, 0)),
+        ]
+        words = 9 + sum(1 + len(values) for _, values in records)
+        task = bytearray(struct.pack('<4I9I', 1, 0, 0, 0, words << 16,
+                                     0, 0, 0, 0, 0, 0, 0, 0))
+        for header, values in records:
+            task.extend(struct.pack(f'<{1 + len(values)}I', header, *values))
+        task = bytes(task)
+    else:
+        task = struct.pack('<15I', 1, 0, 0, 0, 11 << 16 | 1,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     commands = []
     if mixed:
         commands.append(segment(b'__DATA', base, 0x4000, 3,
@@ -68,6 +84,9 @@ def fixture(*, mixed=False, kernel=False, batch=1):
                    0x8ac: 8, 0x8b0: 0xf} if mixed else
                   {0x878: 7, 0x87c: 8, 0x880: 0x461c4000, 0x888: 9,
                    0x88c: 8, 0x890: 0xf})
+    if dma:
+        fields[0x860] = 3
+        fields[0x8b0 if mixed else 0x890] = 33
     for off, value in fields.items():
         put(p, off, value)
     for off, value in {0x10: textvm, 0x20: textvm + len(task),
@@ -150,6 +169,25 @@ class ValidationTests(unittest.TestCase):
                         self.assertEqual(result['tasks'], 1)
                         self.assertEqual(result['scratch'], mixed)
                         self.assertFalse(result['owner_fixture'])
+
+    def test_dma_apertures_directions_and_extents(self):
+        raw, _ = fixture(dma=True)
+        self.assertEqual(validate(raw)['dma_extents'], 2)
+        # Task stream starts at 0x4000.  The synthetic source address record
+        # header/value are +80/+84; the result pair is +120/+124.
+        mutations = {
+            'unbound-source-slot': (0x4000 + 80, -0x00800000, True, 'dma-unbound-slot'),
+            'source-on-output': (0x4000 + 80, 0x00800000, True, 'dma-direction'),
+            'source-overrun': (0x4000 + 84, 0x3ff0, False, 'dma-extent'),
+            'result-on-input': (0x4000 + 120, -0x00800000, True, 'dma-direction'),
+            'result-overrun': (0x4000 + 124, 0x3ff0, False, 'dma-extent'),
+        }
+        for label, (offset, value, relative, code) in mutations.items():
+            with self.subTest(label=label), self.assertRaisesRegex(ValidationError, code):
+                changed = bytearray(raw)
+                current = struct.unpack_from('<I', changed, offset)[0]
+                put(changed, offset, current + value if relative else value)
+                validate(changed)
 
     def test_mutated_container(self):
         raw, offsets = fixture(kernel=True)

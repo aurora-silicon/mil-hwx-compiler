@@ -32,10 +32,23 @@ runtime matmuls for the Whisper S=1500 geometries:
 | last-axis softmax | unrevealed prediction | measured | 5 |
 | fused scaled QK + softmax + PV | measured | measured | heads + 11 |
 
-The compiler records S=128 and the public held-out axes as unrevealed
-predictions.  They pass the structural validator but do not claim descriptor
-or numerical parity.  Device qualification for all rows is pending.  Affine
-last-axis layer normalization is still outside the formula envelope.
+The compiler records S=128 softmax and the public held-out movement and
+matmul axes as unrevealed predictions.  They pass the structural validator
+but do not claim descriptor or numerical parity.  Fused attention is limited
+to the measured S=1500, D=64, H=6/8 forms: its smaller predictions reused
+S=1500 scratch offsets and are now refused.  Device qualification for the
+corrected rows is pending.  Affine last-axis layer normalization is still
+outside the formula envelope.
+
+Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
+the kernel table after the final surface.  The captured attention records used
+the preceding slot numbers, which left the first source unbound and aliased
+later inputs/results.  The encoder rebases only those DMA records when it
+packages a standalone object.  Fused attention also allocates both the padded
+score surface and the padded Q/K staging planes; its first staging write begins
+at the end of the score surface.  `h16g_validate.py` recognizes these attention
+task/record/format laws, checks source and result direction, and bounds every
+DMA extent for which the task supplies complete geometry.
 
 ## What the staged H16G backend already encodes
 
@@ -142,9 +155,9 @@ change.
 
 ## What is needed next
 
-The remaining gaps are native layer_norm and S=1500 softmax, attention data
-movement and batched runtime matmul over heads, plus device qualification of
-the formula-built linear and Whisper stem programs. The two Whisper stem
-convolutions and encoder-axis transpose now have measured descriptor parity;
-the positional constant uses the established contiguous ALU packet with its
-constant in the fourth aperture.
+The remaining formula gap is affine native layer_norm.  S=1500 softmax,
+attention data movement and batched runtime matmul over heads now have native
+encoders; the corrected objects still need device qualification.  The two
+Whisper stem convolutions and encoder-axis transpose have measured descriptor
+parity; the positional constant uses the established contiguous ALU packet
+with its constant in the fourth aperture.

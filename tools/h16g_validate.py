@@ -80,7 +80,8 @@ def no_overlap(ranges: list[tuple[int, int]], code: str) -> None:
     require(all(a[1] <= b[0] for a, b in zip(ranges, ranges[1:])), code)
 
 
-def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
+def task_stream(data: bytes, expected: int, policy: str = 'driver',
+                facts: list[dict] | None = None) -> int:
     """Same bounded stream walk as ane_h16_task_stream_validate.
 
     Record-count and format words are opaque and never size this walk.
@@ -104,6 +105,7 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
         header = 10 if u32(data, pos + 32) & 3 == 3 else 9
         require(words >= header, "task-header")
         rec = pos + header * 4
+        registers, dma = {}, []
         while rec < end:
             h = u32(data, rec)
             base, mask = h & 0x7fff, (h >> 15) & 0xffff
@@ -114,6 +116,18 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
             require(len(indices) <= (end - rec) // 4, "task-record-size")
             require(all(any(a <= i * 4 < b for a, b in REGISTER_BLOCKS)
                         for i in indices), "task-register")
+            values = [u32(data, rec + 4 * i) for i in range(len(indices))]
+            value_offsets = [rec + 4 * i for i in range(len(indices))]
+            registers.update((index * 4, value) for index, value in zip(indices, values))
+            # Bit 29 marks a BAR relocation record.  Single-register records
+            # also carry configuration slots, so only address qword pairs are
+            # DMA bases.  Retain their patch sites for the kernel-relocation
+            # cross-check below.
+            addresses = tuple(index * 4 for index in indices)
+            if h & (1 << 29) and len(addresses) == 2 and addresses[1] == addresses[0] + 4:
+                dma.append(dict(address=addresses[0], slot=(h >> 23) & 0x3f,
+                                offset=values[0] | values[1] << 32,
+                                patch=value_offsets[0]))
             rec += len(indices) * 4
         # Alignment and zero padding are mandatory between descriptors, but
         # the final descriptor must end exactly at EOF: trailing zero bytes
@@ -123,9 +137,145 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
         require(padded < len(data) or padded == end, "task-final-padding")
         pos = padded
         count += 1
+        if facts is not None:
+            facts.append(dict(index=count - 1, registers=registers, dma=dma))
         require(count <= expected, "task-count")
     require(count == expected, "task-count")
     return count
+
+
+def strided_extent(offset: int, inner: int, middle: int, outer: int,
+                   middle_stride: int, outer_stride: int) -> int:
+    """Last byte after a proved three-dimensional fp16 DMA walk."""
+    require(all(value > 0 for value in (inner, middle, outer)), "dma-dimensions")
+    extent = offset + product(middle - 1, middle_stride)
+    require(extent <= U64_MAX, "integer-overflow")
+    extent += product(outer - 1, outer_stride)
+    require(extent <= U64_MAX, "integer-overflow")
+    extent += product(inner, 2)
+    require(extent <= U64_MAX, "integer-overflow")
+    return extent
+
+
+def dma_extent(dma: dict, registers: dict, target: dict) -> int | None:
+    """Return an exclusive DMA end when the task exposes enough geometry.
+
+    H16 source and result engines expose dimensions in the common 0x0004 and
+    0x0014 blocks.  Some matrix tasks expose only a plane span; that still
+    proves one complete DMA plane and is useful for bounding the selected
+    surface.  Unknown engines remain subject to the base, direction, offset,
+    and kernel-relocation checks in validate_dma().
+    """
+    address, offset = dma['address'], dma['offset']
+    # Scratch-backed normalization stages reuse the common dimension words
+    # for L2 tiles, not for a linear DRAM walk.  A result plane span at 0x511c
+    # is nevertheless explicit and, with 0x24, proves the complete staged
+    # allocation used by QK/PV loads.
+    if target['kind'] == 'scratch':
+        if address == 0x5108 and registers.get(0x511c):
+            planes = registers.get(0x24, 1)
+            return offset + product(planes, registers[0x511c])
+        return None
+    if address == 0x4d10:
+        if all(key in registers for key in (4, 8, 12, 0x4d18, 0x4d1c)):
+            return strided_extent(offset, registers[4], registers[8], registers[12],
+                                  registers[0x4d18], registers[0x4d1c])
+        if registers.get(0x4d24):
+            return offset + product(registers.get(0x24, 1), registers[0x4d24])
+        if all(key in registers for key in (4, 12, 0x4d1c)):
+            return strided_extent(offset, registers[4], 1, registers[12], 0,
+                                  registers[0x4d1c])
+    elif address == 0x4d28:
+        if all(key in registers for key in (4, 8, 12, 0x4d34, 0x4d3c)):
+            return strided_extent(offset, registers[4], registers[8], registers[12],
+                                  registers[0x4d34], registers[0x4d3c])
+    elif address == 0x5108:
+        if registers.get(0x511c):
+            return offset + product(registers.get(0x24, 1), registers[0x511c])
+        if all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110, 0x5114)):
+            inner, middle, outer = (registers[0x14], registers[0x18],
+                                    registers[0x1c])
+            first, second = registers[0x5110], registers[0x5114]
+            # Split-transpose stores [H,D,S]: a padded S row, D rows per
+            # plane, then H planes.  Other layout tasks use D as the inner
+            # dimension, the 0x18 dimension on 0x5110, and 0x1c on 0x5114.
+            if second and first == inner * second and outer * 2 <= second:
+                return strided_extent(offset, outer, inner, middle, second, first)
+            return strided_extent(offset, inner, middle, outer, first, second)
+        if all(key in registers for key in (0x14, 0x1c, 0x5114)):
+            return strided_extent(offset, registers[0x14], 1, registers[0x1c], 0,
+                                  registers[0x5114])
+    elif address == 0x5618 and registers.get(0x5614):
+        return offset + registers[0x5614]
+    return None
+
+
+def attention_program(task_count: int, record_code: int, format_code: int) -> bool:
+    """Recognize the formula-built attention families whose DMA law is decoded."""
+    for heads in range(1, 65):
+        layout = heads * 11 // 2
+        if task_count == 1 and record_code == 3 and format_code in (layout, layout + 1):
+            return True
+        qk_format = 209 if heads == 6 else 278 if heads == 8 else 35 * heads - 1
+        if task_count == 3 and record_code == 7 and format_code == qk_format:
+            return True
+        qkt_format = 200 if heads == 6 else 266 if heads == 8 else 33 * heads + 2
+        if task_count == 4 and record_code == 9 and format_code == qkt_format:
+            return True
+        tail_format = 791 if heads == 6 else 1054 if heads == 8 else 132 * heads - 1
+        if format_code == tail_format and (
+                (task_count == heads + 1 and record_code == 2 * heads + 3) or
+                (task_count == 5 and record_code == 11) or
+                (task_count == heads + 11 and record_code == 2 * heads + 23)):
+            return True
+    return False
+
+
+def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
+                 relocations: set[int], strict: bool) -> int:
+    """Bind decoded-family DMA records and bound every computable extent.
+
+    Register addresses are reused with different roles by other H16G engines.
+    Apply source/result direction semantics only to the attention families
+    identified by their task/record/format law; other families retain their
+    existing relocation and container bounds.
+    """
+    if not strict:
+        return 0
+    by_vm = {target['vm']: target for target in targets}
+    checked = 0
+    source = {0x4d10, 0x4d28}
+    result = {0x5108}
+    known = source | result | {0x5510, 0x5618}
+    for task in tasks:
+        for dma in task['dma']:
+            if dma['address'] not in known:
+                continue
+            descriptor_offset = 0x10 * (dma['slot'] + 1)
+            region(descriptor_offset, 8, len(program), "dma-slot")
+            base = u64(program, descriptor_offset)
+            require(base != 0, "dma-unbound-slot")
+            target = by_vm.get(base)
+            require(target is not None, "dma-unknown-aperture")
+            relocated = dma['patch'] in relocations
+            if dma['address'] in source:
+                require(target['kind'] == 'scratch' or
+                        target['kind'] == 'surface' and target['prot'] == 1,
+                        "dma-direction")
+            elif dma['address'] in result:
+                require(target['kind'] == 'scratch' or
+                        target['kind'] == 'surface' and target['prot'] == 2,
+                        "dma-direction")
+            elif dma['address'] == 0x5618 or relocated:
+                require(target['kind'] == 'kernel', "dma-kernel-aperture")
+            else:
+                require(target['kind'] in ('scratch', 'kernel'), "dma-coefficient-aperture")
+            require(dma['offset'] < target['size'], "dma-offset")
+            extent = dma_extent(dma, task['registers'], target)
+            if extent is not None:
+                require(dma['offset'] <= extent <= target['size'], "dma-extent")
+                checked += 1
+    return checked
 
 
 def tensor(raw: bytes) -> dict:
@@ -329,7 +479,8 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     expected[noff:noff + 5] = b'main\0'
     require(p == expected, "program-fixed-reserved-or-apertures")
     taskdata = data[text['off']:text['off'] + text['size']]
-    tasks = task_stream(taskdata, u32(p, 0x830), task_policy)
+    task_facts = []
+    tasks = task_stream(taskdata, u32(p, 0x830), task_policy, task_facts)
     # Relocation fields follow the driver gate, including section ordinal,
     # unique aligned patch sites, and bounded unsigned kernel addends.
     seen = set()
@@ -347,6 +498,16 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         seen.add(patch)
         require(info >> 24 == 7 and info & 0xffffff == kernel['sections'][0]['ordinal'], "relocation-kind")
         require(u32(taskdata, patch) < kernel['sections'][0]['size'], "relocation-addend")
+    dma_targets = [dict(vm=s['vm'], size=s['size'], prot=s['prot'], kind='surface')
+                   for s in surface]
+    if scratch:
+        dma_targets.append(dict(vm=scratch['vm'], size=scratch['size'],
+                                prot=scratch['prot'], kind='scratch'))
+    if kernel:
+        dma_targets.append(dict(vm=kernel['vm'], size=kernel['size'],
+                                prot=kernel['prot'], kind='kernel'))
+    dma_strict = attention_program(tasks, u32(p, 0x860), fmt)
+    dma_extents = validate_dma(task_facts, p, dma_targets, seen, dma_strict)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")
     region(st, ss, len(data), "string-range")
@@ -384,7 +545,8 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     return dict(target="H16G", sha256=digest, bytes=len(data), tasks=tasks,
                 tensors=len(tensors), apertures=apertures, scratch=mixed,
                 owner_fixture=digest == OWNER_SHA256,
-                task_policy=task_policy, driver_task_gate=True, execute_resources=resources,
+                task_policy=task_policy, driver_task_gate=True, dma_extents=dma_extents,
+                execute_resources=resources,
                 validation="container-structure-only")
 
 

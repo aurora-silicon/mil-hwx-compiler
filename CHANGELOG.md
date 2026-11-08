@@ -4,6 +4,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: rebase attention DMA records onto the standalone object's actual BAR
+  apertures (external surfaces from slot 6 and the following kernel slot), and
+  include the fused Q/K staging planes in scratch.  The fail-closed validator
+  now rejects unbound or directionally wrong attention DMA bases and every
+  computable extent outside its mapped surface.  Held-out QK derives its
+  half-plane offset from shape; unsafe unrevealed fused shapes are refused.
 - H16G: add formula-built transformer head split, split-transpose and merge;
   batched runtime QK, transpose-y QK and PV; S=1500 row softmax; and the
   fused scaled-QK/softmax/PV chain.  Whisper-tiny and Whisper-base descriptor
