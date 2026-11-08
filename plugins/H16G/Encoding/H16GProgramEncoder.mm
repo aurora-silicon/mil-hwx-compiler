@@ -329,7 +329,7 @@ static ANEHWXArtifact *encodeSquareMatmulProgram(
         recordCount:program.programRecordCount
         formatCode:program.programFormatCode
         scratchByteLength:program.scratchByteLength
-        scratchAllocationByteLength:tensorByteLength
+        scratchAllocationByteLength:MAX(tensorByteLength,program.scratchByteLength)
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSData *image = [HWXObjectWriter
         buildObjectWithTaskDescriptor:program.data constantRegion:[NSData data]

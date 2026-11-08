@@ -505,8 +505,6 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
     NSData *kernelData = textConstants ? programInfo.kernelTable : constantRegion;
     BOOL hasKernel = kernelData.length != 0;
     BOOL hasConstants = constantRegion.length != 0;
-    BOOL isThreeSurfaceProgram = bindings.count == 3 && inputs.count == 2 &&
-        outputs.count == 1;
     BOOL resourceCountValid = inputs.count >= 1 && outputs.count == 1 &&
         bindings.count <= 4 &&
         bindings.count + (hasKernel ? 1 : 0) <= 5;
@@ -596,8 +594,7 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         rejection = @"a linear program cannot declare scratch";
     else if (programInfo.descriptorLayout == HWXProgramDescriptorLayoutScratchBackedMixed &&
              (programInfo.scratchByteLength == 0 ||
-              (!isThreeSurfaceProgram &&
-               programInfo.scratchAllocationByteLength < programInfo.scratchByteLength)))
+              programInfo.scratchAllocationByteLength < programInfo.scratchByteLength))
         rejection = @"a scratch-backed program needs scratch that its allocation covers";
     else if (!relocationsValid)
         rejection = @"kernel relocations must be aligned, inside the descriptor, and address the kernel table";

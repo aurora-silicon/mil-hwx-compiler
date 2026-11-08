@@ -537,12 +537,21 @@ static void testThreeSurfaceMatmulEnvelopeIsGenerated(void) {
     HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
         initWithTaskCount:4 recordCount:46 formatCode:0
         scratchByteLength:0x1e0000
-        scratchAllocationByteLength:0x120000
+        scratchAllocationByteLength:0x1e0000
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSError *error = nil;
     NSData *imageData = [HWXObjectWriter buildObjectWithTaskDescriptor:td
         constantRegion:[NSData data] bindings:matmulBindings
         kernelRelocationOffsets:@[] programInfo:info error:&error];
+    HWXObjectProgramInfo *undersized = [[HWXObjectProgramInfo alloc]
+        initWithTaskCount:4 recordCount:46 formatCode:0
+        scratchByteLength:0x1e0000 scratchAllocationByteLength:0x120000
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSError *smallError = nil;
+    expect([HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:matmulBindings
+        kernelRelocationOffsets:@[] programInfo:undersized error:&smallError] == nil
+        && smallError != nil, @"three-surface programs reject undersized scratch");
     HWXImage *image = [HWXImage imageWithData:imageData error:&error];
     const struct mach_header_64 *header = imageData.length
         ? (const struct mach_header_64 *)imageData.bytes : NULL;
@@ -579,8 +588,8 @@ static void testThreeSurfaceMatmulEnvelopeIsGenerated(void) {
            programDescriptorWord(imageData, 0x858) == 0x1e0000 &&
            programDescriptorWord(imageData, 0x860) == 46 &&
            programDescriptorWord(imageData, 0x8b0) == 0 &&
-           segmentVMSize(imageData,"__DATA") == 0x120000,
-           @"matmul metadata separates its working set from BSS allocation");
+           segmentVMSize(imageData,"__DATA") == 0x1e0000,
+           @"matmul BSS allocation covers its complete working set");
 }
 
 static void testBindingCanSeparateSemanticShapeFromPhysicalStorage(void) {
