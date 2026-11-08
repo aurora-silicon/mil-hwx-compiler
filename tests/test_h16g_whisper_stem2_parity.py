@@ -53,6 +53,13 @@ def pattern(elements: int, seed: int) -> bytes:
 
 def canonical(task: bytes) -> dict:
     decoded = decode_task(task, "h16")
+    # Captures name the kernel operand at BAR 7. Packaged objects use
+    # input/output/kernel at slots 6/7/8; normalize only that packaging rebase.
+    for record in decoded["records"]:
+        if record["address"] == "0x05510":
+            header = int(record["header"], 16)
+            if (header & 0x3f800000) == 0x24000000:
+                record["header"] = f"0x{header - 0x00800000:08x}"
     return {"header": decoded["header_words"][:1] + decoded["header_words"][2:],
             "blocks": decoded["blocks"], "records": decoded["records"]}
 
