@@ -39,11 +39,11 @@ def blob(payload: bytes) -> bytes:
     return bytes(result)
 
 
-def assert_kernel_bar_bound(data: bytes) -> None:
-    """The task stream must name the descriptor slot holding __KERN_0."""
+def linear_bar_records(data: bytes) -> list[tuple[int, int, int]]:
+    """Return (file offset, register address, BAR slot) for linear DMA records."""
     commands = struct.unpack_from("<I", data, 16)[0]
     cursor = 32
-    text = kernel_vm = descriptor = None
+    text = text_offset = input_vm = output_vm = kernel_vm = scratch_vm = descriptor = None
     for _ in range(commands):
         command, length = struct.unpack_from("<II", data, cursor)
         if command == 0x19:
@@ -51,14 +51,22 @@ def assert_kernel_bar_bound(data: bytes) -> None:
             name = segment[2].split(b"\0", 1)[0]
             if name == b"__TEXT":
                 section = struct.unpack_from("<16s16s2Q8I", data, cursor + 72)
+                text_offset = section[4]
                 text = data[section[4]:section[4] + section[3]]
+            elif name == b"__FVMLIB" and segment[8] == 1:
+                input_vm = segment[3]
+            elif name == b"__FVMLIB" and segment[8] == 2:
+                output_vm = segment[3]
             elif name == b"__KERN_0":
                 kernel_vm = segment[3]
+            elif name == b"__DATA":
+                scratch_vm = segment[3]
         elif command == 4 and struct.unpack_from("<I", data, cursor + 8)[0] == 4:
             descriptor = cursor
         cursor += length
-    assert text is not None and kernel_vm is not None and descriptor is not None
-    slots: set[int] = set()
+    assert (text is not None and text_offset is not None and input_vm is not None and
+            output_vm is not None and kernel_vm is not None and descriptor is not None)
+    records = []
     cursor = 16
     while cursor < len(text):
         words = (struct.unpack_from("<I", text, cursor)[0] >> 16) & 0x7ff
@@ -67,19 +75,45 @@ def assert_kernel_bar_bound(data: bytes) -> None:
         header_words = 10 if struct.unpack_from("<I", text, cursor + 32)[0] & 3 == 3 else 9
         record = cursor + 4 * header_words
         while record < end:
+            header_offset = record
             header = struct.unpack_from("<I", text, record)[0]
             record += 4
             if header & (1 << 31):
                 count = 1 + ((header >> 15) & 0xffff).bit_count()
             else:
                 count = ((header >> 15) & 0x3f) + 1
-                if header & (1 << 29):
-                    slots.add((header >> 23) & 0x3f)
+                if header & (1 << 29) and count == 2:
+                    address = (header & 0x7fff) * 4
+                    if address in (0x4d10, 0x5108, 0x5510):
+                        records.append((text_offset + header_offset, address,
+                                        (header >> 23) & 0x3f))
             record += 4 * count
         assert record == end
         cursor = (end + 15) & ~15
-    assert any(struct.unpack_from("<Q", data, descriptor + 0x10 * (slot + 1))[0]
-               == kernel_vm for slot in slots), (slots, hex(kernel_vm))
+    expected = {
+        0x4d10: {3: scratch_vm, 6: input_vm},
+        0x5108: {3: scratch_vm, 7: output_vm},
+        0x5510: {8: kernel_vm},
+    }
+    for _, address, slot in records:
+        assert slot in expected[address], (hex(address), slot)
+        target = expected[address][slot]
+        assert target is not None
+        assert struct.unpack_from("<Q", data,
+                                  descriptor + 0x10 * (slot + 1))[0] == target
+    assert {(address, slot) for _, address, slot in records}.issuperset(
+        {(0x4d10, 6), (0x5108, 7), (0x5510, 8)})
+    return records
+
+
+def old_linear_bars(data: bytes) -> bytes:
+    """Reconstruct the v2 source/result BAR bug for validator regression."""
+    changed = bytearray(data)
+    for offset, address, slot in linear_bar_records(data):
+        if (address, slot) in ((0x4d10, 6), (0x5108, 7)):
+            header = struct.unpack_from("<I", changed, offset)[0]
+            struct.pack_into("<I", changed, offset, header - 0x00800000)
+    return bytes(changed)
 
 
 def mil(tokens: int, cin: int, cout: int, bias: bool, post: str) -> str:
@@ -134,7 +168,7 @@ def run_case(root: Path, name: str, tokens: int, cin: int, cout: int,
     image = output / "program-0.hwx"
     image_data = image.read_bytes()
     decoded = parse_hwx(image_data, "h16")
-    assert_kernel_bar_bound(image_data)
+    linear_bar_records(image_data)
     flags = (1 if has_bias else 0) | (2 if post == "gelu" else 0)
     scale = 0x3000 if post == "scale" else 0x3c00
     table = b""
@@ -171,6 +205,15 @@ def run_case(root: Path, name: str, tokens: int, cin: int, cout: int,
         sys.executable, str(VALIDATOR), str(image),
     ], capture_output=True, text=True, timeout=30)
     assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert json.loads(validation.stdout)["dma_extents"] == \
+        len(decoded["task_descriptors"])
+    old_image = output / "program-v2-bars.hwx"
+    old_image.write_bytes(old_linear_bars(image_data))
+    old_validation = subprocess.run([
+        sys.executable, str(VALIDATOR), str(old_image),
+    ], capture_output=True, text=True, timeout=30)
+    assert old_validation.returncode != 0
+    assert "h16g.dma-unbound-slot" in old_validation.stderr
 
 
 def main() -> None:

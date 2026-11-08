@@ -64,6 +64,7 @@ const Schedule *schedule(ConvShape s) {
     return s.bias ? plain : nullptr;
 }
 U32 align64(U32 n) { return (n + 63) & ~U32(63); }
+constexpr U32 taskBar(U32 slot) { return 0x20000000u | (slot<<23); }
 void word(std::vector<std::uint8_t> &out, U32 value) {
     for (unsigned b = 0; b < 4; ++b) out.push_back(value >> (8*b));
 }
@@ -365,8 +366,10 @@ std::vector<std::uint8_t> packLinearSlice(
 Task linearStagingTask(U32 tokens, U32 cin, bool wide) {
     Task t;
     t.transformerStagingRecords=true;
-    t.sourceSlotFlags=0x22800000;
-    if (wide) t.resultSlotFlags=0x21800000;
+    // A standalone object binds its first external surface at BAR 6.  Wide
+    // contractions stage through the fixed scratch aperture at BAR 3.
+    t.sourceSlotFlags=taskBar(6);
+    if (wide) t.resultSlotFlags=taskBar(3);
     const U32 row=linearInternalRow(tokens);
     U32 dependency=0;
     if (!wide) {
@@ -402,14 +405,13 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
                        U32 kernelBase, bool wide, bool bias, bool gelu,
                        U32 outputScale) {
     Task t;
-    // Packaged H16G objects place input, output and __KERN_0 at BAR slots
-    // 6, 7 and 8.  The captured linear record used slot 7 for its kernel
-    // operand, but that aliases the output in the validated object layout
-    // and leaves the kernel resource unbound at LOAD.  Use the same slot-8
-    // kernel binding as the executable convolution path.
-    t.kernelSlotFlags=0x24000000;
-    t.resultSlotFlags=0x23000000;
-    if (wide) t.sourceSlotFlags=0x21800000;
+    // The object writer places input/output/__KERN_0 at BAR 6/7/8.  Bias and
+    // post-op tables are packed into __KERN_0 alongside the weights, so every
+    // coefficient slice uses BAR 8.  Wide contractions read staged data from
+    // the fixed scratch aperture at BAR 3.
+    t.kernelSlotFlags=taskBar(8);
+    t.resultSlotFlags=taskBar(7);
+    if (wide) t.sourceSlotFlags=taskBar(3);
     if (!wide && taskIndex>1) t.transformerContinuationRecords=true;
     const bool last=taskIndex+1==taskCount;
     U32 dependency=0;
@@ -1568,7 +1570,7 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
 
 namespace {
 U32 attentionAlign64(U32 value) { return (value+63u)&~63u; }
-constexpr U32 attentionBar(U32 slot) { return 0x20000000u | (slot<<23); }
+constexpr U32 attentionBar(U32 slot) { return taskBar(slot); }
 
 void packAttentionLayoutTask(Task &task) {
     task.bytes.clear();

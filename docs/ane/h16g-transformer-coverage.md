@@ -18,6 +18,22 @@ A BERT layer is 23 MIL operations after Core ML conversion; the Whisper-tiny
 encoder is 99. Before this work every one of them was refused by name on
 both the H16G and the H17 routes.
 
+## Native transformer-linear formula update
+
+The H16G route emits constant-weight rank-3 `linear` as a 1x1 convolution
+over tokens, including optional bias, fused GELU, and fused output scale.  The
+24 measured BERT/Whisper descriptor and packed-kernel rows remain exact after
+normalizing standalone-object BAR relocation.
+
+Standalone objects bind input, output, and `__KERN_0` at BAR slots 6, 7, and
+8.  The packed kernel region also contains bias and post-op tables.  Earlier
+linear objects corrected only the kernel operand; their source/result records
+still named slots 5/6 and could load with unbound or aliased DMA.  All external
+linear records now use 6/7, scratch-backed contractions retain BAR 3, and all
+coefficient records use BAR 8.  `h16g_validate.py` recognizes the linear task
+signature, checks these aperture roles, and bounds the input and output DMA
+walks.  Device qualification of the corrected objects is pending.
+
 ## Native attention formula update
 
 The H16G route now emits native rank-3/rank-4 head movement and batched
@@ -46,9 +62,10 @@ the preceding slot numbers, which left the first source unbound and aliased
 later inputs/results.  The encoder rebases only those DMA records when it
 packages a standalone object.  Fused attention also allocates both the padded
 score surface and the padded Q/K staging planes; its first staging write begins
-at the end of the score surface.  `h16g_validate.py` recognizes these attention
-task/record/format laws, checks source and result direction, and bounds every
-DMA extent for which the task supplies complete geometry.
+at the end of the score surface.  `h16g_validate.py` recognizes the decoded
+attention and transformer-linear task families, checks source and result
+direction, and bounds every DMA extent for which the task supplies complete
+geometry.
 
 ## What the staged H16G backend already encodes
 
@@ -102,9 +119,9 @@ work; **facts** = needs new field facts for this geometry.
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
 | `layer_norm` (2) | `[1,128,768]` last axis | refused | host | facts | layer_norm at transformer widths |
-| `linear` d->d (4) | `[1,128,768] x 768x768` | refused | square 896 matmul, weights as a runtime surface, bias via a ones column; or 512-square tiles plus adds | padded (7-8x MACs); 896 refused by the kernel loader, 512 tiles run | constant-weight linear (1x1 conv over tokens) |
-| `linear` d->4d (1) | `768 -> 3072` | refused | 4 x square 896 | padded | same |
-| `linear` 4d->d (1) | `3072 -> 768` | refused | 4 x square 896 + adds | padded | same |
+| `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
+| `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
+| `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
 | `reshape` (4) | head split/merge | refused | layout only | compiler | fold into producer/consumer strides |
 | `transpose` (4) | perm 0,2,1,3 / 0,2,3,1 | refused | host | facts | transposes as DMA strides or layout tasks |
 | `mul` 1/8 (1) | scores | refused alone | output-scale word of the score matmul | device (fused) | done |
@@ -123,7 +140,7 @@ work; **facts** = needs new field facts for this geometry.
 | `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program | compiler; device pending | done |
 | `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | compiler; device pending | device qualification |
 | `layer_norm` (2, +1 final) | `[1,1500,d]` | refused (planner SRAM overflow) | host | facts | tiled layer_norm |
-| `linear` (6) | `384/512 -> 384/512, 1536/2048` | refused | square 1536/2048 matmul with padding | padded | constant-weight linear |
+| `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
 | `softmax` (1) | `[1,h,1500,1500]` | refused (SRAM overflow) | none | facts | tiled row softmax |
 | `mul`, `reshape`, `transpose` | as BERT | refused | as BERT | as BERT | as BERT |
