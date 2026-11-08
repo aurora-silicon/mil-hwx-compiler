@@ -374,9 +374,12 @@ $(BUILD)/h16_conv_support.o: plugins/H13/H13Program.cpp plugins/H13/H13Program.h
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
 $(BUILD)/h16_conv_dump: tests/h16_conv_dump.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
+$(BUILD)/test_h16g_resnet50_packing: tests/test_h16g_resnet50_packing.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
-test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc
+test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/mil-hwxc
+	$(BUILD)/test_h16g_resnet50_packing
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
 	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc

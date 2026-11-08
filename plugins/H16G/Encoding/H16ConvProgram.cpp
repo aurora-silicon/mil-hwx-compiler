@@ -420,6 +420,120 @@ std::vector<std::uint8_t> packSparseStride2(ConvShape s, const std::uint8_t *wei
     }
     return out;
 }
+
+namespace {
+using TapGroup = std::vector<unsigned>;
+const std::array<TapGroup,8> resnet3x3PhaseGroups = {
+    TapGroup{0,2}, TapGroup{6,8}, TapGroup{1}, TapGroup{7},
+    TapGroup{3,5}, TapGroup{}, TapGroup{4}, TapGroup{},
+};
+const std::array<TapGroup,16> resnet7x7PhaseGroups = {
+    TapGroup{0,2,4,6}, TapGroup{14,16,18,20},
+    TapGroup{28,30,32,34}, TapGroup{42,44,46,48},
+    TapGroup{1,3,5}, TapGroup{15,17,19},
+    TapGroup{29,31,33}, TapGroup{43,45,47},
+    TapGroup{7,9,11,13}, TapGroup{21,23,25,27},
+    TapGroup{35,37,39,41}, TapGroup{},
+    TapGroup{8,10,12}, TapGroup{22,24,26},
+    TapGroup{36,38,40}, TapGroup{},
+};
+
+std::vector<unsigned> sparseLaneChunks(unsigned outputs) {
+    unsigned lanes=outputs/16;
+    std::vector<unsigned> chunks;
+    while (lanes>16) { chunks.push_back(16); lanes-=16; }
+    if (lanes) chunks.push_back(lanes);
+    return chunks;
+}
+
+template <std::size_t N>
+void appendPhasePlane(std::vector<std::uint8_t> &out,
+                      const std::array<TapGroup,N> &groups,
+                      unsigned cin, unsigned lanes, unsigned first,
+                      unsigned taps, const std::uint8_t *weights,
+                      const std::uint8_t *bias, unsigned perInputPadding) {
+    if (bias)
+        out.insert(out.end(),bias+2*first,bias+2*(first+lanes));
+    const std::size_t lengthAt=out.size();
+    out.push_back(0); out.push_back(0); out.push_back(0);
+    const unsigned maxTaps=std::max_element(groups.begin(),groups.end(),
+        [](const TapGroup &a,const TapGroup &b){return a.size()<b.size();})->size();
+    const unsigned maskBytes=(maxTaps*lanes+7)/8;
+    const std::size_t bodyAt=out.size();
+    for (unsigned input=0;input<cin;++input) {
+        for (const auto &group:groups) {
+            std::vector<std::uint8_t> masks(maskBytes,0),values;
+            unsigned bit=0;
+            for (unsigned tap:group)
+                for (unsigned lane=0;lane<lanes;++lane,++bit) {
+                    const auto *value=weights+2*((std::size_t(first+lane)*cin+input)*taps+tap);
+                    if (!nonzeroHalf(value)) continue;
+                    masks[bit/8]|=std::uint8_t(1u<<(bit%8));
+                    half(values,value);
+                }
+            out.insert(out.end(),masks.begin(),masks.end());
+            out.insert(out.end(),values.begin(),values.end());
+        }
+        out.insert(out.end(),perInputPadding,0);
+    }
+    const std::size_t bytes=out.size()-bodyAt;
+    if (bytes>0xffff) throw std::invalid_argument("ResNet sparse plane exceeds u16 length");
+    out[lengthAt]=std::uint8_t(bytes); out[lengthAt+1]=std::uint8_t(bytes>>8);
+}
+}
+
+std::vector<std::uint8_t> packResNetStride2(ConvShape s,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=2 || s.kernel!=s.kernelWidth ||
+        (s.kernel!=1 && s.kernel!=3) || !s.bias || !weights || !bias ||
+        !s.output.channels || s.output.channels%16)
+        throw std::invalid_argument("ResNet stride-2 packing requires biased dense 1x1/3x3 and Cout%16=0");
+    std::vector<std::uint8_t> out;
+    const auto chunks=s.kernel==3
+        ? std::vector<unsigned>{s.output.channels/16}
+        : sparseLaneChunks(s.output.channels);
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        unsigned base=0;
+        for (unsigned lanes:chunks) {
+            const unsigned first=base+region*lanes;
+            if (s.kernel==3) {
+                appendPhasePlane(out,resnet3x3PhaseGroups,s.input.channels,
+                                 lanes,first,9,weights,bias,0);
+            } else {
+                const std::array<TapGroup,1> one={TapGroup{0}};
+                appendPhasePlane(out,one,s.input.channels,lanes,first,1,
+                                 weights,bias,lanes>=4 ? lanes/2-2 : 0);
+            }
+            base+=16*lanes;
+        }
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> packResNetStem7x7(ConvShape s,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=2 || s.kernel!=7 || s.kernelWidth!=7 ||
+        s.input.channels!=3 || s.output.channels!=64 || !s.bias ||
+        !weights || !bias)
+        throw std::invalid_argument("7x7 packing is decoded only for the biased 3->64 ResNet stem");
+    std::vector<std::uint8_t> out;
+    constexpr unsigned lanes=4;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        appendPhasePlane(out,resnet7x7PhaseGroups,3,lanes,region*lanes,49,
+                         weights,bias,0);
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
 Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
                               DramEdgeForm form, U32 scratchRegionBytes) {
     if (gen!=Generation::H16G && gen!=Generation::H17)
