@@ -73,7 +73,7 @@ def attention_reference(q: np.ndarray, k: np.ndarray, v: np.ndarray):
     kt32 = k.transpose(0, 1, 3, 2).astype(np.float32)
     score_accumulator = np.matmul(q32, kt32)
     scores = f16(score_accumulator)
-    # Apple's fused form puts 1/sqrt(dh) in the matmul output-scale field, so
+    # The fused chain folds 1/sqrt(dh) into the matmul output scale, so
     # it scales the accumulator before the one observable fp16 boundary.
     scaled = f16(score_accumulator / np.float32(np.sqrt(head_dim)))
     probabilities = softmax_f16(scaled)
