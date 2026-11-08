@@ -15,6 +15,7 @@ import sys
 import tempfile
 
 COMPILER = str(Path(sys.argv[1]).resolve())
+VALIDATOR = str(Path(sys.argv[2]).resolve()) if len(sys.argv) > 2 else None
 HEADER = 'program(1.3)\n[buildInfo = dict<string, string>({})]\n{\n'
 
 
@@ -119,6 +120,14 @@ def main():
             if result.returncode:
                 failures.append(f'{name}: refused: {result.stderr.strip()}')
                 continue
+            if VALIDATOR:
+                validation = subprocess.run([
+                    sys.executable, VALIDATOR, str(out / 'program-0.hwx'),
+                    '--manifest', str(out / 'manifest.json')],
+                    capture_output=True, text=True, timeout=30)
+                check(failures, validation.returncode == 0,
+                      f'{name}: validation refused: '
+                      f'{(validation.stderr or validation.stdout).strip()}')
             square = [1, 1, size, size]
             ref_result, ref = compile_case(root, f'{name}_square', build(op, square))
             if ref_result.returncode:
