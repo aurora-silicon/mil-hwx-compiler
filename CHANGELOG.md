@@ -4,6 +4,27 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: keep the MobileNet prefix terminal ResultCfg in the task's measured
+  direct or staged class.  Two- and three-task prefixes no longer inherit the
+  full classifier's direct bit, which produced one plausible result before
+  wedging the next EXECUTE.  Add two-task field-group bisection schedules for
+  the legacy terminal, linear KernelDMA and sentinel first-edge geometry.
+- H16G: encode scratch BAR base operands as one little-endian u64 instead of
+  copying a nonzero ping-pong offset into both halves. Add 2/3/4/6/9/15/28
+  task MobileNet prefix generation and per-prefix CPU references; the first
+  corrected transition is task 3's edge-3 destination consumed by task 4.
+- H16G: make MobileNet linked-L2 resident-prefix programs repeatable.  A task
+  consuming an L2-resident input now crosses back to DRAM with the decoded
+  `0x84a`/`0x842` spill bridge instead of mixing resident SourceCfg with the
+  standalone `0x500172` result form.  Add a two-pass BAR-resolution proof.
+- H16G: fix MobileNetV1 linked-L2 correctness by retaining KernelDMA sparse
+  mode on the five stride-2 tasks and preserving the decoded spill/external
+  L2 staging tuples. Add resident-prefix and baseline-spill schedules for a
+  bounded device bisection.
+- H16G: add three exact-graph MobileNetV1 linked-L2 schedules for staged
+  placement, Common-word and header-policy A/B packages. They keep 26 of 27
+  internal edges in the 2 MiB ring, use one `0xc4000` channel-3 spill, and
+  omit TileDMA blocks on resident edges.
 - H13/H14: add the explicit spatial schedule, using existing copy, convolution
   and matrix kernels for halo dispatch, nearest/bilinear resize and concat.
   Support the MobileNetV1 convolution/head geometries at batch 1/8, including

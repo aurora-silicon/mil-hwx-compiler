@@ -92,6 +92,7 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
         if not words:
             require(not any(data[pos:pos + 16]), "task-padding")
             pos += 16
+            require(pos < len(data), "task-final-padding")
             continue
         require(9 <= words <= (len(data) - pos) // 4, "task-size")
         end = pos + words * 4
@@ -109,8 +110,12 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
             require(all(any(a <= i * 4 < b for a, b in REGISTER_BLOCKS)
                         for i in indices), "task-register")
             rec += len(indices) * 4
-        padded = (end + 15) & ~15
+        # Alignment and zero padding are mandatory between descriptors, but
+        # the final descriptor must end exactly at EOF: trailing zero bytes
+        # after it leave the engine armed and the next EXECUTE times out.
+        padded = end if end == len(data) else (end + 15) & ~15
         require(padded <= len(data) and not any(data[end:padded]), "task-padding")
+        require(padded < len(data) or padded == end, "task-final-padding")
         pos = padded
         count += 1
         require(count <= expected, "task-count")

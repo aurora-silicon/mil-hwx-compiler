@@ -471,6 +471,346 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
     out.kernelBytes=kernelBase;
     return out;
 }
+
+namespace {
+struct MobileLayerShape {
+    U32 cin, cout, width, kernel, stride, groups;
+};
+
+constexpr std::array<MobileLayerShape,28> mobileNetV1 = {{
+    {3,32,224,3,2,1}, {32,32,112,3,1,32}, {32,64,112,1,1,1},
+    {64,64,112,3,2,64}, {64,128,56,1,1,1}, {128,128,56,3,1,128},
+    {128,128,56,1,1,1}, {128,128,56,3,2,128}, {128,256,28,1,1,1},
+    {256,256,28,3,1,256}, {256,256,28,1,1,1}, {256,256,28,3,2,256},
+    {256,512,14,1,1,1}, {512,512,14,3,1,512}, {512,512,14,1,1,1},
+    {512,512,14,3,1,512}, {512,512,14,1,1,1}, {512,512,14,3,1,512},
+    {512,512,14,1,1,1}, {512,512,14,3,1,512}, {512,512,14,1,1,1},
+    {512,512,14,3,1,512}, {512,512,14,1,1,1}, {512,512,14,3,2,512},
+    {512,1024,7,1,1,1}, {1024,1024,7,3,1,1024},
+    {1024,1024,7,1,1,1}, {1024,1024,7,1,1,1},
+}};
+
+// Result R strides and bases from the decoded H16G full-edge form.  A zero
+// base is deliberately omitted by the encoder: zero is the task-local
+// default.  Edge 1 is the sole DRAM spill and therefore has no ring base.
+constexpr std::array<U32,27> mobileResultR = {{
+    0x1c30,0x1c00,0x3820,0x1c80,0x3830,0x3830,0x3830,
+    0x2050,0x4050,0x4050,0x4040,0x2030,
+    0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,0x4030,
+    0x4030,0x4020,0x2030,0x4030,0x4030,0x4030,
+}};
+constexpr std::array<U32,27> mobileResultBase = {{
+    0x000000,0x000000,0x000000,0x188e00,0x000000,0x0c4a80,0x189500,
+    0x0708c0,0x000000,0x0708c0,0x0e1180,0x151880,
+    0x000000,0x0382a0,0x070540,0x0a87e0,0x0e0a80,0x118d20,0x150fc0,
+    0x189260,0x1c1500,0x1f97a0,0x031a40,0x069c00,0x000000,0x01c150,
+    0x0382a0,
+}};
+constexpr std::array<U32,28> mobileSchedule = {{
+    0x230000,0x230000,0x231100,0x211100,0x243300,0x243300,0x243300,
+    0x222200,0x222200,0x222200,0x222200,0x233300,0x233300,0x233300,
+    0x233300,0x233300,0x233300,0x233300,0x233300,0x233300,0x233300,
+    0x233300,0x233300,0x244404,0x244404,0x244404,0x244404,0x244404,
+}};
+constexpr std::array<U32,28> mobileCost = {{
+    0x04,0x0b,0x0b,0x0c,0x02,0x07,0x05,0x06,0x03,0x03,0x06,0x02,0x03,0x01,
+    0x07,0x01,0x07,0x01,0x07,0x01,0x07,0x01,0x07,0x01,0x0f,0x01,0x1e,0x25,
+}};
+constexpr std::array<U32,28> mobileMask = {{
+    0x00001fff,0x00001fff,0x01ffffff,0x7fffffff,0x7f001fff,0x01ffffff,0xfffff01f,
+    0xff00079f,0x000007ff,0x00007fff,0x003fff80,0x007fc000,0x0060000f,0x000000ff,
+    0x000007f8,0x00007f80,0x0003fc00,0x003fc000,0x01fe0000,0x1fe00000,0xff000000,
+    0xf000000f,0x8000007f,0x000000f8,0x000000c3,0x0000000f,0x0000003e,0x00000000,
+}};
+
+void requireMobileNet(const std::vector<Layer> &layers) {
+    if (layers.size()<2 || layers.size()>mobileNetV1.size())
+        throw std::invalid_argument("H16G linked-L2 policies require a 2..28-task prefix of MobileNetV1 224");
+    for (std::size_t i=0;i<layers.size();++i) {
+        const auto &s=layers[i].shape;
+        const auto &want=mobileNetV1[i];
+        if (s.input.channels!=want.cin || s.output.channels!=want.cout ||
+            s.input.width!=want.width || s.input.height!=want.width ||
+            s.kernel!=want.kernel || s.kernelWidth!=want.kernel ||
+            s.stride!=want.stride || s.groups!=want.groups || !s.bias ||
+            layers[i].relu!=(i+1!=mobileNetV1.size()))
+            throw std::invalid_argument("H16G linked-L2 policies require an exact biased MobileNetV1 224 prefix and original ReLU sequence");
+    }
+}
+
+void eraseRange(std::map<U32,U32> &r, U32 first, U32 last) {
+    for (auto it=r.lower_bound(first);it!=r.end() && it->first<=last;)
+        it=r.erase(it);
+}
+
+// BAR relocation operands are little-endian 64-bit addends.  The old
+// ping-pong path copied a nonzero 32-bit offset into both words, turning
+// 0x1c0000 into 0x001c0000001c0000.  Zero-offset sentinels could not expose
+// that error.  Keep all address-pair writes behind this helper.
+void setAddressAddend(std::map<U32,U32> &r, U32 address,
+                      std::uint64_t addend) {
+    r[address]=static_cast<U32>(addend);
+    r[address+4]=static_cast<U32>(addend>>32);
+}
+
+U32 mobileSourceCfg(unsigned edge) {
+    if (edge==1) return 0x842;
+    if (edge<=5 || edge==7 || edge==8) return 0x120;
+    return 0x104;
+}
+
+bool mobileResident(unsigned edge, unsigned prefix) {
+    if (edge==1 || prefix>26) return false;
+    const unsigned rank=edge==0 ? 0 : edge-1;
+    return rank<prefix;
+}
+
+// A DRAM edge produced by a task whose input is resident is not an ordinary
+// standalone DRAM edge.  The ordinary 0x500172/0x01302031 form leaves the
+// resident source's TileDMA/BAR state live across executions.  Edge 1 is the
+// decoded instance of this transition; prefix packages can create one more
+// at the end of their resident run.  Use the same explicit spill handshake
+// for every such boundary.
+bool mobileSpillBridge(unsigned edge, MobileNetL2Variant variant) {
+    if (!variant.measuredSpill || mobileResident(edge,variant.residentPrefix))
+        return false;
+    if (edge==1) return true;
+    return edge && mobileResident(edge-1,variant.residentPrefix);
+}
+
+std::uint64_t mobileSpan(unsigned edge) {
+    const auto &s=mobileNetV1[edge];
+    return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
+}
+
+U32 mobileLinearFirstBase() {
+    const auto &s=mobileNetV1[0];
+    return align64(2*s.width)*s.cin*s.width;
+}
+
+U32 mobileLinearFirstR() {
+    const auto &s=mobileNetV1[0];
+    const U32 width=(s.width+s.stride-1)/s.stride;
+    return s.cout*(2*width)+4*(align64(2*width)-2*width);
+}
+
+bool mobileRingOverlap(std::uint64_t a, std::uint64_t an,
+                       std::uint64_t b, std::uint64_t bn) {
+    constexpr std::uint64_t ring=0x200000;
+    if (an+bn>ring) return true;
+    for (std::uint64_t aa:{a%ring,a%ring+ring})
+        for (std::uint64_t bb:{b%ring,b%ring+ring})
+            if (aa<bb+bn && bb<aa+an) return true;
+    return false;
+}
+
+void proveMobilePlacement() {
+    // Task 0 stages its external input immediately after its result.  The
+    // spill source of task 2 is not resident in the ring.  Every remaining
+    // task with resident input and output must keep both full tensors apart.
+    constexpr std::uint64_t inputBytes=224ull*3*448;
+    if (mobileRingOverlap(0,mobileSpan(0),mobileSpan(0),inputBytes))
+        throw std::logic_error("MobileNet task 0 input overlaps its L2 result");
+    for (unsigned taskIndex=3;taskIndex<27;++taskIndex)
+        if (mobileRingOverlap(mobileResultBase[taskIndex-1],mobileSpan(taskIndex-1),
+                              mobileResultBase[taskIndex],mobileSpan(taskIndex)))
+            throw std::logic_error("MobileNet L2 ring placement overlaps a live input");
+}
+
+void setSourceTuple(std::map<U32,U32> &r, U32 cfg, U32 base,
+                    U32 channels, U32 width, U32 rowStride) {
+    r[0x4104]=cfg; r.erase(0x4108);
+    if (base) r[0x4110]=base; else r.erase(0x4110);
+    const U32 c=(2*width+15)&~U32(15),d=channels*c;
+    r[0x4114]=c; r[0x4118]=rowStride; r[0x411c]=d; r[0x4120]=d;
+}
+
+void setResultTuple(std::map<U32,U32> &r, U32 cfg, U32 base,
+                    U32 channels, U32 width, U32 rowStride) {
+    r[0x4148]=cfg;
+    if (base) r[0x414c]=base; else r.erase(0x414c);
+    const U32 c=(2*width+15)&~U32(15),d=channels*c;
+    r[0x4150]=c; r[0x4154]=rowStride; r[0x4158]=d; r[0x415c]=d;
+}
+
+void compactMobileNetDefaults(std::map<U32,U32> &r, unsigned taskIndex) {
+    // The rung-3 decoded write set relies on task-local defaults for tuple
+    // members that are derivable from the shape.  Keep the complete values
+    // in the placement plan above; omit only the measured default writes.
+    if (taskIndex==0) {
+        r.erase(0x4158); r.erase(0x415c);
+    } else if (taskIndex==1) {
+        r.erase(0x411c); r.erase(0x4120);
+        r.erase(0x4150); r.erase(0x4154); r.erase(0x4158); r.erase(0x415c);
+    } else if (taskIndex==2) {
+        r.erase(0x4158); r.erase(0x415c);
+    } else if (taskIndex+1==mobileNetV1.size()) {
+        r.erase(0x411c); r.erase(0x4120);
+    } else {
+        r.erase(0x411c); r.erase(0x4120);
+        r.erase(0x4158); r.erase(0x415c);
+    }
+}
+} // namespace
+
+Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                                MobileNetL2Policy policy) {
+    return describeMobileNetL2(gen,layers,MobileNetL2Variant{policy,26,true,0x1c0000});
+}
+
+Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                                MobileNetL2Variant variant) {
+    if (gen!=Generation::H16G)
+        throw std::invalid_argument("the measured MobileNet linked-L2 policies are H16G-only");
+    if (variant.residentPrefix>26)
+        throw std::invalid_argument("the MobileNet linked-L2 resident prefix must be 0..26");
+    requireMobileNet(layers);
+    if (variant.fieldSwap!=MobileNetL2FieldSwap::None && layers.size()!=2)
+        throw std::invalid_argument("MobileNet first-edge field swaps require exactly two tasks");
+    if (variant.residentPrefix==26) proveMobilePlacement();
+    const auto policy=variant.policy;
+    Description out;
+    out.stream=streamPrologue(gen);
+    U32 kernelBase=0;
+    for (unsigned i=0;i<layers.size();++i) {
+        const bool first=i==0,last=i+1==layers.size();
+        Task t=task(gen,layers[i],true,0,1,0,0,kernelBase,0,0);
+        auto &r=t.registers;
+        t.header={i,0,(first ? 0x68u : 0u) | (last ? 0x04000000u : 0u),0,
+                  first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+                  0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
+        if (policy!=MobileNetL2Policy::Placement) r[0x3c]=mobileSchedule[i];
+        if (policy==MobileNetL2Policy::Header) {
+            t.header[1]=mobileCost[i];
+            t.header[4]=first ? 0x68u : 0x28u;
+            t.header[7]=mobileMask[i];
+        }
+        // Keep KernelDMA's sparse bit on every stride-2 task.  The first
+        // linked-L2 implementation rebuilt this word from the task id and
+        // terminal class and accidentally cleared bit 0x20, while leaving
+        // the coefficient section sparse.  The resulting descriptor ran but
+        // interpreted the stem and four downsampling kernels incorrectly.
+        r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240) |
+                  (layers[i].shape.stride==2 ? 0x20 : 0);
+        if (variant.fieldSwap==MobileNetL2FieldSwap::LinearKernelDMA && i==0)
+            r[0x5500]&=~0x20u;
+        for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
+
+        // Source edge: external input, the sole spill read, or an L2 tuple.
+        if (first) {
+            // Keep the ordinary external source DMA emitted by task().
+            if (variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry)
+                r.erase(0x4110);
+            else
+                r[0x4110]=static_cast<U32>(mobileSpan(0));
+        } else if (mobileResident(i-1,variant.residentPrefix)) {
+            const unsigned edge=i-1;
+            const bool linearFirst = edge==0 &&
+                variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            setSourceTuple(r,mobileSourceCfg(edge),
+                           linearFirst ? mobileLinearFirstBase() : mobileResultBase[edge],
+                           mobileNetV1[i].cin,mobileNetV1[i].width,
+                           linearFirst ? mobileLinearFirstR() : mobileResultR[edge]);
+            eraseRange(r,0x4d00,0x4dff);
+        } else if (mobileSpillBridge(i-1,variant)) {
+            // A spill bridge stages into a fresh task-local L2 region.  If
+            // this task produces a resident result, put the source after it;
+            // otherwise the standalone task's result staging already starts
+            // after the source tile and base zero is the local default.
+            r[0x4104]=0x842; r.erase(0x4108);
+            const U32 base=mobileResident(i,variant.residentPrefix)
+                ? mobileResultBase[i]+static_cast<U32>(mobileSpan(i)) : 0;
+            if (base) r[0x4110]=base; else r.erase(0x4110);
+            const auto &edge=mobileNetV1[i-1];
+            const U32 width=(edge.width+edge.stride-1)/edge.stride;
+            const U32 row=16*width,plane=row*width;
+            r[0x4d00]=0x20000041 | i<<16; r[0x4d08]=0x4e;
+            const U32 offset=(i-1)==1 ? 0 : U32((i-1)%2)*variant.scratchRegionBytes;
+            setAddressAddend(r,0x4d10,offset); r[0x4d18]=row; r[0x4d1c]=plane;
+            r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
+        } else {
+            if (i<27 && mobileResident(i,variant.residentPrefix))
+                r[0x4110]=mobileResultBase[i]+static_cast<U32>(mobileSpan(i));
+            r[0x4d00]=0x20000021 | i<<16;
+            setAddressAddend(r,0x4d10,((i-1)%2)*variant.scratchRegionBytes);
+            t.sourceSlotFlags=0x21800000;
+        }
+
+        // Result edge: one spill, 26 resident edges, or the external output.
+        if (last) {
+            // Preserve the terminal task's measured direct/staged result
+            // class.  The complete MobileNet ends in a direct 1x1 task and
+            // therefore uses 0x14a.  A leading prefix can instead end in a
+            // staged task (notably dw32 and pw32->64); forcing the full
+            // graph's direct bit onto those tasks produces plausible output
+            // once, but leaves result state armed and wedges the following
+            // EXECUTE.  This is the linked equivalent of task()'s
+            // 0x50017a/0x500172 distinction.
+            r[0x4148]=variant.fieldSwap==MobileNetL2FieldSwap::LegacyTerminalDirect
+                ? 0x14a : (schedule(layers[i].shape)->direct ? 0x14a : 0x142);
+            if (i==1 && variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry) {
+                const U32 width=(mobileNetV1[0].width+mobileNetV1[0].stride-1)/
+                                mobileNetV1[0].stride;
+                r[0x414c]=mobileLinearFirstBase()+width*mobileLinearFirstR();
+            } else {
+                r[0x414c]=mobileResultBase[i-1]+mobileSpan(i-1);
+            }
+            r[0x5100]=(r[0x5100]&0xff00ffffu) | i<<16;
+            r[0x5908]=i<<16 | 0xe0;
+        } else if (mobileResident(i,variant.residentPrefix)) {
+            const U32 cfg=i==0 ? 0x500170 : 0x140;
+            const U32 outWidth=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+            const bool linearFirst = i==0 &&
+                variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            setResultTuple(r,cfg,linearFirst ? mobileLinearFirstBase() : mobileResultBase[i],
+                           mobileNetV1[i].cout,outWidth,
+                           linearFirst ? mobileLinearFirstR() : mobileResultR[i]);
+            eraseRange(r,0x5100,0x51ff);
+            eraseRange(r,0x5900,0x59ff);
+        } else if (mobileSpillBridge(i,variant)) {
+            // A spill result is staged after its resident input.  The
+            // 0x84a/0x842 pair is also the state boundary that makes another
+            // EXECUTE independent of TileDMA state left by the first one.
+            const U32 inputBase=mobileResultBase[i-1];
+            setResultTuple(r,0x84a,inputBase+static_cast<U32>(mobileSpan(i-1)),
+                           mobileNetV1[i].cout,
+                           (mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride,
+                           mobileResultR[i]);
+            const U32 width=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+            const U32 row=16*width,plane=row*width;
+            const U32 offset=i==1 ? 0 : U32(i%2)*variant.scratchRegionBytes;
+            r[0x5100]=0x010000f1 | i<<16; setAddressAddend(r,0x5108,offset);
+            r[0x5110]=row; r[0x5114]=plane; r[0x5138]=0x08302031;
+            t.resultSlotFlags=0x21800000;
+            eraseRange(r,0x5900,0x59ff);
+        } else {
+            if (i && mobileResident(i-1,variant.residentPrefix))
+                r[0x414c]=mobileResultBase[i-1]+static_cast<U32>(mobileSpan(i-1));
+            r[0x5100]=(r[0x5100]&0xff00ff00u) | i<<16 | 0xf1;
+            setAddressAddend(r,0x5108,(i%2)*variant.scratchRegionBytes);
+            t.resultSlotFlags=0x21800000;
+            eraseRange(r,0x5900,0x59ff);
+        }
+
+        if (policy==MobileNetL2Policy::Header && variant.residentPrefix==26 &&
+            variant.measuredSpill) compactMobileNetDefaults(r,i);
+        pack(t);
+        out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
+        out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
+        out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
+        U32 length=0;
+        for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(layers[i].shape,true))
+            length+=n;
+        kernelBase+=length;
+        out.tasks.push_back(std::move(t));
+    }
+    // Tasks start on 16-byte boundaries, but the stream ends exactly at the
+    // last task's final word, as in every decoded program. Zero bytes after
+    // the last task inside the declared __text leave the engine armed: the
+    // next EXECUTE of any program times out.
+    out.kernelBytes=kernelBase;
+    return out;
+}
 h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights, std::size_t size,
                         const std::uint8_t *bias, std::size_t biasBytes, Layer *layerOut) {
     if (auto why=executableRefusal(s); !why.empty()) throw std::invalid_argument(why);
@@ -547,6 +887,85 @@ h13::Program linkDramChain(Generation gen, const std::vector<Layer> &layers,
     out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
     out.kernelRelocations=d.kernelRelocations;
     out.scratchAllocationBytes=2*region;
+    out.inputs=programs.front().inputs; out.output=programs.back().output;
+    out.formulaBuilt=true;
+    return out;
+}
+
+h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Policy policy,
+                             std::vector<h13::LinkedLayer> *layout) {
+    return linkMobileNetL2(gen,layers,programs,
+                           MobileNetL2Variant{policy,26,true,0x1c0000},layout);
+}
+
+h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Variant variant,
+                             std::vector<h13::LinkedLayer> *layout) {
+    requireMobileNet(layers);
+    if (gen!=Generation::H16G || programs.size()!=layers.size())
+        throw std::invalid_argument("the MobileNet linked-L2 policy needs one H16G layer program per prefix task");
+    for (std::size_t i=0;i<programs.size();++i) {
+        if (!programs[i].formulaBuilt || programs[i].taskCount!=1 ||
+            programs[i].inputs.size()!=1)
+            throw std::invalid_argument("every MobileNet linked-L2 layer must be one formula-built convolution task");
+        if (i && (programs[i-1].output.nchw!=programs[i].inputs[0].nchw ||
+                  programs[i-1].output.elementSize!=programs[i].inputs[0].elementSize))
+            throw std::invalid_argument("a MobileNet linked-L2 layer input differs from its producer output");
+    }
+    const auto d=describeMobileNetL2(gen,layers,variant);
+    h13::Program out;
+    out.task=d.stream;
+    if (layout) layout->clear();
+    for (std::size_t i=0;i<programs.size();++i) {
+        out.constants.insert(out.constants.end(),programs[i].constants.begin(),programs[i].constants.end());
+        if (layout) {
+            const auto edgeCode=[&](std::size_t edge) {
+                if (!mobileResident(static_cast<unsigned>(edge),variant.residentPrefix)) return 0;
+                return mobileSourceCfg(static_cast<unsigned>(edge))==0x104 ? 3 : 4;
+            };
+            const bool readsScratch=i && !mobileResident(U32(i-1),variant.residentPrefix);
+            const bool writesScratch=i+1<programs.size() &&
+                                     !mobileResident(U32(i),variant.residentPrefix);
+            const bool measuredWrite=variant.measuredSpill && i==1;
+            const bool measuredRead=variant.measuredSpill && i==2;
+            h13::LinkedLayer entry{U32(i),1,readsScratch,
+                measuredRead ? 0u : U32((i-1)%2)*variant.scratchRegionBytes,
+                writesScratch,
+                measuredWrite ? 0u : U32(i%2)*variant.scratchRegionBytes};
+            entry.inputEdge=i ? edgeCode(i-1) : 0;
+            entry.outputEdge=i+1<programs.size() ? edgeCode(i) : 0;
+            const bool linearFirst=variant.fieldSwap==
+                MobileNetL2FieldSwap::SentinelFirstEdgeGeometry;
+            if (entry.inputEdge)
+                entry.l2Source=linearFirst && i==1
+                    ? mobileLinearFirstBase() : mobileResultBase[i-1];
+            if (entry.outputEdge) {
+                entry.l2Result=linearFirst && i==0
+                    ? mobileLinearFirstBase() : mobileResultBase[i];
+                const U32 outHeight=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
+                entry.l2ResultBytes=std::uint64_t(outHeight)*
+                    (linearFirst && i==0 ? mobileLinearFirstR() : mobileResultR[i]);
+            }
+            layout->push_back(entry);
+        }
+    }
+    if (out.constants.size()!=d.kernelBytes)
+        throw std::logic_error("MobileNet linked-L2 kernel bytes disagree with the descriptors");
+    out.firstTaskBytes=out.task.size(); out.taskCount=U32(programs.size());
+    out.constantOffsetBytes=(out.task.size()+63)&~std::size_t(63);
+    out.kernelRelocations=d.kernelRelocations;
+    unsigned dramEdges=0;
+    bool onlyMeasuredEdge1=true;
+    for (unsigned edge=0;edge+1<layers.size();++edge)
+        if (!mobileResident(edge,variant.residentPrefix)) {
+            ++dramEdges;
+            onlyMeasuredEdge1 &= variant.measuredSpill && edge==1;
+        }
+    out.scratchAllocationBytes=!dramEdges ? 0
+        : onlyMeasuredEdge1 ? 0xc4000 : 2*variant.scratchRegionBytes;
     out.inputs=programs.front().inputs; out.output=programs.back().output;
     out.formulaBuilt=true;
     return out;

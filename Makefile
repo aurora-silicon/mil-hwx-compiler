@@ -3,6 +3,9 @@ ifeq ($(UNAME_S),Darwin)
 CXX := clang++
 CXXFLAGS := -O2 -std=c++17 -fobjc-arc -Wall -Wextra -Werror -Iinclude
 FRAMEWORKS := -framework Foundation
+CRYPTO_LIBS :=
+RUNTIME_TEST_TARGET = $(BUILD)/test_runtime_contract
+RUNTIME_TEST_COMMAND = $(BUILD)/test_runtime_contract
 else
 GNUSTEP_PREFIX ?= $(HOME)/.local/mil-hwx-gnustep
 GNUSTEP_CONFIG ?= $(GNUSTEP_PREFIX)/bin/gnustep-config
@@ -12,6 +15,9 @@ endif
 GNUSTEP_FLAGS := $(shell GNUSTEP_CONFIG_FILE=$(GNUSTEP_PREFIX)/etc/GNUstep/GNUstep.conf $(GNUSTEP_CONFIG) --objc-flags 2>/dev/null)
 CXXFLAGS := -std=c++17 -fobjc-arc $(GNUSTEP_FLAGS) -Wall -Wextra -Werror -Iinclude
 FRAMEWORKS := $(shell GNUSTEP_CONFIG_FILE=$(GNUSTEP_PREFIX)/etc/GNUstep/GNUstep.conf $(GNUSTEP_CONFIG) --base-libs 2>/dev/null)
+CRYPTO_LIBS := -lcrypto
+RUNTIME_TEST_TARGET =
+RUNTIME_TEST_COMMAND = :
 endif
 BUILD := build
 
@@ -78,22 +84,22 @@ $(BUILD)/test_hwx_planning: tests/test_hwx_planning.mm $(SUPPORT_SOURCES) $(MIL_
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Iplugins/H16G $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_structured_td_encoding: tests/test_structured_td_encoding.mm $(SUPPORT_SOURCES) lib/HWX/HWXImage.mm plugins/H16G/H16GTarget.mm $(STRUCTURED_TD_SOURCES) $(TASK_ENCODING_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
 $(BUILD)/test_program_partition: tests/test_program_partition.mm lib/Planning/ANEProgramPartition.mm | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/Planning $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_program_composition: tests/test_program_composition.mm plugins/H16G/H16GTarget.mm $(STRUCTURED_TD_SOURCES) $(TASK_ENCODING_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(CXXFLAGS) -Ilib/IR -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
 $(BUILD)/test_hwx_object_writer: tests/test_hwx_object_writer.mm lib/HWX/HWXImage.mm $(OBJECT_WRITER_SOURCES) $(STRUCTURED_TD_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/HWX -Ilib/IR -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_h16g_constant_packing: tests/test_h16g_constant_packing.mm $(CONSTANT_PACKER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(CXXFLAGS) -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
 $(BUILD)/test_staged_conv_compiler: tests/test_staged_conv_compiler.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
 $(BUILD)/test_pass_manager: tests/test_pass_manager.mm $(SUPPORT_SOURCES) $(PASS_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/Pass $^ $(FRAMEWORKS) -o $@
@@ -204,7 +210,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/Model -Ilib/HWX -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) -o $@
+	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
 $(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
@@ -218,7 +224,7 @@ test-no-pattern-shortcuts: $(BUILD)/mil-hwxc
 $(BUILD)/test_runtime_contract: tests/test_runtime_contract.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm $(RUNTIME_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/IR -Ilib/HWX -Ilib/Runtime $^ $(FRAMEWORKS) -framework IOSurface -ldl -o $@
 
-test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_lexer $(BUILD)/test_mil_parser $(BUILD)/test_graph_import $(BUILD)/test_operation_graph $(BUILD)/test_graph_transforms $(BUILD)/test_structural_fusion $(BUILD)/test_h16g_legalization $(BUILD)/test_hwx_planning $(BUILD)/test_structured_td_encoding $(BUILD)/test_program_partition $(BUILD)/test_program_composition $(BUILD)/test_hwx_object_writer $(BUILD)/test_h16g_constant_packing $(BUILD)/test_staged_conv_compiler $(BUILD)/test_pass_manager $(BUILD)/test_plugin_registry $(BUILD)/test_compiler_e2e $(BUILD)/test_runtime_contract test-cli test-no-pattern-shortcuts
+test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_lexer $(BUILD)/test_mil_parser $(BUILD)/test_graph_import $(BUILD)/test_operation_graph $(BUILD)/test_graph_transforms $(BUILD)/test_structural_fusion $(BUILD)/test_h16g_legalization $(BUILD)/test_hwx_planning $(BUILD)/test_structured_td_encoding $(BUILD)/test_program_partition $(BUILD)/test_program_composition $(BUILD)/test_hwx_object_writer $(BUILD)/test_h16g_constant_packing $(BUILD)/test_staged_conv_compiler $(BUILD)/test_pass_manager $(BUILD)/test_plugin_registry $(BUILD)/test_compiler_e2e $(RUNTIME_TEST_TARGET) test-cli test-no-pattern-shortcuts
 	$(BUILD)/test_diagnostics
 	$(BUILD)/test_benchmark_stats
 	$(BUILD)/test_mil_lexer
@@ -238,7 +244,7 @@ test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_
 	$(BUILD)/test_pass_manager
 	$(BUILD)/test_plugin_registry
 	$(BUILD)/test_compiler_e2e
-	$(BUILD)/test_runtime_contract
+	$(RUNTIME_TEST_COMMAND)
 	bash tests/test_release_hygiene.sh
 
 .PHONY: test-h13
@@ -317,6 +323,7 @@ test-hwx-inspection:
 .PHONY: test-h16g-validation
 test-h16g-validation: $(BUILD)/prepare_alu
 	python3 tests/test_h16g_validation.py
+	python3 tests/test_h16g_task_padding.py
 	python3 tests/test_h16g_owner.py $(BUILD)/prepare_alu
 
 .PHONY: test-spatial-reference
@@ -372,6 +379,7 @@ $(BUILD)/h16_conv_dump: tests/h16_conv_dump.cpp $(BUILD)/h16_conv_formula.o $(BU
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
 test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
+	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17

@@ -45,6 +45,30 @@ int main(int argc, char **argv) {
                                                                          : ane::h16::DramEdgeForm::Measured,0x200000).stream;
         } else if (mode=="describe") bytes=ane::h16::describe(gen,layers).stream;
         else if (mode=="describe-dense") bytes=ane::h16::describe(gen,layers,false).stream;
+        else if (mode=="mobilenet-l2" || mode=="mobilenet-l2-schedule" ||
+                 mode=="mobilenet-l2-header") {
+            const auto policy=mode=="mobilenet-l2" ? ane::h16::MobileNetL2Policy::Placement
+                              : mode=="mobilenet-l2-schedule" ? ane::h16::MobileNetL2Policy::Schedule
+                              : ane::h16::MobileNetL2Policy::Header;
+            bytes=ane::h16::describeMobileNetL2(gen,layers,policy).stream;
+        } else if (mode.rfind("mobilenet-hybrid-",0)==0) {
+            const auto swap=mode=="mobilenet-hybrid-legacy-terminal"
+                ? ane::h16::MobileNetL2FieldSwap::LegacyTerminalDirect
+                : mode=="mobilenet-hybrid-linear-kernel"
+                ? ane::h16::MobileNetL2FieldSwap::LinearKernelDMA
+                : mode=="mobilenet-hybrid-sentinel-geometry"
+                ? ane::h16::MobileNetL2FieldSwap::SentinelFirstEdgeGeometry
+                : throw std::invalid_argument("unknown MobileNet field swap");
+            bytes=ane::h16::describeMobileNetL2(gen,layers,
+                {ane::h16::MobileNetL2Policy::Placement,1,true,0x1c0000,swap}).stream;
+        } else if (mode.rfind("mobilenet-prefix-",0)==0 ||
+                   mode=="mobilenet-baseline-spill") {
+            const unsigned prefix=mode=="mobilenet-baseline-spill" ? 26u
+                : static_cast<unsigned>(std::stoul(mode.substr(17)));
+            bytes=ane::h16::describeMobileNetL2(gen,layers,
+                {ane::h16::MobileNetL2Policy::Placement,prefix,
+                 mode!="mobilenet-baseline-spill",0x1c0000}).stream;
+        }
         else if (mode.rfind("dram",0)==0) {
             const auto form=mode=="dram-measured" ? ane::h16::DramEdgeForm::Measured
                           : mode=="dram-dep" ? ane::h16::DramEdgeForm::DependencyOnly

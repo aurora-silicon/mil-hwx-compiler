@@ -1120,6 +1120,34 @@ static NSArray<NSNumber *> *relocationOffsets(const ane::h13::Program &program) 
     return offsets;
 }
 
+// Compile-time H16 execute geometry, matching the immutable HWX segment order
+// used by HWXObjectWriter and independently checked by h16g_validate.py.
+static NSDictionary *h16ExecuteResources(const ane::h13::Program &program) {
+    NSMutableArray *buffers = [NSMutableArray array];
+    NSUInteger inputIndex = 0, outputIndex = 0;
+    const auto add = [&](BOOL output, std::uint64_t bytes) {
+        const std::uint64_t mapping = (bytes + 0x3fff) & ~std::uint64_t(0x3fff);
+        [buffers addObject:@{
+            @"apertureSlot": @(buffers.count),
+            @"index": @(output ? outputIndex++ : inputIndex++),
+            @"class": @(output ? 1 : 0), @"offsetBytes": @0,
+            @"sizeBytes": @(mapping), @"mappingBytes": @(mapping),
+        }];
+    };
+    const std::size_t outputAt =
+        std::min(program.outputBindingIndex, program.inputs.size());
+    for (std::size_t index = 0; index < program.inputs.size(); ++index) {
+        if (index == outputAt) add(YES, program.output.allocationBytes);
+        add(NO, program.inputs[index].allocationBytes);
+    }
+    if (outputAt >= program.inputs.size())
+        add(YES, program.output.allocationBytes);
+    return @{@"version": @1, @"commandBytes": @0xca8,
+             @"bufferOffset": @0x60, @"bufferStride": @0x30,
+             @"customBarOffset": @0xca8, @"customBarStride": @0x18,
+             @"buffers": buffers, @"customBars": @[]};
+}
+
 static NSData *encodeHWX(const ane::h13::Program &program,
                          const std::vector<std::uint8_t> &anec,
                          NSError **error) {
@@ -2969,10 +2997,20 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     if (![format isEqualToString:@"hwx"])
         return reject(diagnostics, @"H16G/H17 formula conv packages require HWX", nil, convDiagnostic());
     // `linked` chains the layers through DRAM scratch with the DependencyMode
-    // edge (J700-verified); L2-resident chains are descriptor parity only.
-    if (![schedule isEqualToString:@"per-op"] && ![schedule isEqualToString:@"linked"])
+    // edge.  The three linked-L2 spellings are deliberately H16G-only and
+    // stage the exact MobileNetV1 placement, Common, then header policies.
+    NSSet<NSString *> *mobileL2Schedules = [NSSet setWithArray:@[
+        @"linked-l2", @"linked-l2-schedule", @"linked-l2-header",
+        @"linked-l2-prefix-1", @"linked-l2-prefix-2", @"linked-l2-prefix-4",
+        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill",
+        @"linked-l2-hybrid-legacy-terminal", @"linked-l2-hybrid-linear-kernel",
+        @"linked-l2-hybrid-sentinel-geometry"]];
+    BOOL mobileL2 = [target isEqualToString:@"H16G"] &&
+        [mobileL2Schedules containsObject:schedule];
+    if (![schedule isEqualToString:@"per-op"] &&
+        ![schedule isEqualToString:@"linked"] && !mobileL2)
         return reject(diagnostics,
-            @"H16G/H17 schedules are 'per-op' and 'linked' (DRAM edges); L2-resident linked chains are descriptor parity only",
+            @"H16G/H17 schedules are 'per-op' and 'linked'; H16G also accepts the MobileNet-only linked-l2 rung and bisection schedules",
             nil, convDiagnostic());
     return [self compileMILData:milData modelRoot:modelRoot format:format
         outputDirectory:directory schedule:schedule diagnostics:diagnostics error:error];
@@ -2995,19 +3033,40 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
                                          diagnostics:diagnostics];
+    NSSet<NSString *> *h16MobileL2Schedules = [NSSet setWithArray:@[
+        @"linked-l2", @"linked-l2-schedule", @"linked-l2-header",
+        @"linked-l2-prefix-1", @"linked-l2-prefix-2", @"linked-l2-prefix-4",
+        @"linked-l2-prefix-8", @"linked-l2-prefix-26", @"linked-l2-baseline-spill",
+        @"linked-l2-hybrid-legacy-terminal", @"linked-l2-hybrid-linear-kernel",
+        @"linked-l2-hybrid-sentinel-geometry"]];
+    BOOL requestedH16MobileL2 = ![schedule isEqualToString:@"linked-l2"] &&
+        [h16MobileL2Schedules containsObject:schedule];
     if (![schedule isEqualToString:@"per-op"] &&
         ![schedule isEqualToString:@"chain"] &&
         ![schedule isEqualToString:@"linked"] &&
-        ![schedule isEqualToString:@"linked-l2"])
+        ![schedule isEqualToString:@"linked-l2"] && !requestedH16MobileL2)
         return reject(diagnostics,
-            @"H13 schedule must be 'per-op', 'chain', 'linked' or 'linked-l2'", nil,
+            @"schedule must be 'per-op', 'chain', 'linked', or a supported H16G linked-l2 rung/bisection schedule", nil,
+            @"h13.unsupported-schedule");
+    if ((!gConvGeneration || gConvGeneration==17) && requestedH16MobileL2)
+        return reject(diagnostics,
+            @"linked-l2 rung and bisection schedules are H16G MobileNet-only", nil,
             @"h13.unsupported-schedule");
     // `linked` compiles a straight-line convolution chain (each conv
     // optionally followed by its relu) into one program of linked tasks:
     // one submit for the whole chain, intermediates in the scratch channel.
     // `linked-l2` also keeps the qualifying intermediates resident in L2
     // (docs/ane/linked-programs.md); it has not run on the device yet.
-    const BOOL linkedL2 = [schedule isEqualToString:@"linked-l2"];
+    const BOOL linkedL2 = [schedule isEqualToString:@"linked-l2"] ||
+        requestedH16MobileL2;
+    const BOOL bisectL2 = [schedule hasPrefix:@"linked-l2-prefix-"] ||
+        [schedule isEqualToString:@"linked-l2-baseline-spill"] ||
+        [schedule hasPrefix:@"linked-l2-hybrid-"];
+    // Every resident prefix needs an explicit spill bridge where it returns
+    // to DRAM.  The baseline-spill spelling is retained only as the old-form
+    // negative control.
+    const BOOL measuredSpillL2 =
+        ![schedule isEqualToString:@"linked-l2-baseline-spill"];
     const BOOL linkedSchedule = linkedL2 || [schedule isEqualToString:@"linked"];
     struct LinkedGenericScope {
         BOOL previous;
@@ -4470,9 +4529,33 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             if (gConvGeneration && gConvLayers.size() != chainPrograms.size())
                 throw std::logic_error(
                     "h16-h17.linked: encoded layer bookkeeping is inconsistent");
-            ane::h13::Program combined = gConvGeneration
-                ? ane::h16::linkDramChain(convGeneration(), gConvLayers, chainPrograms, &layout)
-                : ane::h13::linkConvChain(chainPrograms, &layout, linkedL2);
+            ane::h13::Program combined;
+            if (gConvGeneration && linkedL2) {
+                const auto policy=[schedule isEqualToString:@"linked-l2"] || bisectL2
+                    ? ane::h16::MobileNetL2Policy::Placement
+                    : [schedule isEqualToString:@"linked-l2-schedule"]
+                    ? ane::h16::MobileNetL2Policy::Schedule
+                    : ane::h16::MobileNetL2Policy::Header;
+                unsigned prefix=26;
+                if ([schedule hasPrefix:@"linked-l2-prefix-"])
+                    prefix=static_cast<unsigned>([[schedule substringFromIndex:17] integerValue]);
+                else if ([schedule hasPrefix:@"linked-l2-hybrid-"])
+                    prefix=1;
+                const auto swap=[schedule isEqualToString:@"linked-l2-hybrid-legacy-terminal"]
+                    ? ane::h16::MobileNetL2FieldSwap::LegacyTerminalDirect
+                    : [schedule isEqualToString:@"linked-l2-hybrid-linear-kernel"]
+                    ? ane::h16::MobileNetL2FieldSwap::LinearKernelDMA
+                    : [schedule isEqualToString:@"linked-l2-hybrid-sentinel-geometry"]
+                    ? ane::h16::MobileNetL2FieldSwap::SentinelFirstEdgeGeometry
+                    : ane::h16::MobileNetL2FieldSwap::None;
+                combined=ane::h16::linkMobileNetL2(convGeneration(),gConvLayers,
+                    chainPrograms,{policy,prefix,bool(measuredSpillL2),0x1c0000,swap},&layout);
+            } else if (gConvGeneration) {
+                combined=ane::h16::linkDramChain(
+                    convGeneration(),gConvLayers,chainPrograms,&layout);
+            } else {
+                combined=ane::h13::linkConvChain(chainPrograms,&layout,linkedL2);
+            }
             std::vector<std::uint8_t> bytes = gConvGeneration
                 ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
@@ -4513,7 +4596,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 if (layout[index].writesScratch) {
                     regions[result] = @{
                         @"offset": @(layout[index].writeOffset),
-                        @"bytes": [record[@"outputs"] firstObject][@"allocationBytes"],
+                        @"bytes": gConvGeneration && linkedL2 && measuredSpillL2
+                            ? @(combined.scratchAllocationBytes)
+                            : [record[@"outputs"] firstObject][@"allocationBytes"],
                         @"nchw": [record[@"outputs"] firstObject][@"nchw"]};
                     [tensors removeObjectForKey:result];
                     [intermediateNames removeObject:result];
@@ -4525,17 +4610,44 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             NSDictionary *firstRecord = programRecords.firstObject;
             NSDictionary *lastRecord = programRecords.lastObject;
             NSString *file = [NSString stringWithFormat:@"program-0.%@", format];
-            NSDictionary *combinedRecord = @{
+            NSMutableDictionary *combinedRecord = [@{
                 @"file": file, @"bytes": @(combinedPayload.length),
                 @"taskDescriptors": @(combined.taskCount),
-                @"encoder": @"h13-linked-conv", @"operation": @"linked",
+                @"encoder": gConvGeneration && linkedL2
+                    ? @"h16g-mobilenet-linked-l2" : @"h13-linked-conv",
                 @"inputs": firstRecord[@"inputs"], @"constantInputs": @{},
                 @"outputs": lastRecord[@"outputs"],
                 @"constantOffset": @(combined.constantOffsetBytes),
                 @"constantBytes": @(combined.constants.size()),
                 @"scratchBytes": @(combined.scratchAllocationBytes),
                 @"layers": layers,
-            };
+            } mutableCopy];
+            if (gConvGeneration && linkedL2) {
+                NSMutableArray *edgeStorage = [NSMutableArray arrayWithCapacity:layout.size()-1];
+                NSUInteger dramEdges = 0;
+                for (std::size_t index=0;index+1<layout.size();++index) {
+                    if (layout[index].outputEdge) {
+                        [edgeStorage addObject:@"l2"];
+                    } else {
+                        [edgeStorage addObject:@"dram"];
+                        ++dramEdges;
+                    }
+                }
+                [combinedRecord addEntriesFromDictionary:@{
+                    @"edgeStorage": edgeStorage,
+                    @"tileDMAEndpoints": @(2 + 2*dramEdges),
+                    @"scratchChannel": @3,
+                    @"scratchRegionBytes": combined.scratchAllocationBytes == 0x380000
+                        ? @0x1c0000 : @(combined.scratchAllocationBytes),
+                    @"rowBandEdges": @0,
+                    @"sourceSurfaces": @1,
+                    @"destinationSurfaces": @1,
+                }];
+                combinedRecord[@"artifacts"] = @[@{
+                    @"file": file, @"bytes": @(combinedPayload.length),
+                    @"h16Execute": h16ExecuteResources(combined),
+                }];
+            }
             [programRecords removeAllObjects];
             [programRecords addObject:combinedRecord];
             [payloads removeAllObjects];
@@ -4777,7 +4889,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }];
     if (chainSchedule || linkedSchedule)
         [manifest addEntriesFromDictionary:@{
-            @"schedule": linkedL2 ? @"linked-l2" : (linkedSchedule ? @"linked" : @"chain"),
+            @"schedule": linkedL2 ? schedule : (linkedSchedule ? @"linked" : @"chain"),
             @"tasks": taskRecords, @"scratch": scratch}];
     if (programRecords.count == 1)
         [manifest addEntriesFromDictionary:programRecords[0]];

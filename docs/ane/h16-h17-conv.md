@@ -199,3 +199,69 @@ so 1-ulp differences of a few percent per layer are expected.
 The scratch regions in the device run were 2 MiB each; the compiler sizes them
 to the largest intermediate (1.75 MiB). The emitted object is otherwise
 identical: same descriptors, same kernel bytes.
+
+## H16G MobileNetV1 linked-L2 policies
+
+H16G exposes three deliberately workload-specific schedules for the exact
+biased 28-convolution MobileNetV1 1.0/224 graph:
+
+- `linked-l2`: 26 internal edges in the 2 MiB circular L2 and edge 1 in one
+  channel-3 `0xc4000` spill region;
+- `linked-l2-schedule`: the same placement plus the measured 28 Common
+  schedule words;
+- `linked-l2-header`: the same placement and Common words plus the measured
+  cost hints, dispatch limits and task masks.
+
+All three omit TileDMA blocks for resident edges.  The only TileDMA endpoints
+are external input, spill write, spill read and external output.  The graph
+gate checks every shape, bias and ReLU position; the policies refuse H17 and
+every non-prefix H16G graph instead of extrapolating the measured tables.
+For diagnosis it also accepts exact 2..28-task leading prefixes, preserving
+the original ReLU choice and making the last included task write the external
+output.
+
+For device diagnosis, `linked-l2-prefix-{1,2,4,8,26}` keeps only the first
+named number of eligible edges resident (edge 0, then edges 2 through 26) and
+leaves every other edge in DRAM.  A return from a resident run to DRAM is not
+the ordinary standalone `ResultCfg=0x500172` form: that hybrid left the
+source TileDMA/BAR state live and prefix-1's second execution used the raw
+source selector `0x21` as a DVA high word.  Each such boundary now uses the
+decoded spill pair (`ResultCfg=0x84a`, `SourceCfg=0x842`, destination/source
+formats `0x08302031`/`0x08002031`) with complete task-local staging fields.
+Edge 1 is byte-field identical to the measured Apple transition; a prefix
+ending before edge 26 may add one shape-derived bridge at the end of its
+resident run.
+
+The offline bisection proof resolves every slot-3/6/7/8 BAR record twice from
+the immutable descriptor addends, treats each low/high pair as one
+little-endian u64, checks that addend against its mapping and
+rejects the resident-source/standalone-result hybrid.  This proves that a
+second execution does not depend on a ring or BAR cursor consumed by the
+first.  Device qualification still runs prefix-1 twice before any larger
+prefix because a firmware quarantine costs a reboot.
+
+A truncated graph also keeps the terminal task's own result class.  The full
+28-task graph ends in a direct 1x1 classifier (`ResultCfg=0x14a`), but the
+two- and three-task prefixes end in staged schedules (`ResultCfg=0x142`).
+Forcing the classifier's direct bit onto those prefix terminals can return a
+plausible first result while leaving result state armed for the next EXECUTE.
+The `linked-l2-hybrid-{legacy-terminal,linear-kernel,sentinel-geometry}`
+two-task schedules isolate that bit, the linear KernelDMA group, and the
+passing sentinel's first-edge base/row geometry respectively; they are qualification
+artifacts, not general placement policies.
+
+The DRAM ping-pong base is a 64-bit relocation operand.  A nonzero
+`0x1c0000` region therefore encodes as low/high `(0x1c0000, 0)`.  Copying the
+offset into both words produces `0x001c0000001c0000`; zero-offset two-task
+sentinels cannot detect that error.  In prefix-1, task 3's edge-3 destination
+is the first nonzero record and task 4 is its first consumer.
+`linked-l2-baseline-spill` keeps all 26 resident edges while retaining the old
+DRAM encoding for edge 1.  These are bisection-only schedules; they do not
+generalize placement beyond this exact graph.
+
+The implementation contains decoded field values and allocation rules, not a
+captured object or payload.  Register names and record grammar come from the
+BSD-3-Clause `coreml_to_ane_hwx` H16 map at revision `ce54664e`; model weights
+remain caller-supplied.  `tests/test_h16g_mobilenet_l2.py` proves the task
+count, complete source/result tuples, ring wrap, spill formats, four DMA
+endpoints, schedule words and headers from decoded compiler output.

@@ -60,6 +60,40 @@ std::vector<std::uint8_t> packSparseStride2(ConvShape shape, const std::uint8_t 
 enum class DramEdgeForm { Measured, DependencyOnly, None };
 Description describeDramChain(Generation generation, const std::vector<Layer> &layers,
                               DramEdgeForm form, std::uint32_t scratchRegionBytes);
+// Three explicitly staged H16G MobileNetV1 policies.  The placement policy
+// keeps 26 of the graph's 27 internal edges in the 2 MiB L2 ring and spills
+// edge 1 through one channel-3 region.  Schedule additionally selects the
+// measured Common words; Header adds the measured cost/dispatch/mask policy
+// and compact register write set.  These policies deliberately refuse every
+// graph except the named 28-layer MobileNetV1 224 shape.
+enum class MobileNetL2Policy { Placement, Schedule, Header };
+// One-field-group swaps used only to bisect the first resident MobileNet
+// edge against the proven linear and resident encodings.
+enum class MobileNetL2FieldSwap {
+    None,
+    LegacyTerminalDirect,
+    LinearKernelDMA,
+    SentinelFirstEdgeGeometry,
+};
+struct MobileNetL2Variant {
+    MobileNetL2Policy policy = MobileNetL2Policy::Placement;
+    // Number of resident edges enabled in Apple placement order
+    // (edge 0, then edges 2..26).  The remaining edges use the proven DRAM
+    // ping-pong form.  This is a hardware-bisection facility, not a general
+    // placement heuristic.
+    unsigned residentPrefix = 26;
+    // The full parity rungs and safe resident prefixes use decoded spill
+    // bridges.  False is retained only for the old-form negative control.
+    bool measuredSpill = true;
+    std::uint32_t scratchRegionBytes = 0x1c0000;
+    MobileNetL2FieldSwap fieldSwap = MobileNetL2FieldSwap::None;
+};
+Description describeMobileNetL2(Generation generation,
+                                const std::vector<Layer> &layers,
+                                MobileNetL2Policy policy);
+Description describeMobileNetL2(Generation generation,
+                                const std::vector<Layer> &layers,
+                                MobileNetL2Variant variant);
 h13::Program encodeConv(Generation generation, ConvShape shape,
                         const std::uint8_t *weights, std::size_t weightBytes,
                         const std::uint8_t *bias = nullptr, std::size_t biasBytes = 0,
@@ -70,5 +104,15 @@ h13::Program encodeConv(Generation generation, ConvShape shape,
 h13::Program linkDramChain(Generation generation, const std::vector<Layer> &layers,
                            const std::vector<h13::Program> &programs,
                            std::vector<h13::LinkedLayer> *layout);
+h13::Program linkMobileNetL2(Generation generation,
+                             const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Policy policy,
+                             std::vector<h13::LinkedLayer> *layout);
+h13::Program linkMobileNetL2(Generation generation,
+                             const std::vector<Layer> &layers,
+                             const std::vector<h13::Program> &programs,
+                             MobileNetL2Variant variant,
+                             std::vector<h13::LinkedLayer> *layout);
 void fuseRelu(h13::Program &program);
 }

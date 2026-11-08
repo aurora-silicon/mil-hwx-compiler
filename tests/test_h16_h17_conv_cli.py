@@ -104,7 +104,9 @@ def main():
             'valid': (oracle['mil'].replace('string("same")', 'string("valid")'), (), 'SAME'),
             'dilated': (oracle['mil'].replace('tensor<int32, [2]>([1, 1])', 'tensor<int32, [2]>([2, 2])'), (), 'SAME'),
             'linked': (oracle['mil'], ('--schedule', 'linked'), 'two or more convolutions'),
-            'linked-l2': (oracle['mil'], ('--schedule', 'linked-l2'), 'descriptor parity only'),
+            'linked-l2': (oracle['mil'], ('--schedule', 'linked-l2'),
+                          'needs two or more convolutions' if TARGET == 'H16G'
+                          else 'H16G also accepts'),
             'anec': (oracle['mil'], ('--format', 'anec'), 'HWX' if TARGET == 'H16G' else 'hwx'),
         }
         for name, (mil, extra, diagnostic) in neighbours.items():
