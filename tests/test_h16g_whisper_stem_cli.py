@@ -116,6 +116,14 @@ def positional_mil(channels: int, offset: int) -> str:
 
 def canonical(task: bytes) -> dict:
     decoded = decode_task(task, "h16")
+    # Captures name the kernel operand at BAR 7. Packaged objects use
+    # input/output/kernel at slots 6/7/8, so normalize only that slot rebase
+    # while retaining parity coverage for every other descriptor field.
+    for record in decoded["records"]:
+        if record["address"] == "0x05510":
+            header = int(record["header"], 16)
+            if (header & 0x3f800000) == 0x24000000:
+                record["header"] = f"0x{header - 0x00800000:08x}"
     return {"header": decoded["header_words"][:1] + decoded["header_words"][2:],
             "blocks": decoded["blocks"], "records": decoded["records"]}
 
@@ -136,6 +144,52 @@ def section(data: bytes, wanted: bytes) -> bytes:
     return b""
 
 
+def assert_kernel_bar_bound(data: bytes) -> bool:
+    """Require slot 8 to bind __KERN_0 whenever the object has that segment."""
+    count = struct.unpack_from("<I", data, 16)[0]
+    cursor = 32
+    text = kernel_vm = descriptor = None
+    for _ in range(count):
+        command, length = struct.unpack_from("<II", data, cursor)
+        if command == 0x19:
+            segment = struct.unpack_from("<2I16s4Q4I", data, cursor)
+            name = segment[2].split(b"\0", 1)[0]
+            if name == b"__TEXT":
+                entry = struct.unpack_from("<16s16s2Q8I", data, cursor + 72)
+                text = data[entry[4]:entry[4] + entry[3]]
+            elif name == b"__KERN_0":
+                kernel_vm = segment[3]
+        elif command == 4 and struct.unpack_from("<I", data, cursor + 8)[0] == 4:
+            descriptor = cursor
+        cursor += length
+    if kernel_vm is None:
+        return False
+    assert text is not None and descriptor is not None
+    slots: set[int] = set()
+    cursor = 16
+    while cursor < len(text):
+        words = (struct.unpack_from("<I", text, cursor)[0] >> 16) & 0x7ff
+        assert words
+        end = cursor + 4 * words
+        header_words = 10 if struct.unpack_from("<I", text, cursor + 32)[0] & 3 == 3 else 9
+        record = cursor + 4 * header_words
+        while record < end:
+            header = struct.unpack_from("<I", text, record)[0]
+            record += 4
+            if header & (1 << 31):
+                values = 1 + ((header >> 15) & 0xffff).bit_count()
+            else:
+                values = ((header >> 15) & 0x3f) + 1
+                if header & (1 << 29):
+                    slots.add((header >> 23) & 0x3f)
+            record += 4 * values
+        assert record == end
+        cursor = (end + 15) & ~15
+    assert 8 in slots, slots
+    assert struct.unpack_from("<Q", data, descriptor + 0x10 * 9)[0] == kernel_vm
+    return True
+
+
 def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
     weights = pattern(channels * 80 * 3, channels + tokens)
     bias = pattern(channels, channels + tokens + 1)
@@ -148,6 +202,7 @@ def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     image = output / "program-0.hwx"; data = image.read_bytes()
+    assert assert_kernel_bar_bound(data)
     kernel = section(data, b"__kern_0")
     table = kernel[:128] if gelu else b""
     payload = weights + bias + table
@@ -172,6 +227,7 @@ def compile_and_validate(root: Path, name: str, source_text: str) -> Path:
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     image = output / "program-0.hwx"
+    assert_kernel_bar_bound(image.read_bytes())
     validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
         "--manifest", str(output / "manifest.json")], capture_output=True,
         text=True, timeout=30)

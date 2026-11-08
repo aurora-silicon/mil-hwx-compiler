@@ -7,6 +7,9 @@
 namespace ane::h16 {
 namespace {
 using U32 = std::uint32_t;
+// Standalone H16G objects place input, output and __KERN_0 at BAR slots
+// 6, 7 and 8. Kernel-bearing formula tasks must name the final aperture.
+constexpr U32 packagedKernelSlotFlags = 0x24000000u;
 struct Schedule {
     U32 cin, cout, width, kernel, stride, groups;
     bool bias;
@@ -482,7 +485,7 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
 
 Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
     Task t;
-    t.kernelSlotFlags=0x23800000;
+    t.kernelSlotFlags=packagedKernelSlotFlags;
     t.sourceSlotFlags=0x22800000;
     t.resultSlotFlags=0x23000000;
     const U32 externalRow=align64(2*tokens);
@@ -591,7 +594,7 @@ Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
                       U32 taskIndex, U32 taskCount, U32 kernelBase,
                       const std::array<U32,16> &chunkBytes, bool gelu) {
     Task t;
-    t.kernelSlotFlags=0x23800000;
+    t.kernelSlotFlags=packagedKernelSlotFlags;
     t.sourceSlotFlags=0x22800000;
     t.resultSlotFlags=0x23000000;
     const bool first=taskIndex==0,last=taskIndex+1==taskCount;
