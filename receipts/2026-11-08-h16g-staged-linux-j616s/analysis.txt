@@ -1,0 +1,13 @@
+kit1 mm128: ref_xy: relL2 1.47e-04 maxabs 0.00195 exact 83.3% nonfinite 0 | ref_yx: relL2 1.42e+00 maxabs 5.97 exact 0.0% nonfinite 0 | p50 168.0 us
+kit1 mm256: ref_xy: relL2 1.76e-04 maxabs 0.00195 exact 78.5% nonfinite 0 | ref_yx: relL2 1.42e+00 maxabs 6.5 exact 0.0% nonfinite 0 | p50 174.9 us
+kit1 mm512: ref_xy: relL2 2.16e-04 maxabs 0.00391 exact 72.6% nonfinite 0 | ref_yx: relL2 1.41e+00 maxabs 6.65 exact 0.0% nonfinite 0 | p50 222.5 us
+kit1 add128: ref: relL2 2.66e-04 maxabs 0.00781 exact 89.5% nonfinite 0 | p50 175.1 us
+kit1 mul128: ref: relL2 3.33e-05 maxabs 0.00781 exact 99.9% nonfinite 0 | p50 173.0 us
+kit1 gelu128: ref: relL2 8.40e-04 maxabs 0.0061 exact 27.5% nonfinite 0 | p50 162.2 us
+kit1 exp128: ref: relL2 7.07e-04 maxabs 0.0469 exact 66.5% nonfinite 0 | p50 167.3 us
+kit1 add512: ref: relL2 2.66e-04 maxabs 0.00781 exact 89.4% nonfinite 0 | p50 170.2 us
+kit1 mul512: ref: relL2 2.77e-05 maxabs 0.0156 exact 99.8% nonfinite 0 | p50 197.6 us
+kit1 gelu512: ref: relL2 8.39e-04 maxabs 0.0061 exact 27.6% nonfinite 0 | p50 147.2 us
+kit1 exp512: ref: relL2 7.10e-04 maxabs 0.125 exact 66.3% nonfinite 0 | p50 146.7 us
+kit3 add_bert: ref: relL2 2.67e-04 maxabs 0.00781 exact 89.4% nonfinite 0 | p50 176.0 us
+bert_head p0 scaled: relL2 4.37e-05 maxabs 0.00195 exact 97.3% nonfinite 0 | p50 169.4 us

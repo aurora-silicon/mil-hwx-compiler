@@ -9,6 +9,16 @@
 #import "H16GReduceEncoder.h"
 #import "H16GTDWriter.h"
 
+NSUInteger H16GElementCount(NSArray<NSNumber *> *shape) {
+    NSUInteger count = shape.count ? 1 : 0;
+    for (NSNumber *dimension in shape) {
+        NSUInteger value = dimension.unsignedIntegerValue;
+        if (value == 0 || count > NSUIntegerMax / value) return 0;
+        count *= value;
+    }
+    return count;
+}
+
 static BOOL reject(NSError **error, NSString *message) {
     if (error) *error = [NSError errorWithDomain:H16GTDWriterErrorDomain code:5
         userInfo:@{NSLocalizedDescriptionKey:message}];
@@ -299,14 +309,13 @@ static BOOL validateQuantizedWeight(ANEOperationNode *weight, NSError **error) {
         left.type.elementType!=ANEElementTypeFP16||
         right.type.elementType!=ANEElementTypeFP16||
         operation.outputType.elementType!=ANEElementTypeFP16||
-        left.type.shape.count!=4||
+        left.type.shape.count<1||left.type.shape.count>4||
         ![left.type.shape isEqualToArray:right.type.shape]||
         ![left.type.shape isEqualToArray:operation.outputType.shape])
-        return reject(error,@"binary ALU requires matching external fp16 NCHW tensors");
-    NSArray<NSNumber *> *shape=left.type.shape;
-    NSUInteger size=shape[2].unsignedIntegerValue;
-    if (shape[0].unsignedIntegerValue!=1||shape[1].unsignedIntegerValue!=1||
-        shape[3].unsignedIntegerValue!=size||
+        return reject(error,@"binary ALU requires matching external fp16 tensors of rank 1 to 4");
+    NSUInteger size=[H16GALUEncoder squareViewSizeForElementCount:
+        H16GElementCount(left.type.shape)];
+    if (size==NSNotFound||
         ![H16GALUEncoder supportsOperationName:operation.operationName
             squareSize:size]||
         ![graph.outputValueNames.firstObject isEqualToString:operation.identifier])
@@ -333,9 +342,10 @@ static BOOL validateQuantizedWeight(ANEOperationNode *weight, NSError **error) {
     ANEGraphValue *input=operation.sourceOperation.operands[@"x"].value;
     if (!input || input.producer || input.type.elementType!=ANEElementTypeFP16 ||
         operation.outputType.elementType!=ANEElementTypeFP16 ||
+        input.type.shape.count < 1 || input.type.shape.count > 4 ||
         ![input.type.shape isEqualToArray:operation.outputType.shape] ||
-        ![H16GLUTEncoder supportsOperationName:operation.operationName
-            inputShape:input.type.shape] ||
+        [H16GLUTEncoder squareViewSizeForOperationName:operation.operationName
+            elementCount:H16GElementCount(input.type.shape)] == NSNotFound ||
         ![graph.outputValueNames.firstObject isEqualToString:operation.identifier])
         return reject(error,@"unary pointwise operation, type, shape, or result has no decoded H16G packet");
     NSUInteger active=0;

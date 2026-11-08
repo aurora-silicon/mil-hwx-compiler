@@ -747,7 +747,9 @@ static void testBinaryALUShapesTraverseTheProductionCompiler(void) {
             diagnostics.errorCount==0,
             @"hardware-verified binary ALU selector compiles through shared passes");
     }
-    for(NSString *source in @[binaryALUMIL(@"sub",512),binaryALUMIL(@"add",384)]){
+    // add at 384x384 now runs as the 512x512 view; 4096x4096 exceeds every
+    // measured square.
+    for(NSString *source in @[binaryALUMIL(@"sub",512),binaryALUMIL(@"add",4096)]){
         ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
         expect([ANEStagedCompiler compileMILData:
             [source dataUsingEncoding:NSUTF8StringEncoding]
@@ -815,13 +817,28 @@ static void testUnaryPointwiseShapesTraverseTheProductionCompiler(void) {
         expect(bundle!=nil&&diagnostics.errorCount==0,
             @"decoded unary operation compiles through the shared staged path");
     }
+    // An unmeasured square runs as the next measured square over the same
+    // contiguous bytes: 384x384 lanes fit the 512x512 program.
+    NSURL *unaryRoot=[NSURL fileURLWithPath:@"tests/models/conv_relu" isDirectory:YES];
+    ANEDiagnosticEngine *viewDiagnostics=[[ANEDiagnosticEngine alloc]init];
+    ANEExecutableBundle *view=[ANEStagedCompiler compileMILData:
+        [unaryMIL(@"sigmoid",384)dataUsingEncoding:NSUTF8StringEncoding]
+        modelRoot:unaryRoot target:@"H16G" diagnostics:viewDiagnostics];
+    ANEExecutableBundle *square=[ANEStagedCompiler compileMILData:
+        [unaryMIL(@"sigmoid",512)dataUsingEncoding:NSUTF8StringEncoding]
+        modelRoot:unaryRoot target:@"H16G"
+        diagnostics:[[ANEDiagnosticEngine alloc]init]];
+    expect(view!=nil&&square!=nil&&viewDiagnostics.errorCount==0&&
+           [view.artifacts[0].image isEqualToData:square.artifacts[0].image]&&
+           view.artifacts[0].bindings[0].logicalByteLength==384*384*2&&
+           view.artifacts[0].bindings[0].allocationByteLength==512*512*2,
+        @"unmeasured unary square runs as the covering measured square view");
     ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
     expect([ANEStagedCompiler compileMILData:
-        [unaryMIL(@"sigmoid",384)dataUsingEncoding:NSUTF8StringEncoding]
-        modelRoot:[NSURL fileURLWithPath:@"tests/models/conv_relu"
-                             isDirectory:YES]
-        target:@"H16G" diagnostics:diagnostics]==nil&&diagnostics.errorCount>0,
-        @"unmeasured unary geometry fails before object emission");
+        [unaryMIL(@"sigmoid",4096)dataUsingEncoding:NSUTF8StringEncoding]
+        modelRoot:unaryRoot target:@"H16G" diagnostics:diagnostics]==nil&&
+        diagnostics.errorCount>0,
+        @"unary tensor beyond every measured square fails before object emission");
 }
 
 static NSString *reductionMIL(NSString *operation, NSUInteger channels,

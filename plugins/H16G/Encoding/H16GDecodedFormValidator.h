@@ -5,6 +5,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// Number of elements of a static shape; 0 for an empty, zero-sized or
+/// overflowing shape.
+FOUNDATION_EXPORT NSUInteger H16GElementCount(NSArray<NSNumber *> *shape);
+
 @interface H16GDecodedFormValidator : NSObject
 + (BOOL)validateFP16ConvGraph:(ANEOperationGraph *)graph
                      scheduled:(ANEScheduledGraph *)scheduled
