@@ -73,6 +73,23 @@ def exact_end(tasks):
     return end
 
 
+def scratch_offset(w, low):
+    return w.get(low, 0) | w.get(low + 4, 0) << 32
+
+
+def assert_no_self_overwrite(tasks, label):
+    """No task may write the DRAM scratch region it reads: a task that
+    reads its input from scratch (0x4d00 present) and writes its result to
+    scratch (0x5100 low byte 0xf1) needs two different BAR-3 addends.  The
+    prefix-1 rung once wrote edge 2 over its own edge-1 input (top-1 14/16
+    on the J616s)."""
+    for i, w in enumerate(words(tasks)):
+        reads = 0x4d00 in w
+        writes = 0x5100 in w and (w[0x5100] & 0xff) == 0xf1
+        if reads and writes:
+            assert scratch_offset(w, 0x4d10) != scratch_offset(w, 0x5108), (label, i)
+
+
 def words(tasks):
     return [register_words(task) for task in tasks]
 
@@ -145,6 +162,7 @@ def main():
     eligible = [0] + list(range(2, 27))
     for prefix in (1,2,4,8,26):
         _, tasks = run(f'mobilenet-prefix-{prefix}')
+        assert_no_self_overwrite(tasks, prefix)
         ww = words(tasks)
         resident = set(eligible[:prefix])
         dram = set(range(27)) - resident
@@ -194,11 +212,16 @@ def main():
         assert ww[-1][0x4148] == terminal_cfg[count]
         if count >= 3:
             assert ww[1][0x4148] == 0x84a and ww[2][0x4104] == 0x842
+        if count >= 4:
+            # Edge 1 is the decoded spill at offset 0, so edge 2 (read by
+            # nothing else in task 2) takes the other ping-pong region.  It
+            # is one u64, not two copies of the low offset.
+            assert (ww[2][0x5108],ww[2][0x510c]) == (0x1c0000,0)
+            assert (ww[3][0x4d10],ww[3][0x4d14]) == (0x1c0000,0)
         if count >= 6:
-            # Edge 3 is the first ping-pong edge with a nonzero BAR-3
-            # addend.  It is one u64, not two copies of the low offset.
-            assert (ww[3][0x5108],ww[3][0x510c]) == (0x1c0000,0)
-            assert (ww[4][0x4d10],ww[4][0x4d14]) == (0x1c0000,0)
+            assert (ww[3][0x5108],ww[3][0x510c]) == (0,0)
+            assert (ww[4][0x4d10],ww[4][0x4d14]) == (0,0)
+        assert_no_self_overwrite(tasks, ('mobilenet-prefix-1', count))
 
     # The v7 two-task packages isolate one field group at a time.  The
     # legacy control differs from the correction only in the terminal direct
