@@ -68,6 +68,52 @@ def mil(tokens: int, channels: int, offsets: list[int], gelu: bool) -> str:
 '''
 
 
+def mil_stem2(channels: int, offsets: list[int], gelu: bool) -> str:
+    result = "y" if gelu else "c"
+    activation = (f'    tensor<fp16, [1, {channels}, 1500]> y = gelu('
+                  'x = c, mode = string("EXACT"))[name = string("y")];\n'
+                  if gelu else "")
+    return f'''program(1.3)
+[buildInfo = dict<string, string>({{}})]
+{{
+  func main<ios18>(tensor<fp16, [1, {channels}, 3000]> x) {{
+    string pt = const()[name = string("pt"), val = string("same")];
+    tensor<int32, [1]> st = const()[name = string("st"), val = tensor<int32, [1]>([2])];
+    tensor<int32, [2]> pd = const()[name = string("pd"), val = tensor<int32, [2]>([0, 0])];
+    tensor<int32, [1]> dl = const()[name = string("dl"), val = tensor<int32, [1]>([1])];
+    int32 gp = const()[name = string("gp"), val = int32(1)];
+    tensor<fp16, [{channels}, {channels}, 3]> w = const()[name = string("w"), val = tensor<fp16, [{channels}, {channels}, 3]>(BLOBFILE(path = string("@model_path/parameters.bin"), offset = uint64({offsets[0]})))];
+    tensor<fp16, [{channels}]> b = const()[name = string("b"), val = tensor<fp16, [{channels}]>(BLOBFILE(path = string("@model_path/parameters.bin"), offset = uint64({offsets[1]})))];
+    tensor<fp16, [1, {channels}, 1500]> c = conv(bias = b, dilations = dl, groups = gp, pad = pd, pad_type = pt, strides = st, weight = w, x = x)[name = string("c")];
+{activation}  }} -> ({result});
+}}
+'''
+
+
+def transpose_mil(channels: int) -> str:
+    return f'''program(1.3)
+[buildInfo = dict<string, string>({{}})]
+{{
+  func main<ios18>(tensor<fp16, [1, {channels}, 1500]> x) {{
+    tensor<int32, [3]> p = const()[name = string("p"), val = tensor<int32, [3]>([0, 2, 1])];
+    tensor<fp16, [1, 1500, {channels}]> y = transpose(perm = p, x = x)[name = string("y")];
+  }} -> (y);
+}}
+'''
+
+
+def positional_mil(channels: int, offset: int) -> str:
+    return f'''program(1.3)
+[buildInfo = dict<string, string>({{}})]
+{{
+  func main<ios18>(tensor<fp16, [1, 1500, {channels}]> x) {{
+    tensor<fp16, [1, 1500, {channels}]> p = const()[name = string("p"), val = tensor<fp16, [1, 1500, {channels}]>(BLOBFILE(path = string("@model_path/parameters.bin"), offset = uint64({offset})))];
+    tensor<fp16, [1, 1500, {channels}]> y = add(x = x, y = p)[name = string("y")];
+  }} -> (y);
+}}
+'''
+
+
 def canonical(task: bytes) -> dict:
     decoded = decode_task(task, "h16")
     return {"header": decoded["header_words"][:1] + decoded["header_words"][2:],
@@ -117,6 +163,45 @@ def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
     assert validation.returncode == 0, validation.stdout + validation.stderr
 
 
+def compile_and_validate(root: Path, name: str, source_text: str) -> Path:
+    source = root / f"{name}.mil"
+    source.write_text(source_text)
+    output = root / name
+    result = subprocess.run([str(COMPILER), "--mil", str(source),
+        "--model-root", str(root), "--target", "H16G", "--output", str(output)],
+        capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    image = output / "program-0.hwx"
+    validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
+        "--manifest", str(output / "manifest.json")], capture_output=True,
+        text=True, timeout=30)
+    assert validation.returncode == 0, validation.stdout + validation.stderr
+    return image
+
+
+def run_stem2_case(root: Path, channels: int, gelu: bool) -> None:
+    weights = pattern(channels * channels * 3, channels + int(gelu))
+    bias = pattern(channels, channels + int(gelu) + 1)
+    offsets = blob(root / "parameters.bin", [weights, bias])
+    image = compile_and_validate(root, f"stem2-{channels}-{int(gelu)}",
+                                 mil_stem2(channels, offsets, gelu))
+    kernel = section(image.read_bytes(), b"__kern_0")
+    table = kernel[:128] if gelu else b""
+    payload = weights + bias + table
+    expected = subprocess.run([str(DUMP), "kernel2", "3000", str(channels),
+        str(int(gelu))], input=payload, stdout=subprocess.PIPE,
+        timeout=120, check=True).stdout
+    assert hashlib.sha256(kernel).digest() == hashlib.sha256(expected).digest()
+
+
+def run_layout_tail(root: Path, channels: int) -> None:
+    compile_and_validate(root, f"transpose-{channels}", transpose_mil(channels))
+    position = pattern(1500 * channels, channels + 7)
+    offset = blob(root / "parameters.bin", [position])[0]
+    compile_and_validate(root, f"position-{channels}",
+                         positional_mil(channels, offset))
+
+
 def main() -> None:
     for (channels, gelu), (kernel_bytes, digest) in ROWS.items():
         payload = bytes(channels * 80 * 3 * 2 + channels * 2 +
@@ -138,8 +223,12 @@ def main() -> None:
         run_case(root, 3000, 512, True)
         run_case(root, 1000, 384, False)
         run_case(root, 3001, 512, True)
-    print("H16G Whisper stem1 PASS: 4 parity rows, CLI/validator, "
-          "2 unrevealed T held-outs")
+        run_stem2_case(root, 384, False)
+        run_stem2_case(root, 512, True)
+        run_layout_tail(root, 384)
+        run_layout_tail(root, 512)
+    print("H16G Whisper stem PASS: stem1 parity/held-outs; stem2, transpose, "
+          "positional-add CLI/validator")
 
 
 if __name__ == "__main__":

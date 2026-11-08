@@ -86,10 +86,10 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count per layer) | Shape (tiny / base) | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | refused (rank 3) | none | facts | 1x3 kernels over T=3000 |
-| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | refused | none | facts | stride-2 1x3 kernels |
-| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | refused | LUT on a 2048x2048 view | compiler | rank-3 LUT form |
-| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | refused | host | facts / compiler | |
+| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | native formula | one task | compiler; device pending | done |
+| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | compiler; device pending | done for d=384/512 |
+| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program | compiler; device pending | done |
+| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | compiler; device pending | device qualification |
 | `layer_norm` (2, +1 final) | `[1,1500,d]` | refused (planner SRAM overflow) | host | facts | tiled layer_norm |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | refused | square 1536/2048 matmul with padding | padded | constant-weight linear |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
@@ -123,9 +123,9 @@ change.
 
 ## What is needed next
 
-The missing facts are tracked as four research items: constant-weight linear
-at the transformer widths (with bias, GELU and output scale); layer_norm,
-softmax and rank-3 elementwise at transformer shapes; attention data movement
-and batched runtime matmul over heads; and the Whisper conv1d stem. Until
-they land, the padded routes above are the only H16G paths for these models,
-and they waste most of their multiply-accumulates.
+The remaining gaps are native layer_norm and S=1500 softmax, attention data
+movement and batched runtime matmul over heads, plus device qualification of
+the formula-built linear and Whisper stem programs. The two Whisper stem
+convolutions and encoder-axis transpose now have measured descriptor parity;
+the positional constant uses the established contiguous ALU packet with its
+constant in the fourth aperture.

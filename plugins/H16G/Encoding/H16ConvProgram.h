@@ -83,6 +83,19 @@ TransformerLinearProgram encodeWhisperStem1(
     const std::uint8_t *weights, std::size_t weightBytes,
     const std::uint8_t *bias, std::size_t biasBytes,
     TransformerLinearOptions options = {});
+
+/// Encode Whisper's biased 1x3, stride-2 stem projection. The measured
+/// programs are [1,C,3000] -> [1,C,1500] for C in {384,512}. The kernel
+/// writer is data dependent: both fp16 signed zeros clear their sparse mask
+/// bit and consume no coefficient bytes.
+TransformerLinearProgram encodeWhisperStem2(
+    std::uint32_t inputChannels, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options = {});
+
+/// Materialize Whisper's encoder-axis transpose
+/// [1,C,1500] -> [1,1500,C] for C in {384,512}.
+TransformerLinearProgram encodeWhisperTranspose(std::uint32_t channels);
 // Empty only for one of the nine measured geometries. Bias, VALID, dilation
 // and general scheduling are deliberately outside this API's envelope.
 std::string convRefusal(ConvShape shape);

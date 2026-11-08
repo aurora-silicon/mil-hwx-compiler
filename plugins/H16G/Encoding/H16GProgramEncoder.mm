@@ -81,6 +81,39 @@ static NSString *scalarLiteral(ANEGraphArgument *argument) {
     return nil;
 }
 
+static NSArray<NSString *> *listLiterals(ANEGraphArgument *argument) {
+    while (argument.kind==ANEGraphArgumentKindCall &&
+           argument.callArguments.count==1)
+        argument=argument.callArguments.firstObject.value;
+    if (argument.kind!=ANEGraphArgumentKindList) return nil;
+    NSMutableArray<NSString *> *result=[NSMutableArray array];
+    for (ANEGraphArgument *element in argument.elements) {
+        NSString *literal=scalarLiteral(element);
+        if (!literal) return nil;
+        [result addObject:literal];
+    }
+    return result;
+}
+
+static BOOL constantListOperandIs(ANEOperationGraph *graph,
+                                  ANEOperationNode *operation,
+                                  NSString *name,
+                                  NSArray<NSString *> *expected) {
+    ANEOperationNode *constant=producerForOperand(graph,operation,name);
+    return constant.sourceOperation &&
+        [listLiterals(constant.sourceOperation.attributes[@"val"])
+            isEqualToArray:expected];
+}
+
+static BOOL constantScalarOperandIs(ANEOperationGraph *graph,
+                                    ANEOperationNode *operation,
+                                    NSString *name, NSString *expected) {
+    ANEOperationNode *constant=producerForOperand(graph,operation,name);
+    return constant.sourceOperation &&
+        [scalarLiteral(constant.sourceOperation.attributes[@"val"])
+            isEqualToString:expected];
+}
+
 static BOOL fp16ScalarFromConstant(ANEOperationNode *node,
                                    uint16_t *bits) {
     NSString *text=scalarLiteral(node.sourceOperation.attributes[@"val"]);
@@ -245,7 +278,7 @@ static ANEHWXArtifact *encodeTransformerLinearProgram(
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }
 
-static ANEHWXArtifact *encodeWhisperStem1Program(
+static ANEHWXArtifact *encodeWhisperStemProgram(
     ANEOperationGraph *graph, NSURL *modelRoot,
     ANEDiagnosticEngine *diagnostics) {
     ANEOperationNode *conv=nil;
@@ -256,24 +289,38 @@ static ANEHWXArtifact *encodeWhisperStem1Program(
     ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
     NSArray<NSNumber *> *in=input.type.shape,*out=conv.outputType.shape;
     if (in.count!=3 || in[0].unsignedIntegerValue!=1 ||
-        in[1].unsignedIntegerValue!=80 ||
-        out[0].unsignedIntegerValue!=1 ||
-        out[2].unsignedIntegerValue!=in[2].unsignedIntegerValue)
+        out[0].unsignedIntegerValue!=1)
         return nil;
-    NSUInteger tokens=in[2].unsignedIntegerValue;
+    NSUInteger inputChannels=in[1].unsignedIntegerValue;
+    NSUInteger inputTokens=in[2].unsignedIntegerValue;
     NSUInteger channels=out[1].unsignedIntegerValue;
+    NSUInteger outputTokens=out[2].unsignedIntegerValue;
+    BOOL stem1=inputChannels==80 && outputTokens==inputTokens &&
+        (channels==384 || channels==512);
+    BOOL stem2=inputChannels==channels && inputTokens==3000 &&
+        outputTokens==1500 && (channels==384 || channels==512);
+    if (!stem1 && !stem2) return nil;
+    if (!constantScalarOperandIs(graph,conv,@"pad_type",@"same") ||
+        !constantListOperandIs(graph,conv,@"strides",
+            stem2 ? @[@"2"] : @[@"1"]) ||
+        !constantListOperandIs(graph,conv,@"pad",@[@"0",@"0"]) ||
+        !constantListOperandIs(graph,conv,@"dilations",@[@"1"]) ||
+        !constantScalarOperandIs(graph,conv,@"groups",@"1")) return nil;
     ANEOperationNode *weight=producerForOperand(graph,conv,@"weight");
     ANEOperationNode *bias=producerForOperand(graph,conv,@"bias");
     if (!weight.sourceOperation || !bias.sourceOperation ||
-        ![weight.outputType.shape isEqualToArray:@[@(channels),@80,@3]] ||
+        ![weight.outputType.shape isEqualToArray:
+            @[@(channels),@(inputChannels),@3]] ||
         ![bias.outputType.shape isEqualToArray:@[@(channels)]]) return nil;
     ANEOperationNode *result=conv;
     ANEOperationNode *post=conv.users.count==1 ? conv.users.firstObject : nil;
     BOOL gelu=[post.operationName isEqualToString:@"gelu"];
     if (post && !gelu) return nil;
     if (post) result=post;
+    if (![graph.outputValueNames.firstObject isEqualToString:result.identifier])
+        return nil;
     NSData *rawWeights=[ANEBlobResolver loadConstantForOperation:weight.sourceOperation
-        expectedBytes:channels*80*3*2 modelRoot:modelRoot diagnostics:diagnostics];
+        expectedBytes:channels*inputChannels*3*2 modelRoot:modelRoot diagnostics:diagnostics];
     NSData *rawBias=[ANEBlobResolver loadConstantForOperation:bias.sourceOperation
         expectedBytes:channels*2 modelRoot:modelRoot diagnostics:diagnostics];
     if (!rawWeights || !rawBias) return nil;
@@ -295,10 +342,13 @@ static ANEHWXArtifact *encodeWhisperStem1Program(
     }
     ane::h16::TransformerLinearProgram encoded;
     try {
-        encoded=ane::h16::encodeWhisperStem1((uint32_t)tokens,
-            (uint32_t)channels,
-            static_cast<const uint8_t *>(rawWeights.bytes),rawWeights.length,
-            static_cast<const uint8_t *>(rawBias.bytes),rawBias.length,options);
+        encoded=stem1 ? ane::h16::encodeWhisperStem1((uint32_t)inputTokens,
+                (uint32_t)channels,
+                static_cast<const uint8_t *>(rawWeights.bytes),rawWeights.length,
+                static_cast<const uint8_t *>(rawBias.bytes),rawBias.length,options)
+            : ane::h16::encodeWhisperStem2((uint32_t)channels,
+                static_cast<const uint8_t *>(rawWeights.bytes),rawWeights.length,
+                static_cast<const uint8_t *>(rawBias.bytes),rawBias.length,options);
     } catch (const std::exception &exception) {
         emitError(diagnostics,@"h16g.encode.whisper-stem-fields",
             [NSString stringWithUTF8String:exception.what()],conv);
@@ -321,7 +371,9 @@ static ANEHWXArtifact *encodeWhisperStem1Program(
             elementType:result.outputType.elementType shape:result.outputType.shape],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
-        initWithTaskCount:1 recordCount:0x10 formatCode:0 scratchByteLength:0
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode scratchByteLength:0
         descriptorLayout:HWXProgramDescriptorLayoutLinear];
     info.kernelRegionConstants=YES;
     NSError *error=nil;
@@ -339,7 +391,7 @@ static ANEHWXArtifact *encodeWhisperStem1Program(
         [[ANEHWXBinding alloc]initWithIdentifier:input.name
             role:ANESurfaceRoleInput logicalByteLength:inputBytes
             allocationByteLength:alignUp(inputBytes,0x4000) ioSurfaceIndex:0
-            rowStrideBytes:tokens*2 planeStrideBytes:inputBytes
+            rowStrideBytes:inputTokens*2 planeStrideBytes:inputBytes
             batchStrideBytes:inputBytes],
         [[ANEHWXBinding alloc]initWithIdentifier:weight.identifier
             role:ANESurfaceRoleWeight logicalByteLength:constants.length
@@ -347,8 +399,155 @@ static ANEHWXArtifact *encodeWhisperStem1Program(
         [[ANEHWXBinding alloc]initWithIdentifier:result.identifier
             role:ANESurfaceRoleOutput logicalByteLength:outputBytes
             allocationByteLength:alignUp(outputBytes,0x4000) ioSurfaceIndex:1
-            rowStrideBytes:tokens*2 planeStrideBytes:outputBytes
+            rowStrideBytes:outputTokens*2 planeStrideBytes:outputBytes
             batchStrideBytes:outputBytes],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+}
+
+static ANEHWXArtifact *encodeWhisperTransposeProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    ANEOperationNode *transpose=nil;
+    for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"transpose"])
+            transpose=node;
+    if (!transpose) return nil;
+    NSArray<NSNumber *> *in=input.type.shape,*out=transpose.outputType.shape;
+    if (in.count!=3 || out.count!=3 || in[0].unsignedIntegerValue!=1 ||
+        out[0].unsignedIntegerValue!=1 || in[2].unsignedIntegerValue!=1500 ||
+        out[1].unsignedIntegerValue!=1500 ||
+        out[2].unsignedIntegerValue!=in[1].unsignedIntegerValue ||
+        ![graph.outputValueNames.firstObject isEqualToString:transpose.identifier] ||
+        !constantListOperandIs(graph,transpose,@"perm",@[@"0",@"2",@"1"]))
+        return nil;
+    NSUInteger channels=in[1].unsignedIntegerValue;
+    ane::h16::TransformerLinearProgram encoded;
+    try {
+        encoded=ane::h16::encodeWhisperTranspose((uint32_t)channels);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.whisper-transpose-fields",
+            [NSString stringWithUTF8String:exception.what()],transpose);
+        return nil;
+    }
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType shape:in],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[transpose.identifier stringByAppendingString:@"@output"]
+            shortName:transpose.identifier role:HWXObjectBindingRoleOutput
+            elementType:transpose.outputType.elementType shape:out],
+    ];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:1 recordCount:encoded.programRecordCount
+        formatCode:0 scratchByteLength:0
+        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:objectBindings
+        kernelRelocationOffsets:@[] programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.whisper-transpose-object",
+            error.localizedDescription ?: @"cannot construct Whisper transpose HWX",
+            transpose);
+        return nil;
+    }
+    NSUInteger bytes=tensorBytes(input.type);
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name
+            role:ANESurfaceRoleInput logicalByteLength:bytes
+            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:3000 planeStrideBytes:bytes batchStrideBytes:bytes],
+        [[ANEHWXBinding alloc]initWithIdentifier:transpose.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:bytes
+            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:channels*2 planeStrideBytes:bytes batchStrideBytes:bytes],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+}
+
+static ANEHWXArtifact *encodeWhisperPositionalAddProgram(
+    ANEOperationGraph *graph, NSURL *modelRoot,
+    ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    ANEOperationNode *add=nil;
+    for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"add"]) add=node;
+    if (!add || ![input.type.shape isEqualToArray:add.outputType.shape] ||
+        input.type.shape.count!=3 || input.type.shape[0].unsignedIntegerValue!=1 ||
+        input.type.shape[1].unsignedIntegerValue!=1500 ||
+        (input.type.shape[2].unsignedIntegerValue!=384 &&
+         input.type.shape[2].unsignedIntegerValue!=512) ||
+        ![graph.outputValueNames.firstObject isEqualToString:add.identifier])
+        return nil;
+    ANEGraphValue *left=add.sourceOperation.operands[@"x"].value;
+    ANEGraphValue *right=add.sourceOperation.operands[@"y"].value;
+    ANEOperationNode *leftNode=producerForOperand(graph,add,@"x");
+    ANEOperationNode *rightNode=producerForOperand(graph,add,@"y");
+    ANEOperationNode *constant=nil;
+    if ([left.name isEqualToString:input.name] && rightNode.sourceOperation)
+        constant=rightNode;
+    else if ([right.name isEqualToString:input.name] && leftNode.sourceOperation)
+        constant=leftNode;
+    if (!constant || ![constant.operationName isEqualToString:@"const"] ||
+        ![constant.outputType.shape isEqualToArray:input.type.shape]) return nil;
+    NSUInteger logicalBytes=tensorBytes(input.type);
+    NSData *raw=[ANEBlobResolver loadConstantForOperation:constant.sourceOperation
+        expectedBytes:logicalBytes modelRoot:modelRoot diagnostics:diagnostics];
+    if (!raw) return nil;
+    const NSUInteger size=1024,storageBytes=size*size*2;
+    NSError *error=nil;
+    H16GEncodedTDProgram *program=[H16GALUEncoder
+        encodeOperationName:@"add" squareSize:size error:&error];
+    if (!program) {
+        emitError(diagnostics,@"h16g.encode.whisper-positional-add-fields",
+            error.localizedDescription ?: @"cannot encode positional add",add);
+        return nil;
+    }
+    NSMutableData *constants=[NSMutableData dataWithLength:storageBytes];
+    [constants replaceBytesInRange:NSMakeRange(0,raw.length) withBytes:raw.bytes];
+    NSArray<NSNumber *> *view=@[@1,@1,@1024,@1024];
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType shape:view],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[add.identifier stringByAppendingString:@"@output"]
+            shortName:add.identifier role:HWXObjectBindingRoleOutput
+            elementType:add.outputType.elementType shape:view],
+    ];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:1 recordCount:program.programRecordCount
+        formatCode:program.programFormatCode scratchByteLength:0
+        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    info.kernelRegionConstants=YES;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:program.data
+        constantRegion:constants bindings:objectBindings kernelRelocationOffsets:@[]
+        programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.whisper-positional-add-object",
+            error.localizedDescription ?: @"cannot construct positional add HWX",add);
+        return nil;
+    }
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name
+            role:ANESurfaceRoleInput logicalByteLength:logicalBytes
+            allocationByteLength:storageBytes ioSurfaceIndex:0
+            rowStrideBytes:size*2 planeStrideBytes:storageBytes
+            batchStrideBytes:storageBytes],
+        [[ANEHWXBinding alloc]initWithIdentifier:constant.identifier
+            role:ANESurfaceRoleWeight logicalByteLength:storageBytes
+            allocationByteLength:storageBytes ioSurfaceIndex:-1],
+        [[ANEHWXBinding alloc]initWithIdentifier:add.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:logicalBytes
+            allocationByteLength:storageBytes ioSurfaceIndex:1
+            rowStrideBytes:size*2 planeStrideBytes:storageBytes
+            batchStrideBytes:storageBytes],
     ];
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }
@@ -1229,11 +1428,21 @@ static ANEHWXArtifact *encodeLayoutProgram(
                         modelRoot:(NSURL *)modelRoot
                       diagnostics:(ANEDiagnosticEngine *)diagnostics {
     for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"add"] &&
+            graph.sourceFunction.inputs.count==1)
+            return encodeWhisperPositionalAddProgram(graph,modelRoot,diagnostics);
+    for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"transpose"] &&
+            graph.sourceFunction.inputs.firstObject.type.shape.count==3)
+            return encodeWhisperTransposeProgram(graph,diagnostics);
+    for (ANEOperationNode *node in graph.nodes)
         if ([node.operationName isEqualToString:@"conv"] &&
             node.outputType.shape.count==3 &&
             graph.sourceFunction.inputs.firstObject.type.shape.count==3 &&
-            graph.sourceFunction.inputs.firstObject.type.shape[1].unsignedIntegerValue==80)
-            return encodeWhisperStem1Program(graph,modelRoot,diagnostics);
+            (graph.sourceFunction.inputs.firstObject.type.shape[1].unsignedIntegerValue==80 ||
+             graph.sourceFunction.inputs.firstObject.type.shape[1].unsignedIntegerValue==384 ||
+             graph.sourceFunction.inputs.firstObject.type.shape[1].unsignedIntegerValue==512))
+            return encodeWhisperStemProgram(graph,modelRoot,diagnostics);
     for (ANEOperationNode *node in graph.nodes)
         if ([node.operationName isEqualToString:@"linear"])
             return encodeTransformerLinearProgram(graph,scheduled,modelRoot,

@@ -289,7 +289,10 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     p = programs[0]
     require(len(p) in (0x8a0, 0x8c0), "program-size")
     mixed = len(p) == 0x8c0
-    require(u32(p, 0x860) in (0x10, 0x12, 0x1f, 0x20), "program-record-code")
+    # One-task materialized transposes use record code 3; convolution,
+    # linear and mixed programs use the established larger codes.
+    require(u32(p, 0x860) in (0x03, 0x10, 0x12, 0x1f, 0x20, 0x2d),
+            "program-record-code")
     fmt = u32(p, 0x8b0 if mixed else 0x890)
     require(fmt in FORMATS, "program-format-code")
     require(u64(p, 0x10) == u64(p, 0x810) == text['vm'] and

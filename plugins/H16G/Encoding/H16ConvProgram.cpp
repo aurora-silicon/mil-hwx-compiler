@@ -110,9 +110,11 @@ void pack(Task &t) {
     t.bytes.clear();
     for (U32 h : t.header) word(t.bytes, h);
     if (t.registers.count(0x5500)) {
-        std::vector<U32> coefficients{0x5500};
-        for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
-        record(t,coefficients); range(t,0x5544,0x555c);
+        if (t.registers.count(0x5520)) {
+            std::vector<U32> coefficients{0x5500};
+            for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
+            record(t,coefficients); range(t,0x5544,0x555c);
+        } else record(t,{0x5500});
     }
     // Reset chunk size 64 is omitted, including mixed sparse tables.
     // Split across a default hole; contiguous offsets/sizes share a record.
@@ -506,6 +508,155 @@ Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
     pack(t);
     return t;
 }
+
+std::vector<U32> whisperStem2Slices(U32 channels, bool gelu) {
+    if (channels==384) return gelu ? std::vector<U32>{128,256}
+                                   : std::vector<U32>{384};
+    return gelu ? std::vector<U32>{64,224,224}
+                : std::vector<U32>{208,288,16};
+}
+
+std::vector<U32> whisperStem2FirstOutputs(U32 channels, bool gelu) {
+    if (channels==384) return gelu ? std::vector<U32>{256,0}
+                                   : std::vector<U32>{0};
+    return gelu ? std::vector<U32>{448,224,0}
+                : std::vector<U32>{304,0,288};
+}
+
+bool whisperStemNonzeroHalf(const std::uint8_t *value) {
+    return value[0] || (value[1]&0x7f);
+}
+void whisperStemHalf(std::vector<std::uint8_t> &out,
+                     const std::uint8_t *value) {
+    out.push_back(value[0]); out.push_back(value[1]);
+}
+
+// One output-lane group of the phase-sparse 1x3 writer. Each input channel
+// occupies four even-width phase rows: taps 0,2,1, then an all-zero row.
+// Sixteen logical halfword slots share one little-endian nonzero mask.
+// Signed zero is structural zero; every other fp16 bit pattern is retained.
+std::vector<std::uint8_t> packWhisperStem2Group(
+    U32 cin, U32 firstOutput, U32 outputs, U32 group,
+    const std::uint8_t *weights, const std::uint8_t *bias,
+    const std::uint8_t *table, std::size_t tableBytes) {
+    std::vector<std::uint8_t> out;
+    if (tableBytes) out.insert(out.end(),table,table+tableBytes);
+    U32 chunkFirst=0;
+    for (U32 width : linearLaneWidths(outputs)) {
+        std::vector<U32> indices;
+        for (U32 lane=0;lane<width;++lane)
+            indices.push_back(firstOutput+chunkFirst+group*width+lane);
+        for (U32 output : indices) whisperStemHalf(out,bias+2*output);
+        U32 encoded=(13*width*cin+511)/512;
+        encoded=(encoded+1)&~U32(1);
+        out.push_back(0); out.push_back(std::uint8_t(encoded));
+        out.push_back(std::uint8_t(encoded>>8));
+
+        const U32 evenWidth=(width+1)&~U32(1);
+        std::vector<const std::uint8_t *> slots;
+        slots.reserve(std::size_t(cin)*4*evenWidth);
+        for (U32 input=0;input<cin;++input) {
+            for (U32 tap : {0u,2u,1u}) {
+                for (U32 output : indices)
+                    slots.push_back(weights+2*((std::size_t(output)*cin+input)*3+tap));
+                for (U32 lane=width;lane<evenWidth;++lane) slots.push_back(nullptr);
+            }
+            for (U32 lane=0;lane<evenWidth;++lane) slots.push_back(nullptr);
+        }
+        if (slots.size()%16) throw std::logic_error(
+            "Whisper sparse plane is not a whole mask vector");
+        for (std::size_t at=0;at<slots.size();at+=16) {
+            U32 mask=0;
+            for (U32 lane=0;lane<16;++lane)
+                if (slots[at+lane] && whisperStemNonzeroHalf(slots[at+lane]))
+                    mask|=1u<<lane;
+            out.push_back(std::uint8_t(mask)); out.push_back(std::uint8_t(mask>>8));
+            for (U32 lane=0;lane<16;++lane)
+                if (mask&(1u<<lane)) whisperStemHalf(out,slots[at+lane]);
+        }
+        chunkFirst+=16*width;
+    }
+    while (out.size()%64) out.push_back(0);
+    return out;
+}
+
+Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
+                      U32 taskIndex, U32 taskCount, U32 kernelBase,
+                      const std::array<U32,16> &chunkBytes, bool gelu) {
+    Task t;
+    t.kernelSlotFlags=0x23800000;
+    t.sourceSlotFlags=0x22800000;
+    t.resultSlotFlags=0x23000000;
+    const bool first=taskIndex==0,last=taskIndex+1==taskCount;
+    t.header={taskIndex,0,first ? (last ? 0x04000068u : 0x68u)
+                               : (last ? 0x04000000u : 0u),
+              0,first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+              0,0,0,last ? 0x50009u : 0x50001u};
+    auto &r=t.registers;
+    r[4]=3000; r[8]=1; r[0xc]=cin;
+    r[0x14]=1500; r[0x18]=1;
+    // The one-lane tail uses the measured zero code for sixteen outputs.
+    if (slice!=16) r[0x1c]=slice;
+    r[0x28]=0x5000c043; r[0x34]=1; r[0x3c]=0x200000;
+    if (slice==64) r[0x40]=2;
+    else if (slice!=128) r[0x40]=4;
+    r[0x4c]=0x100000;
+    r[0x4104]=first ? 0x500172 : 0x142;
+    if (first) r[0x4108]=0x500130;
+    r[0x4114]=0x240;
+    r[0x4118]=r[0x411c]=r[0x4120]=cin*0x240;
+    r[0x4148]=first ? 0x50017a : 0x14a;
+    r[0x414c]=cin*0x240;
+    r[0x4900]=0x182; r[0x4904]=0x103c10|(gelu ? 0x20000 : 0);
+    r[0x4910]=0x3c00;
+    r[0x4d00]=taskIndex<<16|(last ? (first ? 0x21 : 0xc1) : 0xe1);
+    r[0x4d08]=last ? 0xce : 0xee;
+    r[0x4d10]=r[0x4d14]=0; r[0x4d1c]=align64(6000);
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031|taskIndex<<16;
+    r[0x5108]=firstOutput*align64(3000); r[0x510c]=0;
+    r[0x5114]=align64(3000); r[0x5138]=0x1302031;
+    r[0x5500]=(taskIndex+1)<<16|(last ? 0x2e0 : 0x260);
+    r[0x5510]=kernelBase; r[0x5514]=0;
+    U32 offset=0;
+    for (U32 lane=0;lane<16;++lane) {
+        r[0x5520+4*lane]=taskIndex<<16|0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (chunkBytes[lane]!=64) r[0x55a0+4*lane]=chunkBytes[lane];
+        offset+=chunkBytes[lane];
+    }
+    if (last) {
+        r[0x5900]=0x12; r[0x5904]=0xa000a0;
+        if (!first) r[0x5908]=taskIndex<<16|0xe0;
+        r[0x5918]=0; r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    }
+    pack(t);
+    return t;
+}
+
+Task whisperTransposeTask(U32 channels) {
+    Task t;
+    t.sourceSlotFlags=0x22800000;
+    t.resultSlotFlags=0x23000000;
+    t.header={0,0,0x04000068,0,0x68,0,0,0,0x50009};
+    auto &r=t.registers;
+    r[0x5500]=0x80;
+    r[4]=r[0x14]=1500; r[8]=r[0x18]=1;
+    r[0xc]=r[0x1c]=channels;
+    r[0x30]=0x84000; r[0x34]=1; r[0x3c]=0x30210100; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130; r[0x4114]=0x100;
+    r[0x4118]=r[0x411c]=r[0x4120]=channels*0x100;
+    r[0x4148]=0x50017a; r[0x414c]=channels*0x100;
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=align64(3000); r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=2*channels; r[0x5138]=0x1302031;
+    r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5918]=0;
+    r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    pack(t);
+    return t;
+}
 }
 
 std::string transformerLinearRefusal(U32 tokens, U32 cin, U32 cout,
@@ -611,6 +762,82 @@ TransformerLinearProgram encodeWhisperStem1(
     program.inputs={tensor(80,5)}; program.output=tensor(cout,4);
     program.formulaBuilt=true;
     result.programRecordCount=0x10; result.programFormatCode=0;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperStem2(
+    U32 channels, const std::uint8_t *weights, std::size_t weightBytes,
+    const std::uint8_t *bias, std::size_t biasBytes,
+    TransformerLinearOptions options) {
+    if (channels!=384 && channels!=512)
+        throw std::invalid_argument("Whisper stem2 requires C384 or C512");
+    if (!options.bias || !weights || !bias ||
+        weightBytes!=std::size_t(channels)*channels*3*2 ||
+        biasBytes!=std::size_t(channels)*2)
+        throw std::invalid_argument(
+            "Whisper stem2 requires fp16 [C,C,3] weights and [C] bias");
+    if (options.gelu && (!options.geluTable || options.geluTableBytes!=128))
+        throw std::invalid_argument(
+            "Whisper stem2 GELU requires the decoded 128-byte table");
+    const auto slices=whisperStem2Slices(channels,options.gelu);
+    const auto firstOutputs=whisperStem2FirstOutputs(channels,options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    U32 kernelBase=0;
+    std::size_t firstTaskBytes=0;
+    for (U32 index=0;index<slices.size();++index) {
+        std::array<U32,16> chunkBytes{};
+        for (U32 group=0;group<16;++group) {
+            auto packed=packWhisperStem2Group(channels,firstOutputs[index],
+                slices[index],group,weights,bias,
+                options.gelu ? options.geluTable : nullptr,
+                options.gelu ? options.geluTableBytes : 0);
+            chunkBytes[group]=U32(packed.size());
+            program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        }
+        Task task=whisperStem2Task(channels,slices[index],firstOutputs[index],
+            index,U32(slices.size()),kernelBase,chunkBytes,options.gelu);
+        if (!index) firstTaskBytes=task.bytes.size();
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        program.kernelRelocations.push_back(program.task.size()+task.kernelRelocation);
+        program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+        for (U32 bytes : chunkBytes) kernelBase+=bytes;
+    }
+    program.taskCount=U32(slices.size());
+    program.firstTaskBytes=firstTaskBytes;
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[](U32 height,U32 width,U32 index) {
+        const std::uint64_t row=2*width,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,width,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(channels,3000,5)};
+    program.output=tensor(channels,1500,4); program.formulaBuilt=true;
+    result.programRecordCount=slices.size()==1 ? 0x10 :
+                              slices.size()==2 ? 0x1f : 0x2d;
+    result.programFormatCode=0;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperTranspose(U32 channels) {
+    if (channels!=384 && channels!=512)
+        throw std::invalid_argument("Whisper transpose requires C384 or C512");
+    Task task=whisperTransposeTask(channels);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    program.taskCount=1; program.firstTaskBytes=task.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[](U32 height,U32 width,U32 index) {
+        const std::uint64_t row=2*width,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,width,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(channels,1500,5)};
+    program.output=tensor(1500,channels,4); program.formulaBuilt=true;
+    result.programRecordCount=3; result.programFormatCode=0;
     return result;
 }
 

@@ -388,6 +388,7 @@ test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_line
 	python3 tests/test_h16g_transformer_linear_parity.py $(BUILD)/h16_transformer_linear_dump
 	python3 tests/test_h16g_transformer_linear_cli.py $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump
 	python3 tests/test_h16g_whisper_stem_cli.py $(BUILD)/mil-hwxc $(BUILD)/h16_whisper_stem_dump
+	python3 tests/test_h16g_whisper_stem2_parity.py $(BUILD)/h16_whisper_stem_dump
 .PHONY: test-h16g-attention-reference
 # NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
 test-h16g-attention-reference:
