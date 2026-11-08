@@ -34,8 +34,9 @@ def fixture(*, mixed=False, kernel=False, batch=1):
     vm = base + (0x4000 if mixed else 0)
     textvm = vm + 0x8000
     kernvm = textvm + 0x8000
-    task = struct.pack('<16I', 1, 0, 0, 0, 11 << 16 | 1,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    # Prologue plus one eleven-word task, ending exactly at its last word.
+    task = struct.pack('<15I', 1, 0, 0, 0, 11 << 16 | 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     commands = []
     if mixed:
         commands.append(segment(b'__DATA', base, 0x4000, 3,
@@ -172,7 +173,7 @@ class ValidationTests(unittest.TestCase):
             'aperture-interior': (p + 0x70, 0x30000004),
             'aperture-reserved': (p + 0x78, 1), 'aperture-hole': (p + 0x80, 0),
             'aperture-tail': (p + 0xb0, 0x30000000),
-            'text-duplicate': (p + 0x810, 0), 'text-word-count': (p + 0x824, 15),
+            'text-duplicate': (p + 0x810, 0), 'text-word-count': (p + 0x824, 16),
             'task-count': (p + 0x830, 2), 'record-code': (p + 0x860, 0x11),
             'format-code': (p + 0x890, 0x8), 'program-reserved': (p + 0x100, 1),
             'linear-scratch': (p + 0x40, 0x30000000),
@@ -181,7 +182,8 @@ class ValidationTests(unittest.TestCase):
             'relocation-unaligned': (0x3000, 55), 'relocation-outside': (0x3000, 64),
             'relocation-addend': (0x4000 + 56, 16), 'task-prefix': (0x4000, 0),
             'task-size': (0x4010, 2047 << 16), 'task-register': (0x4034, 0x7fff),
-            'task-padding': (0x403c, 1), 'symbol-ordinal': (0x3014, 0xff000f),
+            # Padding between and after tasks: tests/test_h16g_task_padding.py.
+            'symbol-ordinal': (0x3014, 0xff000f),
             'symbol-string': (0x3010, 5), 'symbol-interior': (0x3018, 0x30000004),
         }
         for label, (off, value) in mutations.items():
