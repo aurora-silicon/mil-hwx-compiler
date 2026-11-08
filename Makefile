@@ -323,6 +323,7 @@ test-hwx-inspection:
 .PHONY: test-h16g-validation
 test-h16g-validation: $(BUILD)/prepare_alu
 	python3 tests/test_h16g_validation.py
+	python3 tests/test_h16g_task_padding.py
 	python3 tests/test_h16g_owner.py $(BUILD)/prepare_alu
 
 .PHONY: test-spatial-reference
