@@ -16,8 +16,6 @@ from pathlib import Path
 
 OWNER_SHA256 = "231f54c28ea6b14a2867fac78eac1a2cb22aa3b0eeaa28113ed03c520b83a1d3"
 U64_MAX = (1 << 64) - 1
-FORMATS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17,
-           18, 20, 21, 23, 27, 30, 31, 36, 41, 43, 72, 145}
 REGISTER_BLOCKS = ((0, 0x5c), (0x4100, 0x41a4), (0x44d0, 0x44d4),
                    (0x4500, 0x453c), (0x4900, 0x4930), (0x4d00, 0x4e44),
                    (0x5100, 0x5154), (0x5500, 0x5620), (0x5900, 0x5930))
@@ -75,17 +73,18 @@ def no_overlap(ranges: list[tuple[int, int]], code: str) -> None:
     require(all(a[1] <= b[0] for a, b in zip(ranges, ranges[1:])), code)
 
 
-def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
+def task_stream(data: bytes, expected: int, policy: str = 'driver', *,
+                record_hint: int | None = None) -> int:
     """Same bounded stream walk as ane_h16_task_stream_validate.
 
-    Record-count and format words are opaque and never size this walk.
+    Hints never size this walk; record_hint is bounded only after it succeeds.
     """
     require(policy in ('driver', 'public'), "unknown-task-policy")
     # 'public' remains a CLI alias; both use the corrected H16 driver contract.
     prefix = b'\x01' + bytes(15)
     require(expected > 0 and 16 <= len(data) <= 0x60000 and
             len(data) % 4 == 0 and data[:16] == prefix, "task-envelope")
-    pos, count = 16, 0
+    pos, count, record_limit = 16, 0, 0
     while pos < len(data):
         region(pos, 16, len(data), "task-header")
         words = (u32(data, pos) >> 16) & 0x7ff
@@ -99,6 +98,8 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
         header = 10 if u32(data, pos + 32) & 3 == 3 else 9
         require(words >= header, "task-header")
         rec = pos + header * 4
+        # Each minimum-sized record needs a header and a register value.
+        record_limit += (end - rec) // 8
         while rec < end:
             h = u32(data, rec)
             base, mask = h & 0x7fff, (h >> 15) & 0xffff
@@ -120,6 +121,8 @@ def task_stream(data: bytes, expected: int, policy: str = 'driver') -> int:
         count += 1
         require(count <= expected, "task-count")
     require(count == expected, "task-count")
+    if record_hint is not None:
+        require(0 < record_hint <= record_limit, "program-record-bound")
     return count
 
 
@@ -285,9 +288,9 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     p = programs[0]
     require(len(p) in (0x8a0, 0x8c0), "program-size")
     mixed = len(p) == 0x8c0
-    require(u32(p, 0x860) in (0x10, 0x12, 0x1f, 0x20), "program-record-code")
-    fmt = u32(p, 0x8b0 if mixed else 0x890)
-    require(fmt in FORMATS, "program-format-code")
+    work = u32(p, 0x8b0 if mixed else 0x890)
+    # A bounded hint, never allocation, mapping or task-stream authority.
+    require(work <= sum(s['size'] for s in surface), "program-work-bound")
     require(u64(p, 0x10) == u64(p, 0x810) == text['vm'] and
             u64(p, 0x20) == const['vm'] and u32(p, 0x824) * 4 == text['size'], "program-text")
     require(bool(scratch) == mixed, "program-scratch")
@@ -305,9 +308,9 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     words.update(({0x858: u32(p, 0x858), 0x878: 2, 0x87c: 8,
                    0x880: u32(p, 0x858), 0x888: 3, 0x88c: 8, 0x890: 0x08020004,
                    0x894: 8, 0x898: 7, 0x89c: 8, 0x8a0: 0x461c4000,
-                   0x8a8: 9, 0x8ac: 8, 0x8b0: fmt} if mixed else
+                   0x8a8: 9, 0x8ac: 8, 0x8b0: work} if mixed else
                   {0x878: 7, 0x87c: 8, 0x880: 0x461c4000, 0x888: 9,
-                   0x88c: 8, 0x890: fmt}))
+                   0x88c: 8, 0x890: work}))
     for off, value in words.items():
         struct.pack_into('<I', expected, off, value)
     addresses = {0x10: text['vm'], 0x20: const['vm'], 0x810: text['vm']}
@@ -320,7 +323,8 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     expected[noff:noff + 5] = b'main\0'
     require(p == expected, "program-fixed-reserved-or-apertures")
     taskdata = data[text['off']:text['off'] + text['size']]
-    tasks = task_stream(taskdata, u32(p, 0x830), task_policy)
+    tasks = task_stream(taskdata, u32(p, 0x830), task_policy,
+                        record_hint=u32(p, 0x860))
     # Relocation fields follow the driver gate, including section ordinal,
     # unique aligned patch sites, and bounded unsigned kernel addends.
     seen = set()
