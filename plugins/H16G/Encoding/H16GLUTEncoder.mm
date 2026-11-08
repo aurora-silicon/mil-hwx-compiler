@@ -136,6 +136,18 @@ static void setError(NSError **error, NSString *message) {
     return supported && geometryForShape(inputShape) != NULL;
 }
 
++ (NSUInteger)squareViewSizeForOperationName:(NSString *)operationName
+                                elementCount:(NSUInteger)elementCount {
+    if (elementCount == 0) return NSNotFound;
+    for (const H16GUnaryGeometry &row : kUnaryGeometries) {
+        NSArray<NSNumber *> *view = @[@1,@1,@(row.size),@(row.size)];
+        if (row.size*row.size >= elementCount &&
+            [self supportsOperationName:operationName inputShape:view])
+            return row.size;
+    }
+    return NSNotFound;
+}
+
 + (H16GEncodedTDProgram *)encodeOperationName:(NSString *)operationName
                                     inputShape:(NSArray<NSNumber *> *)inputShape
                                          error:(NSError **)error {

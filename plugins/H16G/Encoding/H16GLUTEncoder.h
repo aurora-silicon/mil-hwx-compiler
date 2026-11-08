@@ -7,6 +7,11 @@ NS_ASSUME_NONNULL_BEGIN
 @interface H16GLUTEncoder : NSObject
 + (BOOL)supportsOperationName:(NSString *)operationName
                    inputShape:(NSArray<NSNumber *> *)inputShape;
+/// Smallest measured square N with N*N >= elementCount for which the
+/// operation has a [1,1,N,N] program, or NSNotFound. See the ALU encoder
+/// for the contiguous-view contract.
++ (NSUInteger)squareViewSizeForOperationName:(NSString *)operationName
+                                elementCount:(NSUInteger)elementCount;
 + (nullable H16GEncodedTDProgram *)encodeOperationName:(NSString *)operationName
                                              inputShape:(NSArray<NSNumber *> *)inputShape
                                                   error:(NSError **)error;
