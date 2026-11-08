@@ -70,17 +70,17 @@ work; **facts** = needs new field facts for this geometry.
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
 | `layer_norm` (2) | `[1,128,768]` last axis | refused | host | facts | layer_norm at transformer widths |
-| `linear` d->d (4) | `[1,128,768] x 768x768` | refused | square 896 matmul, weights as a runtime surface, bias via a ones column | padded (7x MACs) | constant-weight linear (1x1 conv over tokens) |
+| `linear` d->d (4) | `[1,128,768] x 768x768` | refused | square 896 matmul, weights as a runtime surface, bias via a ones column; or 512-square tiles plus adds | padded (7-8x MACs); 896 refused by the kernel loader, 512 tiles run | constant-weight linear (1x1 conv over tokens) |
 | `linear` d->4d (1) | `768 -> 3072` | refused | 4 x square 896 | padded | same |
 | `linear` 4d->d (1) | `3072 -> 768` | refused | 4 x square 896 + adds | padded | same |
 | `reshape` (4) | head split/merge | refused | layout only | compiler | fold into producer/consumer strides |
 | `transpose` (4) | perm 0,2,1,3 / 0,2,3,1 | refused | host | facts | transposes as DMA strides or layout tasks |
 | `mul` 1/8 (1) | scores | refused alone | output-scale word of the score matmul | device (fused) | done |
-| `matmul` QK^T (1) | `[1,12,128,64] x [1,12,64,128]` | refused | per head: d_head zero-padded 64->128, attention chain program 0 | padded (2x) | batched runtime matmul over heads |
-| `softmax` (1) | `[1,12,128,128]` | refused | per head: attention chain program 1 | device per head | batched heads |
-| `matmul` PV (1) | `[1,12,128,128] x [1,12,128,64]` | refused | per head: attention chain program 2 | padded (2x) | batched runtime matmul |
-| `gelu` (1) | `[1,128,3072]` | refused | host, or LUT on a `[1,1,1024,1024]` view of the contiguous tensor | compiler | rank-3 LUT form |
-| `add` residual (2) | `[1,128,768]` | refused | host, or ALU on a `[1,1,512,512]` view | compiler | rank-3 ALU form |
+| `matmul` QK^T (1) | `[1,12,128,64] x [1,12,64,128]` | refused | per head: d_head zero-padded 64->128, attention chain program 0 | device, padded (2x) | batched runtime matmul over heads |
+| `softmax` (1) | `[1,12,128,128]` | refused | per head: attention chain program 1 (7 tasks) | compiles; kernel loader refuses | batched heads |
+| `matmul` PV (1) | `[1,12,128,128] x [1,12,128,64]` | refused | per head: attention chain program 2 (same form as the score matmul) | padded (2x); waits for softmax | batched runtime matmul |
+| `gelu` (1) | `[1,128,3072]` | refused | LUT on a contiguous view: 1024 view, or two 512 views of the halves | done in this change (512 form device-checked) | rank-3 LUT form |
+| `add` residual (2) | `[1,128,768]` | refused | ALU on a `[1,1,512,512]` view | device (this change) | rank-3 ALU form |
 
 ### Whisper-tiny / Whisper-base encoder (S=1500)
 
@@ -98,8 +98,28 @@ work; **facts** = needs new field facts for this geometry.
 
 ## Device results
 
-See the receipt for the J616s run of the staged forms and of a BERT
-self-attention sub-block built from them.
+[The J616s receipt](../../receipts/2026-11-08-h16g-staged-linux-j616s/README.md)
+ran the staged forms under Linux on 2026-11-08. Single-task programs and the
+two-task square matmul (128 to 512, with or without the fused output scale)
+load, run and match their float64 references, including the contiguous-view
+residual add `[1,128,768]`. Programs with more tasks (softmax, square matmul
+from 768 up, the decoded four-head attention) and the single-task ALU and LUT
+programs at 1024 and 2048 are refused by the kernel loader, whose accepted
+values for two program-descriptor words are an enumerated list. So on Linux
+today:
+
+| Piece | Runs on the Linux ANE now |
+| --- | --- |
+| Attention score matmul per head, with the 1/8 scale fused | yes (S=128, d_head padded to 128) |
+| Attention softmax, context matmul | no (softmax is a 7-task program) |
+| Projections and FFN matmuls | only through 512-square tiles plus adds |
+| Residual add, BERT shapes | yes (512 view) |
+| FFN GELU `[1,128,3072]` | yes as two 512 views; the 1024 view is refused |
+| layer_norm | no form |
+
+Once the loader accepts these words by their meaning, the padded BERT
+self-attention and FFN sub-blocks built from the forms above need no compiler
+change.
 
 ## What is needed next
 

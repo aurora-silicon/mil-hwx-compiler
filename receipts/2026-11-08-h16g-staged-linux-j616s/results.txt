@@ -1,0 +1,138 @@
+7.3.0-aurora-fleet30
+fcc80c9e
+accel0
+== add128.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 2, 1]
+host latency over 30 runs: p50 175.1 us, p90 198.1 us, p99 279.8 us, mean 154.0 us
+PASS
+== add2048.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== add512.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [524288, 524288, 524288], directions [1, 2, 1]
+host latency over 30 runs: p50 170.2 us, p90 229.2 us, p99 335.1 us, mean 176.9 us
+PASS
+== attn4h.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== bert_head.pv.log
+device /dev/accel/accel0, H16
+loaded in 0.4 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 1, 2]
+Traceback (most recent call last):
+  File "/var/tmp/ane2/kit1/ane-run.py", line 215, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/var/tmp/ane2/kit1/ane-run.py", line 180, in main
+    data = f.read_bytes()[:sizes[i]]
+           ~~~~~~~~~~~~^^
+  File "/usr/lib64/python3.15/pathlib/__init__.py", line 976, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.15/pathlib/__init__.py", line 970, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/var/tmp/ane2/kit1/bert_head/dev_probs.bin'
+== bert_head.qk.log
+device /dev/accel/accel0, H16
+loaded in 0.4 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 1, 2]
+host latency over 30 runs: p50 169.4 us, p90 231.2 us, p99 254.1 us, mean 173.4 us
+PASS
+== bert_head.sm.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== bert_head.vp.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 1, 2]
+Traceback (most recent call last):
+  File "/var/tmp/ane2/kit1/ane-run.py", line 215, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/var/tmp/ane2/kit1/ane-run.py", line 180, in main
+    data = f.read_bytes()[:sizes[i]]
+           ~~~~~~~~~~~~^^
+  File "/usr/lib64/python3.15/pathlib/__init__.py", line 976, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.15/pathlib/__init__.py", line 970, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/var/tmp/ane2/kit1/bert_head/dev_probs.bin'
+== exp128.a.log
+device /dev/accel/accel0, H16
+loaded in 0.4 ms: 2 surfaces, sizes [32768, 32768], directions [1, 2]
+host latency over 30 runs: p50 167.3 us, p90 217.8 us, p99 249.4 us, mean 152.6 us
+PASS
+== exp2048.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== exp512.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 2 surfaces, sizes [524288, 524288], directions [1, 2]
+host latency over 30 runs: p50 146.7 us, p90 163.5 us, p99 310.4 us, mean 152.0 us
+PASS
+== gelu128.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 2 surfaces, sizes [32768, 32768], directions [1, 2]
+host latency over 30 runs: p50 162.2 us, p90 185.7 us, p99 265.0 us, mean 145.4 us
+PASS
+== gelu2048.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== gelu512.a.log
+device /dev/accel/accel0, H16
+loaded in 0.4 ms: 2 surfaces, sizes [524288, 524288], directions [1, 2]
+host latency over 30 runs: p50 147.2 us, p90 184.1 us, p99 293.3 us, mean 154.4 us
+PASS
+== mm128.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 1, 2]
+host latency over 30 runs: p50 168.0 us, p90 187.7 us, p99 260.1 us, mean 173.2 us
+PASS
+== mm1536.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== mm256.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [131072, 131072, 131072], directions [1, 1, 2]
+host latency over 30 runs: p50 174.9 us, p90 178.6 us, p99 269.8 us, mean 175.5 us
+PASS
+== mm3072.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== mm512.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [524288, 524288, 524288], directions [1, 1, 2]
+host latency over 30 runs: p50 222.5 us, p90 250.5 us, p99 297.5 us, mean 224.7 us
+PASS
+== mm768.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== mul128.a.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [32768, 32768, 32768], directions [1, 2, 1]
+host latency over 30 runs: p50 173.0 us, p90 182.6 us, p99 263.4 us, mean 154.4 us
+PASS
+== mul2048.a.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== mul512.a.log
+device /dev/accel/accel0, H16
+loaded in 0.3 ms: 3 surfaces, sizes [524288, 524288, 524288], directions [1, 2, 1]
+host latency over 30 runs: p50 197.6 us, p90 213.6 us, p99 294.3 us, mean 183.7 us
+PASS
+== add_bert.log
+device /dev/accel/accel0, H16
+loaded in 0.5 ms: 3 surfaces, sizes [524288, 524288, 524288], directions [1, 2, 1]
+host latency over 30 runs: p50 176.0 us, p90 225.3 us, p99 339.3 us, mean 183.8 us
+PASS
+== add_wtiny.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== gelu_bert.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
+== gelu_wtiny.log
+device /dev/accel/accel0, H16
+FAIL: H16_LOAD: Exec format error
