@@ -9,6 +9,7 @@ reference independent of a particular descriptor hypothesis.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -126,6 +127,7 @@ def write_raw(directory: Path, arrays: dict[str, np.ndarray], metadata: dict):
             "shape": list(array.shape),
             "dtype": "float16-le",
             "bytes": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
     (directory / "manifest.json").write_text(json.dumps(
         {**metadata, "arrays": records}, indent=2, sort_keys=True) + "\n")
