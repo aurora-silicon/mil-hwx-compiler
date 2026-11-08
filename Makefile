@@ -372,6 +372,7 @@ $(BUILD)/h16_conv_dump: tests/h16_conv_dump.cpp $(BUILD)/h16_conv_formula.o $(BU
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
 test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
+	python3 tests/test_h16g_task_padding.py
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
