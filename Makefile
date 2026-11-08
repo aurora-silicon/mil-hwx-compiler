@@ -381,6 +381,10 @@ test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
 	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
+.PHONY: test-h16g-attention-reference
+# NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
+test-h16g-attention-reference:
+	python3 tests/test_h16g_attention_refs.py
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
 test-h16g-conv-parity: $(BUILD)/h16_conv_dump
