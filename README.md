@@ -153,7 +153,7 @@ checked against CPU references with explicit tolerances.
 | conv | Rank-4 NCHW. Kernels 1 and 3, and stride 1 or 2. Groups 1, 4, or depthwise. Decoded templates cover channels 64 to 1024 and space 1 to 64. On H13 and H14 a formula-built encoder takes dense and depthwise 1x1/3x3 convolutions at any spatial size, channels in multiples of 16, and stride-2 1x1 with at most 128 outputs per task, as one program ([fused-conv.md](docs/ane/fused-conv.md)). A following relu folds into the same program. H14 details: [h14-conv.md](docs/ane/h14-conv.md) |
 | matmul, linear | Constant weight `[K,N]` or `[N,K]`, or two runtime inputs in attention's shape, on the decoded grids |
 | softmax | Constant axis over covered flat, sequence, spatial, and attention-score shapes |
-| layer_norm | Constant axes, `epsilon` of 1e-5, no `gamma` or `beta` |
+| layer_norm | Constant axes and `epsilon` of 1e-5. H16G additionally has native last-axis BERT `[1,128,768]` and Whisper `[1,1500,384/512]` programs with omitted or explicit identity `gamma` and zero `beta`; non-identity affine parameters are refused by name |
 | reduce_sum, reduce_max, reduce_mean | Constant axes, `keep_dims` either way, never over the batch axis |
 | reshape, squeeze, expand_dims | Constant shapes with equal element counts. Emits no program |
 

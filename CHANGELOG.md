@@ -4,6 +4,13 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: add formula-built last-axis layer normalization for BERT
+  `[1,128,768]` and Whisper `[1,1500,384/512]`.  The encoder carries the
+  measured epsilon and reciprocal-width fields, tiled reduction schedules,
+  standalone scratch/output boundary, and packaged BAR 6/3/7 DMA law.
+  Offline validation bounds 4 BERT and 12 Whisper DMA extents.  Identity
+  gamma and zero beta are accepted; non-identity affine parameters have no
+  ANE oracle in the supplied corpus and retain a named refusal.
 - H16G: bind formula-built transformer-linear source, result and packed
   weight/bias/post-op DMA records to the standalone object's BAR 6/7/8
   apertures.  Extend strict DMA direction and extent validation to the
