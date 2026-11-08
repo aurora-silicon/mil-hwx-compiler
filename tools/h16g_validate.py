@@ -168,16 +168,42 @@ def dma_extent(dma: dict, registers: dict, target: dict,
     and kernel-relocation checks in validate_dma().
     """
     address, offset = dma['address'], dma['offset']
+    if (target['kind'] == 'kernel' and family == 'layer_norm' and
+            address == 0x4d28 and 4 in registers):
+        # The final two normalization stages broadcast one fp16 affine
+        # vector.  Their task dimensions describe the output tensor, not a
+        # contiguous walk through the gamma/beta constant table.
+        return offset + product(registers[4], 2)
     # Scratch-backed normalization stages reuse the common dimension words
     # for L2 tiles, not for a linear DRAM walk.  A result plane span at 0x511c
     # is nevertheless explicit and, with 0x24, proves the complete staged
     # allocation used by QK/PV loads.
     if target['kind'] == 'scratch':
+        if (family == 'fused-attention' and address == 0x5108 and
+                all(key in registers for key in (4, 12, 0x24, 0x511c)) and
+                registers[4] and registers[0x511c] % registers[4] == 0):
+            # Task 0 exposes Q staging after one padded score surface, but the
+            # measured fused container allocates a second complete score
+            # surface for the engine's implicit ping-pong walk.  The visible
+            # Q extent alone is smaller and failed to catch that allocation.
+            padded_row = registers[0x511c] // registers[4]
+            score_bytes = product(product(registers[0x24], registers[12]),
+                                  padded_row)
+            return max(offset + product(registers[0x24], registers[0x511c]),
+                       product(2, score_bytes))
+        if (family == 'layer_norm' and address == 0x4d28 and
+                all(key in registers for key in (4, 8, 12))):
+            return offset + product(product(registers[4], registers[8]),
+                                    product(registers[12], 2))
         if address == 0x5108 and registers.get(0x511c):
             planes = registers.get(0x24, 1)
             return offset + product(planes, registers[0x511c])
         return None
     if address == 0x4d10:
+        if (family == 'positional' and
+                all(key in registers for key in (4, 8, 0x4d18))):
+            return strided_extent(offset, registers[4], registers[8], 1,
+                                  registers[0x4d18], 0)
         if all(key in registers for key in (4, 8, 12, 0x4d18, 0x4d1c)):
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d18], registers[0x4d1c])
@@ -187,13 +213,25 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset, registers[4], 1, registers[12], 0,
                                   registers[0x4d1c])
     elif address == 0x4d28:
+        if (family == 'positional' and
+                all(key in registers for key in (4, 8, 0x4d30))):
+            return strided_extent(offset, registers[4], registers[8], 1,
+                                  registers[0x4d30], 0)
         if all(key in registers for key in (4, 8, 12, 0x4d34, 0x4d3c)):
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d34], registers[0x4d3c])
+        if (family == 'layer_norm' and
+                all(key in registers for key in (4, 12, 0x4d34))):
+            return strided_extent(offset, registers[4], 1, registers[12], 0,
+                                  registers[0x4d34])
     elif address == 0x5108:
         if (family == 'resnet50' and registers.get(0x1c) == 1000 and
                 registers.get(0x14) == registers.get(0x18) == 1):
             return offset + ((2 * registers[0x1c] + 63) // 64) * 64
+        if (family == 'positional' and
+                all(key in registers for key in (0x14, 0x18, 0x5110))):
+            return strided_extent(offset, registers[0x14], registers[0x18], 1,
+                                  registers[0x5110], 0)
         if registers.get(0x511c):
             return offset + product(registers.get(0x24, 1), registers[0x511c])
         if (family == 'linear' and
@@ -204,6 +242,24 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset + product(first_output, 2),
                                   registers[0x1c], 1, registers[0x14], 0,
                                   registers[0x5114])
+        if (family == 'whisper-stem' and
+                all(key in registers for key in (0x14, 0x5114))):
+            # Stem output tasks write one channel slice into padded token
+            # rows. The measured one-lane tail omits 0x1c, which means 16.
+            return strided_extent(offset, registers[0x14], 1,
+                                  registers.get(0x1c, 16), 0,
+                                  registers[0x5114])
+        if (family == 'whisper-transpose' and
+                all(key in registers for key in (0x14, 0x1c, 0x5114))):
+            # Transpose materializes [T,C]: C contiguous halfwords for each
+            # of T rows, unlike the stem's channel-major padded surfaces.
+            return strided_extent(offset, registers[0x1c], 1,
+                                  registers[0x14], 0, registers[0x5114])
+        if (family == 'layer_norm' and
+                all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110))):
+            return strided_extent(offset, registers[0x14], registers[0x18],
+                                  registers[0x1c], registers[0x5110],
+                                  product(registers[0x18], registers[0x5110]))
         if all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110, 0x5114)):
             inner, middle, outer = (registers[0x14], registers[0x18],
                                     registers[0x1c])
@@ -243,6 +299,17 @@ def attention_program(task_count: int, record_code: int, format_code: int) -> bo
     return False
 
 
+def fused_attention_program(task_count: int, record_code: int,
+                            format_code: int) -> bool:
+    """Recognize the fused QK/softmax/PV family separately for scratch bounds."""
+    for heads in range(1, 65):
+        tail_format = 791 if heads == 6 else 1054 if heads == 8 else 132 * heads - 1
+        if (task_count == heads + 11 and record_code == 2 * heads + 23 and
+                format_code == tail_format):
+            return True
+    return False
+
+
 def linear_program(tasks: list[dict], task_count: int,
                    record_code: int, format_code: int) -> bool:
     """Recognize formula-built 1x1 convolutions over transformer tokens.
@@ -275,14 +342,75 @@ def resnet50_program(task_count: int, record_code: int,
     return task_count == 82 and record_code == 0xa5 and format_code == 0x4c
 
 
+def whisper_program(tasks: list[dict], task_count: int,
+                    record_code: int, format_code: int) -> str | None:
+    """Recognize the formula-built stem and encoder-layout task families.
+
+    BAR slots are excluded deliberately so the v2 one-slot-early objects are
+    recognized and refused by strict DMA binding checks.
+    """
+    if len(tasks) != task_count or format_code != 0:
+        return None
+    if task_count == 1 and record_code == 3:
+        task = tasks[0]
+        registers = task['registers']
+        addresses = {dma['address'] for dma in task['dma']}
+        if (registers.get(4) == registers.get(0x14) == 1500 and
+                registers.get(0x30) == 0x84000 and
+                {0x4d10, 0x5108}.issubset(addresses) and
+                0x5510 not in addresses):
+            return 'whisper-transpose'
+    if record_code != {1: 16, 2: 31, 3: 45}.get(task_count):
+        return None
+    for task in tasks:
+        registers = task['registers']
+        addresses = {dma['address'] for dma in task['dma']}
+        if (registers.get(0x28) not in (0x5002a043, 0x5000c043) or
+                (registers.get(0x4904, 0) & ~0x20000) != 0x103c10 or
+                not {0x4d10, 0x5108, 0x5510}.issubset(addresses)):
+            return None
+    return 'whisper-stem'
+
+
+def positional_program(tasks: list[dict], task_count: int,
+                       record_code: int, format_code: int) -> bool:
+    """Recognize the 1024-square binary task used for positional addition."""
+    if (len(tasks) != task_count or task_count != 1 or record_code != 0x10 or
+            format_code != 0x5c):
+        return False
+    task = tasks[0]
+    registers = task['registers']
+    addresses = {dma['address'] for dma in task['dma']}
+    return (registers.get(4) == registers.get(8) ==
+            registers.get(0x14) == registers.get(0x18) == 1024 and
+            {0x4d10, 0x4d28, 0x5108}.issubset(addresses))
+
+
+def layer_norm_program(tasks: list[dict], task_count: int,
+                       record_code: int, format_code: int) -> bool:
+    """Recognize the standalone BERT/Whisper last-axis normalization family."""
+    if (len(tasks) != task_count or task_count not in (5, 11) or
+            record_code != 0x10 or format_code != 20):
+        return False
+    first_addresses = {dma['address'] for dma in tasks[0]['dma']}
+    final_addresses = {dma['address'] for dma in tasks[-1]['dma']}
+    boundary_addresses = {dma['address'] for dma in tasks[-2]['dma']}
+    epsilon_tasks = [task for task in tasks
+                     if task['registers'].get(0x450c) == 0x37280000]
+    return (bool(first_addresses & {0x4d10, 0x4d28}) and
+            0x4d28 in boundary_addresses and
+            {0x4d28, 0x5108}.issubset(final_addresses) and
+            bool(epsilon_tasks))
+
+
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
                  relocations: set[int], family: str | None) -> int:
     """Bind decoded-family DMA records and bound every computable extent.
 
     Register addresses are reused with different roles by other H16G engines.
-    Apply source/result direction semantics only to decoded attention and
-    transformer-linear families; other families retain their existing
-    relocation and container bounds.
+    Apply source/result direction semantics only to decoded attention,
+    transformer-linear, Whisper stem/layout, and positional-add families;
+    other families retain their existing relocation and container bounds.
     """
     if family is None:
         return 0
@@ -303,9 +431,16 @@ def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
             require(target is not None, "dma-unknown-aperture")
             relocated = dma['patch'] in relocations
             if dma['address'] in source:
-                require(target['kind'] == 'scratch' or
-                        target['kind'] == 'surface' and target['prot'] == 1,
-                        "dma-direction")
+                if family == 'layer_norm' and dma['address'] == 0x4d28:
+                    require(target['kind'] == 'kernel' or
+                            target['kind'] == 'surface' and target['prot'] == 1,
+                            "dma-direction")
+                else:
+                    require((family == 'positional' and dma['address'] == 0x4d28 and
+                             target['kind'] == 'kernel') or
+                            target['kind'] == 'scratch' or
+                            target['kind'] == 'surface' and target['prot'] == 1,
+                            "dma-direction")
             elif dma['address'] in result:
                 require(target['kind'] == 'scratch' or
                         target['kind'] == 'surface' and target['prot'] == 2,
@@ -542,8 +677,12 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         seen.add(patch)
         require(info >> 24 == 7 and info & 0xffffff == kernel['sections'][0]['ordinal'], "relocation-kind")
         require(u32(taskdata, patch) < kernel['sections'][0]['size'], "relocation-addend")
-    dma_targets = [dict(vm=s['vm'], size=s['size'], prot=s['prot'], kind='surface')
-                   for s in surface]
+    # LOAD maps the tensor descriptor's declared allocation, not all virtual
+    # padding in the aligned Mach-O segment.  Bounding against segment vmsize
+    # hid the Whisper transpose's final padded source row.
+    dma_targets = [dict(vm=s['vm'], size=by_short[short]['allocation'],
+                        prot=s['prot'], kind='surface')
+                   for s, (_, short) in zip(surface, refs)]
     if scratch:
         dma_targets.append(dict(vm=scratch['vm'], size=scratch['size'],
                                 prot=scratch['prot'], kind='scratch'))
@@ -551,9 +690,17 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         dma_targets.append(dict(vm=kernel['vm'], size=kernel['size'],
                                 prot=kernel['prot'], kind='kernel'))
     record_code = u32(p, 0x860)
-    family = ('attention' if attention_program(tasks, record_code, fmt) else
+    whisper_family = whisper_program(task_facts, tasks, record_code, fmt)
+    family = ('fused-attention' if fused_attention_program(
+                  tasks, record_code, fmt) else
+              'attention' if attention_program(tasks, record_code, fmt) else
               'linear' if linear_program(task_facts, tasks, record_code, fmt) else
-              'resnet50' if resnet50_program(tasks, record_code, fmt) else None)
+              whisper_family or
+              ('positional' if positional_program(
+                  task_facts, tasks, record_code, fmt) else
+               'layer_norm' if layer_norm_program(
+                   task_facts, tasks, record_code, fmt) else
+               'resnet50' if resnet50_program(tasks, record_code, fmt) else None))
     dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")

@@ -13,8 +13,12 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from h16g_gelu import h16g_gelu  # noqa: E402
 
 GEOMETRIES = {
     "bert": (128, 768, 3072),
@@ -41,18 +45,6 @@ def cases() -> list[tuple[str, int, int, int, bool, str]]:
     return result
 
 
-def exact_gelu(values: np.ndarray) -> np.ndarray:
-    flat = values.reshape(-1)
-    output = np.empty_like(flat, dtype=np.float32)
-    for start in range(0, flat.size, 1 << 18):
-        block = flat[start:start + (1 << 18)]
-        erf = np.fromiter(
-            (math.erf(float(value) / math.sqrt(2.0)) for value in block),
-            dtype=np.float32, count=block.size)
-        output[start:start + block.size] = 0.5 * block * (1.0 + erf)
-    return output.reshape(values.shape)
-
-
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -74,7 +66,7 @@ def generate(case, root: Path) -> dict:
         if bias32 is not None:
             block += bias32
         if post_op == "gelu":
-            block = exact_gelu(block)
+            block = h16g_gelu(block)
         elif post_op == "scale-0.125":
             block *= np.float32(0.125)
         expected[start:start + block.shape[0]] = block.astype(np.float16)

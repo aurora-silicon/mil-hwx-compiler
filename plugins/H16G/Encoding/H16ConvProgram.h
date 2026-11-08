@@ -71,8 +71,31 @@ struct TransformerAttentionProgram {
     h13::Program program;
     std::uint32_t programRecordCount = 0;
     std::uint32_t programFormatCode = 0;
+    // Bytes the operation descriptor exposes to the task.  The backing
+    // allocation may be larger when the engine uses an implicit ping-pong
+    // half; h13::Program::scratchAllocationBytes carries that extent.
+    std::size_t scratchBytes = 0;
     bool revealed = false;
 };
+
+/// Native last-axis layer normalization over [1,S,C].  The supplied H16G
+/// corpus proves the epsilon=fp16(1e-5), identity-gamma, zero-beta form used
+/// by the BERT and Whisper encoder programs.  Non-identity affine operands
+/// remain outside this API: their constants are present in the full-program
+/// constant stream, but no captured ANE task consumes non-identity values.
+struct TransformerLayerNormProgram {
+    h13::Program program;
+    std::uint32_t programRecordCount = 0;
+    std::uint32_t programFormatCode = 0;
+    std::size_t scratchBytes = 0;
+    bool revealedInputPrefix = false;
+    bool revealedOutputBoundary = false;
+};
+
+std::string transformerLayerNormRefusal(std::uint32_t tokens,
+                                        std::uint32_t channels);
+TransformerLayerNormProgram encodeTransformerLayerNorm(
+    std::uint32_t tokens, std::uint32_t channels);
 
 std::string attentionLayoutRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,

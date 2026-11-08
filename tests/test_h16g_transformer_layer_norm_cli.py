@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Compiler, object-BAR, validator, and affine-refusal coverage for H16G LN."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "research"))
+from mint_oracles import parse_hwx  # noqa: E402
+
+COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/mil-hwxc").resolve()
+VALIDATOR = Path(sys.argv[2] if len(sys.argv) > 2 else ROOT / "tools/h16g_validate.py").resolve()
+
+
+def blob(values: list[int]) -> bytes:
+    payload = struct.pack(f"<{len(values)}H", *values)
+    result = bytearray(128 + len(payload))
+    struct.pack_into("<II", result, 0, 1, 2)
+    struct.pack_into("<IIQQ", result, 64, 0xDEADBEEF, 1, len(payload), 128)
+    result[128:] = payload
+    return bytes(result)
+
+
+def mil(tokens: int, channels: int, affine: bool = False) -> str:
+    operands = ""
+    constants = ""
+    if affine:
+        constants = f'''    tensor<fp16, [{channels}]> gamma = const()[val = tensor<fp16, [{channels}]>(BLOBFILE(path = string("@model_path/gamma.bin"), offset = uint64(64)))];
+    tensor<fp16, [{channels}]> beta = const()[val = tensor<fp16, [{channels}]>(BLOBFILE(path = string("@model_path/beta.bin"), offset = uint64(64)))];
+'''
+        operands = ", gamma = gamma, beta = beta"
+    return f'''program(1.3)
+[buildInfo = dict<string, string>({{}})]
+{{
+  func main<ios18>(tensor<fp16, [1, {tokens}, {channels}]> x) {{
+    tensor<int32, [1]> axes = const()[val = tensor<int32, [1]>([-1])];
+{constants}    tensor<fp16, [1, {tokens}, {channels}]> y = layer_norm(x = x, axes = axes{operands}, epsilon = fp32(0.00001))[name = string("y")];
+  }} -> (y);
+}}
+'''
+
+
+def slot(record: dict) -> int:
+    return (int(record["header"], 16) >> 23) & 0x3f
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="h16g-layer-norm-") as temp:
+        root = Path(temp)
+        for name, tokens, channels, tasks in (
+                ("bert", 128, 768, 5), ("wtiny", 1500, 384, 11),
+                ("wbase", 1500, 512, 11)):
+            source = root / f"{name}.mil"
+            source.write_text(mil(tokens, channels))
+            output = root / name
+            result = subprocess.run([str(COMPILER), "--mil", str(source),
+                "--model-root", str(root), "--target", "H16G", "--output", str(output)],
+                capture_output=True, text=True, timeout=120)
+            assert result.returncode == 0, result.stdout + result.stderr
+            image = output / "program-0.hwx"
+            decoded = parse_hwx(image.read_bytes(), "h16")
+            assert decoded["program_descriptor"]["task_count"] == tasks
+            seen = set()
+            for task in decoded["task_descriptors"]:
+                for record in task["records"]:
+                    address = record["address"]
+                    if address in ("0x04d10", "0x04d28", "0x05108"):
+                        seen.add((address, slot(record)))
+            assert ("0x04d10", 6) in seen or ("0x04d28", 6) in seen
+            assert ("0x04d28", 8) in seen
+            assert ("0x05108", 7) in seen
+            validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
+                "--manifest", str(output / "manifest.json")],
+                capture_output=True, text=True, timeout=30)
+            assert validation.returncode == 0, validation.stdout + validation.stderr
+            facts = json.loads(validation.stdout)
+            assert facts["dma_extents"] == (4 if tokens == 128 else 12)
+            assert not facts["scratch"]
+            manifest = json.loads((output / "manifest.json").read_text())
+            assert manifest["target"] == "H16G"
+
+        # The capture carries identity gamma followed by zero beta, but no ANE
+        # row consumes non-identity affine values. Keep that gap named.
+        (root / "gamma.bin").write_bytes(blob([0x3c01] * 384))
+        (root / "beta.bin").write_bytes(blob([0] * 384))
+        source = root / "affine-unproved.mil"
+        source.write_text(mil(1500, 384, affine=True))
+        refused = subprocess.run([str(COMPILER), "--mil", str(source),
+            "--model-root", str(root), "--target", "H16G",
+            "--output", str(root / "affine-unproved")],
+            capture_output=True, text=True, timeout=120)
+        assert refused.returncode != 0
+        assert "h16g.encode.transformer-layer-norm-affine-unproved" in refused.stderr
+    print("H16G layer_norm CLI PASS: three validated objects and named non-identity affine refusal")
+
+
+if __name__ == "__main__":
+    main()

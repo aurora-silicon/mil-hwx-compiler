@@ -13,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
                                           modelRoot:(NSURL *)modelRoot
                                         diagnostics:(ANEDiagnosticEngine *)diagnostics;
 + (nullable ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
-                                scheduled:(ANEScheduledGraph *)scheduled
+                                scheduled:(nullable ANEScheduledGraph *)scheduled
                                 modelRoot:(NSURL *)modelRoot
                               diagnostics:(ANEDiagnosticEngine *)diagnostics;
 @end

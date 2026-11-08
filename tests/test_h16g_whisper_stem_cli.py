@@ -116,14 +116,15 @@ def positional_mil(channels: int, offset: int) -> str:
 
 def canonical(task: bytes) -> dict:
     decoded = decode_task(task, "h16")
-    # Captures name the kernel operand at BAR 7. Packaged objects use
-    # input/output/kernel at slots 6/7/8, so normalize only that slot rebase
-    # while retaining parity coverage for every other descriptor field.
+    # Captures name external source/result/kernel operands one slot before the
+    # packaged object's 6/7/8 apertures. Normalize only those corrections.
+    packaged = {"0x04d10": 0x23000000,
+                "0x05108": 0x23800000,
+                "0x05510": 0x24000000}
     for record in decoded["records"]:
-        if record["address"] == "0x05510":
-            header = int(record["header"], 16)
-            if (header & 0x3f800000) == 0x24000000:
-                record["header"] = f"0x{header - 0x00800000:08x}"
+        header = int(record["header"], 16)
+        if (header & 0x3f800000) == packaged.get(record["address"]):
+            record["header"] = f"0x{header - 0x00800000:08x}"
     return {"header": decoded["header_words"][:1] + decoded["header_words"][2:],
             "blocks": decoded["blocks"], "records": decoded["records"]}
 
@@ -144,11 +145,11 @@ def section(data: bytes, wanted: bytes) -> bytes:
     return b""
 
 
-def assert_kernel_bar_bound(data: bytes) -> bool:
-    """Require slot 8 to bind __KERN_0 whenever the object has that segment."""
+def assert_bar_bindings(data: bytes) -> list[tuple[int, int, int]]:
+    """Require packaged source/result/kernel BARs and return their records."""
     count = struct.unpack_from("<I", data, 16)[0]
     cursor = 32
-    text = kernel_vm = descriptor = None
+    text = text_offset = input_vm = output_vm = kernel_vm = descriptor = None
     for _ in range(count):
         command, length = struct.unpack_from("<II", data, cursor)
         if command == 0x19:
@@ -157,15 +158,19 @@ def assert_kernel_bar_bound(data: bytes) -> bool:
             if name == b"__TEXT":
                 entry = struct.unpack_from("<16s16s2Q8I", data, cursor + 72)
                 text = data[entry[4]:entry[4] + entry[3]]
+                text_offset = entry[4]
+            elif name == b"__FVMLIB" and segment[8] == 1:
+                input_vm = segment[3]
+            elif name == b"__FVMLIB" and segment[8] == 2:
+                output_vm = segment[3]
             elif name == b"__KERN_0":
                 kernel_vm = segment[3]
         elif command == 4 and struct.unpack_from("<I", data, cursor + 8)[0] == 4:
             descriptor = cursor
         cursor += length
-    if kernel_vm is None:
-        return False
-    assert text is not None and descriptor is not None
-    slots: set[int] = set()
+    assert (text is not None and text_offset is not None and descriptor is not None and
+            input_vm is not None and output_vm is not None)
+    records = []
     cursor = 16
     while cursor < len(text):
         words = (struct.unpack_from("<I", text, cursor)[0] >> 16) & 0x7ff
@@ -174,20 +179,45 @@ def assert_kernel_bar_bound(data: bytes) -> bool:
         header_words = 10 if struct.unpack_from("<I", text, cursor + 32)[0] & 3 == 3 else 9
         record = cursor + 4 * header_words
         while record < end:
+            header_offset = record
             header = struct.unpack_from("<I", text, record)[0]
             record += 4
             if header & (1 << 31):
                 values = 1 + ((header >> 15) & 0xffff).bit_count()
             else:
                 values = ((header >> 15) & 0x3f) + 1
-                if header & (1 << 29):
-                    slots.add((header >> 23) & 0x3f)
+                if header & (1 << 29) and values == 2:
+                    address = (header & 0x7fff) * 4
+                    if address in (0x4d10, 0x4d28, 0x5108, 0x5510):
+                        records.append((text_offset + header_offset, address,
+                                        (header >> 23) & 0x3f))
             record += 4 * values
         assert record == end
         cursor = (end + 15) & ~15
-    assert 8 in slots, slots
-    assert struct.unpack_from("<Q", data, descriptor + 0x10 * 9)[0] == kernel_vm
-    return True
+    expected = {0x4d10: (6, input_vm), 0x5108: (7, output_vm)}
+    if kernel_vm is not None:
+        kernel_address = 0x5510 if any(address == 0x5510 for _, address, _ in records) \
+            else 0x4d28
+        expected[kernel_address] = (8, kernel_vm)
+    for _, address, slot in records:
+        if address not in expected:
+            continue
+        wanted_slot, wanted_vm = expected[address]
+        assert slot == wanted_slot, (hex(address), slot)
+        assert struct.unpack_from("<Q", data,
+                                  descriptor + 0x10 * (slot + 1))[0] == wanted_vm
+    assert set(expected).issubset({address for _, address, _ in records})
+    return records
+
+
+def old_whisper_bars(data: bytes) -> bytes:
+    """Reconstruct the v2 source/result BAR bug for validator regression."""
+    changed = bytearray(data)
+    for offset, address, slot in assert_bar_bindings(data):
+        if (address, slot) in ((0x4d10, 6), (0x5108, 7)):
+            header = struct.unpack_from("<I", changed, offset)[0]
+            struct.pack_into("<I", changed, offset, header - 0x00800000)
+    return bytes(changed)
 
 
 def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
@@ -202,7 +232,7 @@ def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     image = output / "program-0.hwx"; data = image.read_bytes()
-    assert assert_kernel_bar_bound(data)
+    assert_bar_bindings(data)
     kernel = section(data, b"__kern_0")
     table = kernel[:128] if gelu else b""
     payload = weights + bias + table
@@ -216,9 +246,17 @@ def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
     validation = subprocess.run([sys.executable, str(VALIDATOR), str(image)],
         capture_output=True, text=True, timeout=30)
     assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert json.loads(validation.stdout)["dma_extents"] > 0
+    old_image = output / "program-v2-bars.hwx"
+    old_image.write_bytes(old_whisper_bars(data))
+    old_validation = subprocess.run([sys.executable, str(VALIDATOR), str(old_image)],
+        capture_output=True, text=True, timeout=30)
+    assert old_validation.returncode != 0
+    assert "h16g.dma-unbound-slot" in old_validation.stderr
 
 
-def compile_and_validate(root: Path, name: str, source_text: str) -> Path:
+def compile_and_validate(root: Path, name: str, source_text: str,
+                         reject_v2: bool = True) -> Path:
     source = root / f"{name}.mil"
     source.write_text(source_text)
     output = root / name
@@ -227,11 +265,21 @@ def compile_and_validate(root: Path, name: str, source_text: str) -> Path:
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     image = output / "program-0.hwx"
-    assert_kernel_bar_bound(image.read_bytes())
+    data = image.read_bytes()
+    assert_bar_bindings(data)
     validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
         "--manifest", str(output / "manifest.json")], capture_output=True,
         text=True, timeout=30)
     assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert json.loads(validation.stdout)["dma_extents"] > 0
+    if reject_v2:
+        old_image = output / "program-v2-bars.hwx"
+        old_image.write_bytes(old_whisper_bars(data))
+        old_validation = subprocess.run([
+            sys.executable, str(VALIDATOR), str(old_image)],
+            capture_output=True, text=True, timeout=30)
+        assert old_validation.returncode != 0
+        assert "h16g.dma-unbound-slot" in old_validation.stderr
     return image
 
 
@@ -255,7 +303,7 @@ def run_layout_tail(root: Path, channels: int) -> None:
     position = pattern(1500 * channels, channels + 7)
     offset = blob(root / "parameters.bin", [position])[0]
     compile_and_validate(root, f"position-{channels}",
-                         positional_mil(channels, offset))
+                         positional_mil(channels, offset), reject_v2=False)
 
 
 def main() -> None:
