@@ -18,6 +18,11 @@
 #import "H16GTarget.h"
 #import "HWXObjectWriter.h"
 
+#include "H16ConvProgram.h"
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
 static ANESourceRange sourceRange(ANEOperationNode *node) {
     if (node.sourceOperation) return node.sourceOperation.range;
     ANESourceLocation location = ANESourceLocationMake(0, 1, 1);
@@ -52,6 +57,192 @@ static NSUInteger tensorBytes(ANEValueType *type) {
 
 static NSUInteger alignUp(NSUInteger value, NSUInteger alignment) {
     return (value + alignment - 1) / alignment * alignment;
+}
+
+static ANEOperationNode *nodeNamed(ANEOperationGraph *graph, NSString *name);
+
+static ANEOperationNode *producerForOperand(ANEOperationGraph *graph,
+                                            ANEOperationNode *operation,
+                                            NSString *name) {
+    ANEGraphValue *value=operation.sourceOperation.operands[name].value;
+    return value ? [graph nodeForValueName:value.name] : nil;
+}
+
+static NSString *scalarLiteral(ANEGraphArgument *argument) {
+    if (!argument) return nil;
+    if (argument.text) return argument.text;
+    if (argument.kind==ANEGraphArgumentKindCall &&
+        argument.callArguments.count==1)
+        return scalarLiteral(argument.callArguments.firstObject.value);
+    if ((argument.kind==ANEGraphArgumentKindList ||
+         argument.kind==ANEGraphArgumentKindTuple) &&
+        argument.elements.count==1)
+        return scalarLiteral(argument.elements.firstObject);
+    return nil;
+}
+
+static BOOL fp16ScalarFromConstant(ANEOperationNode *node,
+                                   uint16_t *bits) {
+    NSString *text=scalarLiteral(node.sourceOperation.attributes[@"val"]);
+    if (!text) return NO;
+    char *end=nullptr;
+    double value=strtod(text.UTF8String,&end);
+    if (!end || *end || !isfinite(value)) return NO;
+    _Float16 half=(_Float16)value;
+    memcpy(bits,&half,sizeof(*bits));
+    return isfinite((double)half);
+}
+
+static BOOL fp16ScalarFromArgument(ANEOperationGraph *graph,
+                                   ANEGraphArgument *argument,
+                                   uint16_t *bits) {
+    NSString *text=scalarLiteral(argument);
+    if (text) {
+        char *end=nullptr;
+        double value=strtod(text.UTF8String,&end);
+        if (end && !*end && isfinite(value)) {
+            _Float16 half=(_Float16)value;
+            memcpy(bits,&half,sizeof(*bits));
+            return isfinite((double)half);
+        }
+    }
+    ANEOperationNode *constant=argument.value
+        ? [graph nodeForValueName:argument.value.name] : nil;
+    return constant && fp16ScalarFromConstant(constant,bits);
+}
+
+static ANEHWXArtifact *encodeTransformerLinearProgram(
+    ANEOperationGraph *graph, ANEScheduledGraph *scheduled,
+    NSURL *modelRoot, ANEDiagnosticEngine *diagnostics) {
+    (void)scheduled;
+    ANEOperationNode *linear=nil;
+    for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"linear"]) linear=node;
+    if (![linear.operationName isEqualToString:@"linear"] ||
+        graph.sourceFunction.inputs.count!=1 ||
+        linear.outputType.shape.count!=3) return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    NSArray<NSNumber *> *inputShape=input.type.shape;
+    NSArray<NSNumber *> *outputShape=linear.outputType.shape;
+    if (inputShape.count!=3 || inputShape[0].unsignedIntegerValue!=1 ||
+        outputShape[0].unsignedIntegerValue!=1 ||
+        inputShape[1].unsignedIntegerValue!=outputShape[1].unsignedIntegerValue)
+        return nil;
+    ANEOperationNode *weight=producerForOperand(graph,linear,@"weight");
+    ANEOperationNode *bias=producerForOperand(graph,linear,@"bias");
+    if (!weight.sourceOperation || weight.outputType.shape.count!=2)
+        return nil;
+    NSUInteger tokens=inputShape[1].unsignedIntegerValue;
+    NSUInteger cin=inputShape[2].unsignedIntegerValue;
+    NSUInteger cout=outputShape[2].unsignedIntegerValue;
+    if (![weight.outputType.shape isEqualToArray:@[@(cout),@(cin)]]) return nil;
+    BOOL hasBias=bias!=nil;
+    if (hasBias && (!bias.sourceOperation ||
+        ![bias.outputType.shape isEqualToArray:@[@(cout)]])) return nil;
+    NSData *rawWeights=[ANEBlobResolver loadConstantForOperation:weight.sourceOperation
+        expectedBytes:cin*cout*2 modelRoot:modelRoot diagnostics:diagnostics];
+    NSData *rawBias=hasBias ? [ANEBlobResolver
+        loadConstantForOperation:bias.sourceOperation expectedBytes:cout*2
+        modelRoot:modelRoot diagnostics:diagnostics] : nil;
+    if (!rawWeights || (hasBias && !rawBias)) return nil;
+    ANEOperationNode *result=linear;
+    ANEOperationNode *post=linear.users.count==1 ? linear.users.firstObject : nil;
+    BOOL gelu=[post.operationName isEqualToString:@"gelu"];
+    BOOL scale=[post.operationName isEqualToString:@"mul"] ||
+               [post.operationName isEqualToString:@"multiply"];
+    if (post && !gelu && !scale) return nil;
+    if (post) result=post;
+    NSData *geluTable=nil;
+    ane::h16::TransformerLinearOptions options;
+    options.bias=hasBias;
+    if (gelu) {
+        NSError *tableError=nil;
+        geluTable=[H16GLUTEncoder constantRegionForOperationName:@"gelu"
+                                                          error:&tableError];
+        if (!geluTable || geluTable.length!=128) {
+            emitError(diagnostics,@"h16g.encode.transformer-linear-gelu",
+                tableError.localizedDescription ?: @"GELU table is unavailable",post);
+            return nil;
+        }
+        options.gelu=true;
+        options.geluTable=static_cast<const uint8_t *>(geluTable.bytes);
+        options.geluTableBytes=geluTable.length;
+    }
+    if (scale) {
+        ANEGraphArgument *x=post.sourceOperation.operands[@"x"];
+        ANEGraphArgument *y=post.sourceOperation.operands[@"y"];
+        ANEGraphArgument *scalar=[x.value.name isEqualToString:linear.identifier]
+            ? y : x;
+        uint16_t bits=0;
+        if (!scalar || !fp16ScalarFromArgument(graph,scalar,&bits)) return nil;
+        options.outputScale=bits;
+    }
+    ane::h16::TransformerLinearProgram encoded;
+    try {
+        encoded=ane::h16::encodeTransformerLinear((uint32_t)tokens,
+            (uint32_t)cin,(uint32_t)cout,
+            static_cast<const uint8_t *>(rawWeights.bytes),rawWeights.length,
+            hasBias ? static_cast<const uint8_t *>(rawBias.bytes) : nullptr,
+            hasBias ? rawBias.length : 0,options);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.transformer-linear-fields",
+            [NSString stringWithUTF8String:exception.what()],linear);
+        return nil;
+    }
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSData *constants=[NSData dataWithBytes:encoded.program.constants.data()
+        length:encoded.program.constants.size()];
+    NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+    for (std::size_t offset : encoded.program.kernelRelocations)
+        [relocations addObject:@(offset)];
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType
+            shape:inputShape],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[result.identifier stringByAppendingString:@"@output"]
+            shortName:result.identifier role:HWXObjectBindingRoleOutput
+            elementType:result.outputType.elementType shape:result.outputType.shape],
+    ];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.scratchBytes
+        scratchAllocationByteLength:encoded.scratchBytes
+        descriptorLayout:encoded.scratchBacked
+            ? HWXProgramDescriptorLayoutScratchBackedMixed
+            : HWXProgramDescriptorLayoutLinear];
+    info.kernelRegionConstants=YES;
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:constants bindings:objectBindings
+        kernelRelocationOffsets:relocations programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.transformer-linear-object",
+            error.localizedDescription ?: @"cannot construct transformer linear HWX",
+            linear);
+        return nil;
+    }
+    NSUInteger inputBytes=tensorBytes(input.type);
+    NSUInteger outputBytes=tensorBytes(result.outputType);
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name
+            role:ANESurfaceRoleInput logicalByteLength:inputBytes
+            allocationByteLength:alignUp(inputBytes,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:cin*2 planeStrideBytes:inputBytes
+            batchStrideBytes:inputBytes],
+        [[ANEHWXBinding alloc]initWithIdentifier:weight.identifier
+            role:ANESurfaceRoleWeight logicalByteLength:constants.length
+            allocationByteLength:constants.length ioSurfaceIndex:-1],
+        [[ANEHWXBinding alloc]initWithIdentifier:result.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:outputBytes
+            allocationByteLength:alignUp(outputBytes,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:cout*2 planeStrideBytes:outputBytes
+            batchStrideBytes:outputBytes],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }
 
 typedef struct {
@@ -929,6 +1120,10 @@ static ANEHWXArtifact *encodeLayoutProgram(
                         scheduled:(ANEScheduledGraph *)scheduled
                         modelRoot:(NSURL *)modelRoot
                       diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    for (ANEOperationNode *node in graph.nodes)
+        if ([node.operationName isEqualToString:@"linear"])
+            return encodeTransformerLinearProgram(graph,scheduled,modelRoot,
+                                                  diagnostics);
     if (hasLayoutConvChainSignature(graph, scheduled))
         return encodeLayoutConvChain(graph, scheduled, modelRoot, diagnostics);
     BOOL allConv = scheduled.tasks.count >= 3;

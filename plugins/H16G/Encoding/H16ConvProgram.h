@@ -25,6 +25,9 @@ struct Task {
     // Relocation record flags (BAR slot) of the source and result bases.
     std::uint32_t sourceSlotFlags = 0x23000000;
     std::uint32_t resultSlotFlags = 0x23800000;
+    std::uint32_t kernelSlotFlags = 0x24000000;
+    bool transformerStagingRecords = false;
+    bool transformerContinuationRecords = false;
 };
 struct Description {
     std::vector<Task> tasks;
@@ -33,6 +36,44 @@ struct Description {
     std::vector<std::size_t> kernelRelocations;
     std::size_t kernelBytes = 0;
 };
+
+/// Formula inputs for the constant-weight transformer projection family.
+/// The logical MIL surface is [1,S,C]; H16G records it as [1,1,S,C].
+/// `outputScale` is an fp16 bit pattern (0x3c00 is one).  GELU uses the
+/// public H16G 128-byte table supplied by the caller so this C++ packet
+/// builder remains independent of the Objective-C table registry.
+struct TransformerLinearOptions {
+    bool bias = false;
+    bool gelu = false;
+    std::uint16_t outputScale = 0x3c00;
+    const std::uint8_t *geluTable = nullptr;
+    std::size_t geluTableBytes = 0;
+};
+
+/// Object-writer hints decoded alongside the formula-built program.  The
+/// task descriptors and kernel section do not depend on these scheduler cost
+/// hints; they are carried separately because the H16G Mach-O record does.
+struct TransformerLinearProgram {
+    h13::Program program;
+    std::uint32_t programRecordCount = 0;
+    std::uint32_t programFormatCode = 0;
+    bool scratchBacked = false;
+    std::size_t scratchBytes = 0;
+};
+
+/// Empty when the transformer-linear formula has measured coverage.
+std::string transformerLinearRefusal(std::uint32_t tokens,
+                                     std::uint32_t inputChannels,
+                                     std::uint32_t outputChannels,
+                                     TransformerLinearOptions options);
+
+/// Encode a constant fp16 linear projection over S tokens.  `weights` is the
+/// MIL row-major [Cout,Cin] tensor and `bias` is [Cout] when enabled.
+TransformerLinearProgram encodeTransformerLinear(
+    std::uint32_t tokens, std::uint32_t inputChannels,
+    std::uint32_t outputChannels, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options = {});
 // Empty only for one of the nine measured geometries. Bias, VALID, dilation
 // and general scheduling are deliberately outside this API's envelope.
 std::string convRefusal(ConvShape shape);

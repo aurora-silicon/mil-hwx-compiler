@@ -109,9 +109,11 @@ void range(Task &t, U32 lo, U32 hi, U32 flags = 0) {
 void pack(Task &t) {
     t.bytes.clear();
     for (U32 h : t.header) word(t.bytes, h);
-    std::vector<U32> coefficients{0x5500};
-    for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
-    record(t,coefficients); range(t,0x5544,0x555c);
+    if (t.registers.count(0x5500)) {
+        std::vector<U32> coefficients{0x5500};
+        for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
+        record(t,coefficients); range(t,0x5544,0x555c);
+    }
     // Reset chunk size 64 is omitted, including mixed sparse tables.
     // Split across a default hole; contiguous offsets/sizes share a record.
     std::vector<U32> chunk;
@@ -125,16 +127,25 @@ void pack(Task &t) {
     }
     record(t,chunk);
     range(t,0x0004,0x000c); range(t,0x0014,0x004c);
-    if (t.registers.count(0x4d08)) record(t,{0x4d08,0x4d18,0x4d1c});
+    if (t.registers.count(0x4d08)) {
+        std::vector<U32> sourceGeometry;
+        for (U32 address : {0x4d08u,0x4d18u,0x4d1cu})
+            if (t.registers.count(address)) sourceGeometry.push_back(address);
+        record(t,sourceGeometry);
+    }
     range(t,0x4d68,0x4d68);
-    if (t.registers.at(0x4148) == 0x50017a) {
+    if (t.transformerStagingRecords) {
+        range(t,0x4104,0x4108); range(t,0x4110,0x415c);
+    } else if (t.transformerContinuationRecords) {
+        range(t,0x4114,0x415c);
+    } else if (t.registers.at(0x4148) == 0x50017a) {
         range(t,0x4104,0x4108); range(t,0x4114,0x414c);
     } else {
         range(t,0x4104,0x4120); range(t,0x4148,0x415c);
     }
-    range(t,0x4900,0x4910); range(t,0x5110,0x5138);
+    range(t,0x4900,0x4910); range(t,0x5110,0x5150);
     range(t,0x5900,0x592c);
-    range(t,0x5510,0x5514,0x24000000);
+    range(t,0x5510,0x5514,t.kernelSlotFlags);
     range(t,0x4d10,0x4d14,t.sourceSlotFlags);
     range(t,0x5108,0x510c,t.resultSlotFlags);
     range(t,0x4d00,0x4d00,0x22000000);
@@ -265,7 +276,271 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     }
     return t;
 }
+
+U32 linearInternalRow(U32 tokens) {
+    return align64(2*tokens)+16;
 }
+
+std::vector<U32> linearOutputSlices(U32 tokens, U32 cin, U32 cout,
+                                    bool bias, bool gelu) {
+    if (tokens != 1500) return {cout};
+    const std::uint64_t budget = 1024*1024;
+    std::vector<U32> slices;
+    U32 remaining = cout;
+    while (remaining) {
+        const auto fits=[&](U32 candidate) {
+            const std::uint64_t lanes = candidate/16;
+            const std::uint64_t group = align64(2*(cin+(bias ? 1u : 0u))*lanes)
+                                      + (gelu ? 128u : 0u);
+            return 16*group <= budget;
+        };
+        U32 candidate=remaining;
+        if (!fits(candidate)) {
+            candidate=remaining/16*16;
+            while (candidate && !fits(candidate)) candidate-=16;
+            candidate=candidate/(candidate>=256 ? 256 : 32)
+                     *(candidate>=256 ? 256 : 32);
+        }
+        if (!candidate) throw std::invalid_argument(
+            "one transformer-linear output slice exceeds the 1 MiB kernel envelope");
+        slices.push_back(candidate);
+        remaining -= candidate;
+    }
+    return slices;
+}
+
+std::vector<U32> linearLaneWidths(U32 outputs) {
+    // The scratch-backed narrow contraction treats a sub-256 slice as one
+    // (possibly non-power-of-two) interleave. Wider slices use 256-channel
+    // chunks and a power-of-two tail.
+    if (outputs<256) return {outputs/16};
+    std::vector<U32> widths;
+    U32 remaining = outputs;
+    while (remaining) {
+        U32 lanes = 1;
+        while (lanes < 16 && 32*lanes <= remaining) lanes *= 2;
+        widths.push_back(lanes);
+        remaining -= 16*lanes;
+    }
+    return widths;
+}
+
+std::vector<std::uint8_t> packLinearSlice(
+    U32 cin, U32 firstOutput, U32 outputs, const std::uint8_t *weights,
+    const std::uint8_t *bias, const std::uint8_t *table, std::size_t tableBytes) {
+    const auto widths = linearLaneWidths(outputs);
+    const std::size_t rows = cin+(bias ? 1 : 0);
+    std::size_t groupBytes = 0;
+    for (U32 width : widths) groupBytes += 2*rows*width;
+    groupBytes = align64(U32(groupBytes));
+    std::vector<std::uint8_t> packed(16*(groupBytes+tableBytes));
+    U32 chunkFirst = 0;
+    for (U32 group=0; group<16; ++group) {
+        const std::size_t groupStart=group*(groupBytes+tableBytes);
+        if (tableBytes)
+            std::copy(table,table+tableBytes,packed.begin()+groupStart);
+        std::size_t cursor=groupStart+tableBytes;
+        chunkFirst=0;
+        for (U32 width : widths) {
+            if (bias) for (U32 lane=0; lane<width; ++lane) {
+                const U32 output=firstOutput+chunkFirst+group*width+lane;
+                packed[cursor++]=bias[2*output];
+                packed[cursor++]=bias[2*output+1];
+            }
+            for (U32 input=0; input<cin; ++input)
+                for (U32 lane=0; lane<width; ++lane) {
+                    const U32 output=firstOutput+chunkFirst+group*width+lane;
+                    const std::size_t source=2*(std::size_t(output)*cin+input);
+                    packed[cursor++]=weights[source];
+                    packed[cursor++]=weights[source+1];
+                }
+            chunkFirst += 16*width;
+        }
+    }
+    return packed;
+}
+
+Task linearStagingTask(U32 tokens, U32 cin, bool wide) {
+    Task t;
+    t.transformerStagingRecords=true;
+    t.sourceSlotFlags=0x22800000;
+    if (wide) t.resultSlotFlags=0x21800000;
+    const U32 row=linearInternalRow(tokens);
+    U32 dependency=0;
+    if (!wide) {
+        const U32 dispatches=(cin*row+0xffff)/0x10000;
+        if (dispatches>=32) throw std::invalid_argument(
+            "transformer-linear staging exceeds the decoded dependency mask");
+        dependency=(U32(1)<<dispatches)-1;
+    }
+    t.header={0,0,0x68,0,0x68,0,0,dependency,0x50001};
+    auto &r=t.registers;
+    r[4]=r[0x14]=cin; r[8]=r[0x18]=1; r[0xc]=r[0x1c]=tokens;
+    r[0x30]=0x84000; r[0x34]=1; r[0x3c]=0x30210100; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130; r[0x4114]=0x100;
+    r[0x4118]=r[0x411c]=r[0x4120]=tokens*0x100;
+    if (wide) {
+        r[0x4148]=0x50087a; r[0x414c]=tokens*0x100;
+    } else {
+        r[0x4110]=cin*row; r[0x4148]=0x500170; r[0x4150]=row;
+    }
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=2*cin; r[0x4d68]=0x1002031;
+    if (wide) {
+        r[0x5100]=0x10000f1; r[0x5108]=r[0x510c]=0;
+        r[0x5114]=tokens*16; r[0x5138]=0x8302031;
+    }
+    pack(t);
+    return t;
+}
+
+Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
+                       U32 firstOutput, U32 taskIndex, U32 taskCount,
+                       U32 kernelBase, bool wide, bool bias, bool gelu,
+                       U32 outputScale) {
+    Task t;
+    t.kernelSlotFlags=0x23800000;
+    t.resultSlotFlags=0x23000000;
+    if (wide) t.sourceSlotFlags=0x21800000;
+    if (!wide && taskIndex>1) t.transformerContinuationRecords=true;
+    const bool last=taskIndex+1==taskCount;
+    U32 dependency=0;
+    if (!last && !wide) {
+        const U32 dispatches=(cin*linearInternalRow(tokens)+0xffff)/0x10000;
+        dependency=(U32(1)<<dispatches)-1;
+    }
+    bool serialized = false;
+    if (wide) serialized=!bias;
+    else if (tokens==128 && cin>cout) serialized=true;
+    else if (gelu && (tokens==128 || cin>=512)) serialized=true;
+    else if (outputScale!=0x3c00 && cin!=512) serialized=true;
+    else if (bias && ((tokens==128 && cout>cin) ||
+                      (tokens==1500 && cin==384 && cout==384))) serialized=true;
+    t.header={taskIndex,0,last ? 0x04000000u : 0u,0,
+              serialized ? (last ? 0x00fff860u : 0x00fff820u) : 0x28u,
+              0,0,dependency,last ? 0x50009u : 0x50001u};
+    auto &r=t.registers;
+    r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=cin; r[0x1c]=slice;
+    r[0x34]=1;
+    r[0x3c]=wide && slice<=64 ? 0x10220200
+            : wide && slice<256 ? 0x10210100 : 0x10200000;
+    if (!wide) r[0x40]=4;
+    else {
+        U32 ocg=0;
+        for (U32 lanes=slice/16; lanes>1; lanes=(lanes+1)/2) ++ocg;
+        if (ocg!=3) r[0x40]=ocg;
+    }
+    r[0x4c]=0x100000;
+    if (wide) {
+        r[0x4104]=taskIndex==1 ? 0x862 : 0x842;
+        r[0x4114]=0x100;
+        r[0x4118]=r[0x411c]=r[0x4120]=cin*0x100;
+        r[0x4148]=0x14a; r[0x414c]=cin*0x100;
+        r[0x4d00]=0x0f000000+taskIndex*0x01010000+(last ? 0x41 : 0xe1);
+        r[0x4d08]=last ? 0x4e : 0xee;
+        r[0x4d10]=r[0x4d14]=0; r[0x4d1c]=tokens*16;
+        r[0x4d68]=0x8002031;
+    } else {
+        if (taskIndex==1) r[0x4104]=0x120;
+        r[0x4114]=linearInternalRow(tokens); r[0x4148]=0x14a;
+        r[0x414c]=cin*linearInternalRow(tokens);
+    }
+    r[0x4904]=0x103c00 | (bias ? 0x10 : 0) | (gelu ? 0x20000 : 0);
+    r[0x4910]=outputScale;
+    r[0x5100]=0x1000031 | taskIndex<<16; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=2*cout; r[0x5138]=0x1302031;
+    if (firstOutput) r[0x5150]=firstOutput<<16;
+    r[0x5500]=(taskIndex+1)<<16 | (last ? 0x2c0 : 0x240);
+    r[0x5510]=kernelBase; r[0x5514]=0;
+    const U32 lanes=slice/16;
+    const U32 laneBytes=align64(2*(cin+(bias ? 1u : 0u))*lanes)
+                      +(gelu ? 128u : 0u);
+    U32 offset=0;
+    for (U32 lane=0; lane<16; ++lane) {
+        r[0x5520+4*lane]=taskIndex<<16 | 0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (laneBytes!=64) r[0x55a0+4*lane]=laneBytes;
+        offset+=laneBytes;
+    }
+    if (last) {
+        r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5908]=taskIndex<<16|0xe0;
+        r[0x5918]=0; r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    }
+    pack(t);
+    return t;
+}
+}
+
+std::string transformerLinearRefusal(U32 tokens, U32 cin, U32 cout,
+                                     TransformerLinearOptions options) {
+    if (!tokens || !cin || !cout || cin%16 || cout%16)
+        return "transformer linear requires nonzero S and channel multiples of 16";
+    if (options.gelu && (!options.bias || !options.geluTable ||
+                         options.geluTableBytes!=128))
+        return "fused GELU requires a bias and the decoded 128-byte H16G table";
+    if (tokens==1500 && cin>1024 && !(
+                      ((cin==1536 && cout==384) ||
+                       (cin==2048 && cout==512))))
+        return "scratch-backed contraction is measured only for the two Whisper projections";
+    if (tokens==1500) return {};
+    if (tokens==64 || tokens==128 || tokens==256 || tokens==512) return {};
+    return "transformer linear token count is outside the measured/predicted envelope";
+}
+
+TransformerLinearProgram encodeTransformerLinear(
+    U32 tokens, U32 cin, U32 cout, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options) {
+    if (auto why=transformerLinearRefusal(tokens,cin,cout,options); !why.empty())
+        throw std::invalid_argument(why);
+    if (!weights || weightBytes!=std::size_t(cin)*cout*2)
+        throw std::invalid_argument("transformer linear needs Cout*Cin fp16 weights");
+    if (options.bias!=(bias!=nullptr) ||
+        (bias && biasBytes!=std::size_t(cout)*2))
+        throw std::invalid_argument("transformer linear bias must contain Cout fp16 values");
+    const bool wide=tokens==1500 && cin>1024;
+    const auto slices=linearOutputSlices(tokens,cin,cout,options.bias,options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0);
+    program.task[0]=1;
+    Task staging=linearStagingTask(tokens,cin,wide);
+    program.task.insert(program.task.end(),staging.bytes.begin(),staging.bytes.end());
+    U32 firstOutput=0,kernelBase=0;
+    const U32 taskCount=U32(slices.size()+1);
+    for (U32 index=0; index<slices.size(); ++index) {
+        const U32 slice=slices[index];
+        auto packed=packLinearSlice(cin,firstOutput,slice,weights,
+            options.bias ? bias : nullptr,options.gelu ? options.geluTable : nullptr,
+            options.gelu ? options.geluTableBytes : 0);
+        program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        Task compute=linearComputeTask(tokens,cin,cout,slice,firstOutput,
+            index+1,taskCount,kernelBase,wide,options.bias,options.gelu,
+            options.outputScale);
+        program.kernelRelocations.push_back(program.task.size()+compute.kernelRelocation);
+        program.task.insert(program.task.end(),compute.bytes.begin(),compute.bytes.end());
+        kernelBase+=U32(packed.size()); firstOutput+=slice;
+    }
+    program.taskCount=taskCount;
+    program.firstTaskBytes=staging.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=wide ? std::size_t(tokens)*cin*2 : 0;
+    const auto tensor=[](U32 tokens_,U32 channels,U32 index) {
+        const std::uint64_t row=2*channels,plane=row*tokens_;
+        return h13::TensorLayout{index,{1,1,tokens_,channels,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(tokens,cin,5)}; program.output=tensor(tokens,cout,4);
+    program.formulaBuilt=true;
+    result.programRecordCount=wide ? 0x20 : 0x10;
+    result.programFormatCode=0;
+    result.scratchBacked=wide;
+    result.scratchBytes=program.scratchAllocationBytes;
+    return result;
+}
+
 std::string convRefusal(ConvShape s) {
     if (s.kernel!=s.kernelWidth || (s.kernel!=1 && s.kernel!=3))
         return "only measured square 1x1/3x3 kernels are supported";
