@@ -374,7 +374,9 @@ static ANEHWXArtifact *encodeBinaryALUProgram(
     ANEOperationNode *operation=nodeNamed(graph,scheduled.tasks[0].nodeIdentifier);
     ANEGraphValue *left=operation.sourceOperation.operands[@"x"].value;
     ANEGraphValue *right=operation.sourceOperation.operands[@"y"].value;
-    NSUInteger size=operation.outputType.shape[2].unsignedIntegerValue;
+    NSUInteger elements=H16GElementCount(operation.outputType.shape);
+    NSUInteger size=[H16GALUEncoder squareViewSizeForElementCount:elements];
+    NSArray<NSNumber *> *view=@[@1,@1,@(size),@(size)];
     H16GEncodedTDProgram *program=[H16GALUEncoder
         encodeOperationName:operation.operationName squareSize:size error:&error];
     if(!program){emitError(diagnostics,@"h16g.encode.alu-fields",
@@ -382,14 +384,14 @@ static ANEHWXArtifact *encodeBinaryALUProgram(
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:left.name shortName:left.name
             role:HWXObjectBindingRoleInput elementType:left.type.elementType
-            shape:left.type.shape],
+            shape:view],
         [[HWXObjectBinding alloc]
             initWithSymbol:[operation.identifier stringByAppendingString:@"@output"]
             shortName:operation.identifier role:HWXObjectBindingRoleOutput
-            elementType:operation.outputType.elementType shape:operation.outputType.shape],
+            elementType:operation.outputType.elementType shape:view],
         [[HWXObjectBinding alloc]initWithSymbol:right.name shortName:right.name
             role:HWXObjectBindingRoleInput elementType:right.type.elementType
-            shape:right.type.shape],
+            shape:view],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:1 recordCount:program.programRecordCount
@@ -401,18 +403,20 @@ static ANEHWXArtifact *encodeBinaryALUProgram(
     if(!image){emitError(diagnostics,@"h16g.encode.alu-object",
         error.localizedDescription ?: @"cannot construct binary ALU HWX",operation);
         return nil;}
-    NSUInteger bytes=size*size*2,rowBytes=size*2;
+    // A non-square operand runs as a contiguous [1,1,N,N] view of its
+    // bytes: logical bytes cover the tensor, the allocation covers the view.
+    NSUInteger bytes=size*size*2,rowBytes=size*2,logical=elements*2;
     NSArray<ANEHWXBinding *> *runtimeBindings=@[
         [[ANEHWXBinding alloc]initWithIdentifier:left.name role:ANESurfaceRoleInput
-            logicalByteLength:bytes allocationByteLength:alignUp(bytes,0x4000)
+            logicalByteLength:logical allocationByteLength:alignUp(bytes,0x4000)
             ioSurfaceIndex:0 rowStrideBytes:rowBytes planeStrideBytes:bytes
             batchStrideBytes:bytes],
         [[ANEHWXBinding alloc]initWithIdentifier:right.name role:ANESurfaceRoleInput
-            logicalByteLength:bytes allocationByteLength:alignUp(bytes,0x4000)
+            logicalByteLength:logical allocationByteLength:alignUp(bytes,0x4000)
             ioSurfaceIndex:1 rowStrideBytes:rowBytes planeStrideBytes:bytes
             batchStrideBytes:bytes],
         [[ANEHWXBinding alloc]initWithIdentifier:operation.identifier
-            role:ANESurfaceRoleOutput logicalByteLength:bytes
+            role:ANESurfaceRoleOutput logicalByteLength:logical
             allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:2
             rowStrideBytes:rowBytes planeStrideBytes:bytes batchStrideBytes:bytes],
     ];
@@ -432,8 +436,12 @@ static ANEHWXArtifact *encodeUnaryPointwiseProgram(
     ANEOperationNode *operation=nodeNamed(graph,
         scheduled.tasks[0].sourceNodeIdentifiers.firstObject);
     ANEGraphValue *input=operation.sourceOperation.operands[@"x"].value;
+    NSUInteger elements=H16GElementCount(input.type.shape);
+    NSUInteger size=[H16GLUTEncoder
+        squareViewSizeForOperationName:operation.operationName elementCount:elements];
+    NSArray<NSNumber *> *view=@[@1,@1,@(size),@(size)];
     H16GEncodedTDProgram *program=[H16GLUTEncoder
-        encodeOperationName:operation.operationName inputShape:input.type.shape
+        encodeOperationName:operation.operationName inputShape:view
         error:&error];
     NSData *constants=[H16GLUTEncoder
         constantRegionForOperationName:operation.operationName error:&error];
@@ -446,11 +454,11 @@ static ANEHWXArtifact *encodeUnaryPointwiseProgram(
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
             role:HWXObjectBindingRoleInput elementType:input.type.elementType
-            shape:input.type.shape],
+            shape:view],
         [[HWXObjectBinding alloc]
             initWithSymbol:[operation.identifier stringByAppendingString:@"@output"]
             shortName:operation.identifier role:HWXObjectBindingRoleOutput
-            elementType:operation.outputType.elementType shape:operation.outputType.shape],
+            elementType:operation.outputType.elementType shape:view],
     ];
     NSUInteger taskCount=[operation.operationName isEqualToString:@"log"] ? 2 : 1;
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
@@ -467,20 +475,18 @@ static ANEHWXArtifact *encodeUnaryPointwiseProgram(
             operation);
         return nil;
     }
-    NSUInteger bytes=tensorBytes(input.type);
-    NSUInteger width=input.type.shape.lastObject.unsignedIntegerValue;
-    NSUInteger height=input.type.shape.count>=2
-        ? input.type.shape[input.type.shape.count-2].unsignedIntegerValue : 1;
-    NSUInteger rowBytes=width*elementBytes(input.type.elementType);
-    NSUInteger planeBytes=height*rowBytes;
+    // Contiguous [1,1,N,N] view, as for the binary ALU form.
+    NSUInteger bytes=size*size*2,logical=elements*2;
+    NSUInteger rowBytes=size*2;
+    NSUInteger planeBytes=bytes;
     NSArray<ANEHWXBinding *> *runtimeBindings=@[
         [[ANEHWXBinding alloc]initWithIdentifier:input.name
-            role:ANESurfaceRoleInput logicalByteLength:bytes
+            role:ANESurfaceRoleInput logicalByteLength:logical
             allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:0
             rowStrideBytes:rowBytes planeStrideBytes:planeBytes
             batchStrideBytes:bytes],
         [[ANEHWXBinding alloc]initWithIdentifier:operation.identifier
-            role:ANESurfaceRoleOutput logicalByteLength:bytes
+            role:ANESurfaceRoleOutput logicalByteLength:logical
             allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:1
             rowStrideBytes:rowBytes planeStrideBytes:planeBytes
             batchStrideBytes:bytes],
@@ -944,8 +950,10 @@ static ANEHWXArtifact *encodeLayoutProgram(
         ANEOperationNode *node=nodeNamed(graph,
             scheduled.tasks[0].sourceNodeIdentifiers.firstObject);
         ANEGraphValue *input=node.sourceOperation.operands[@"x"].value;
-        if (input && [H16GLUTEncoder supportsOperationName:node.operationName
-            inputShape:input.type.shape])
+        if (input && !input.producer &&
+            input.type.shape.count >= 1 && input.type.shape.count <= 4 &&
+            [H16GLUTEncoder squareViewSizeForOperationName:node.operationName
+                elementCount:H16GElementCount(input.type.shape)] != NSNotFound)
             return encodeUnaryPointwiseProgram(graph,scheduled,diagnostics);
     }
     if (scheduled.tasks.count == 1 &&

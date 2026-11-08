@@ -125,6 +125,12 @@ static BOOL opcodeForName(NSString *name,uint8_t *opcode) {
     uint8_t opcode=0;
     return geometry(size) != NULL && opcodeForName(operationName,&opcode);
 }
++ (NSUInteger)squareViewSizeForElementCount:(NSUInteger)elementCount {
+    if (elementCount == 0) return NSNotFound;
+    for (const ALUGeometry &row : kGeometries)
+        if (row.size*row.size >= elementCount) return row.size;
+    return NSNotFound;
+}
 + (H16GEncodedTDProgram *)encodeOperationName:(NSString *)operationName
                                    squareSize:(NSUInteger)size
                                         error:(NSError **)error {
