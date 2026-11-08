@@ -39,6 +39,49 @@ def blob(payload: bytes) -> bytes:
     return bytes(result)
 
 
+def assert_kernel_bar_bound(data: bytes) -> None:
+    """The task stream must name the descriptor slot holding __KERN_0."""
+    commands = struct.unpack_from("<I", data, 16)[0]
+    cursor = 32
+    text = kernel_vm = descriptor = None
+    for _ in range(commands):
+        command, length = struct.unpack_from("<II", data, cursor)
+        if command == 0x19:
+            segment = struct.unpack_from("<2I16s4Q4I", data, cursor)
+            name = segment[2].split(b"\0", 1)[0]
+            if name == b"__TEXT":
+                section = struct.unpack_from("<16s16s2Q8I", data, cursor + 72)
+                text = data[section[4]:section[4] + section[3]]
+            elif name == b"__KERN_0":
+                kernel_vm = segment[3]
+        elif command == 4 and struct.unpack_from("<I", data, cursor + 8)[0] == 4:
+            descriptor = cursor
+        cursor += length
+    assert text is not None and kernel_vm is not None and descriptor is not None
+    slots: set[int] = set()
+    cursor = 16
+    while cursor < len(text):
+        words = (struct.unpack_from("<I", text, cursor)[0] >> 16) & 0x7ff
+        assert words
+        end = cursor + 4 * words
+        header_words = 10 if struct.unpack_from("<I", text, cursor + 32)[0] & 3 == 3 else 9
+        record = cursor + 4 * header_words
+        while record < end:
+            header = struct.unpack_from("<I", text, record)[0]
+            record += 4
+            if header & (1 << 31):
+                count = 1 + ((header >> 15) & 0xffff).bit_count()
+            else:
+                count = ((header >> 15) & 0x3f) + 1
+                if header & (1 << 29):
+                    slots.add((header >> 23) & 0x3f)
+            record += 4 * count
+        assert record == end
+        cursor = (end + 15) & ~15
+    assert any(struct.unpack_from("<Q", data, descriptor + 0x10 * (slot + 1))[0]
+               == kernel_vm for slot in slots), (slots, hex(kernel_vm))
+
+
 def mil(tokens: int, cin: int, cout: int, bias: bool, post: str) -> str:
     bias_decl = ""
     bias_arg = ""
@@ -89,7 +132,9 @@ def run_case(root: Path, name: str, tokens: int, cin: int, cout: int,
     manifest = json.loads((output / "manifest.json").read_text())
     assert len(manifest["artifacts"]) == 1
     image = output / "program-0.hwx"
-    decoded = parse_hwx(image.read_bytes(), "h16")
+    image_data = image.read_bytes()
+    decoded = parse_hwx(image_data, "h16")
+    assert_kernel_bar_bound(image_data)
     flags = (1 if has_bias else 0) | (2 if post == "gelu" else 0)
     scale = 0x3000 if post == "scale" else 0x3c00
     table = b""
@@ -135,6 +180,9 @@ def main() -> None:
         run_case(root, "wtiny-bias", 1500, 384, 384, True)
         run_case(root, "bert-gelu", 128, 768, 3072, True, "gelu")
         run_case(root, "wbase-scale", 1500, 512, 512, True, "scale")
+        # The logical 0x465000-byte scratch is intentionally not segment
+        # aligned; the object writer must round its __DATA allocation.
+        run_case(root, "wtiny-contract", 1500, 1536, 384, False)
         # Sealed capture rows were not provided for these two geometries. They
         # remain explicit unrevealed predictions while still exercising the
         # formula, object writer, and validator end to end.

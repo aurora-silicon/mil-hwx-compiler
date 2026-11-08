@@ -402,7 +402,12 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
                        U32 kernelBase, bool wide, bool bias, bool gelu,
                        U32 outputScale) {
     Task t;
-    t.kernelSlotFlags=0x23800000;
+    // Packaged H16G objects place input, output and __KERN_0 at BAR slots
+    // 6, 7 and 8.  The captured linear record used slot 7 for its kernel
+    // operand, but that aliases the output in the validated object layout
+    // and leaves the kernel resource unbound at LOAD.  Use the same slot-8
+    // kernel binding as the executable convolution path.
+    t.kernelSlotFlags=0x24000000;
     t.resultSlotFlags=0x23000000;
     if (wide) t.sourceSlotFlags=0x21800000;
     if (!wide && taskIndex>1) t.transformerContinuationRecords=true;

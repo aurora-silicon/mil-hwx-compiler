@@ -47,6 +47,16 @@ CASES = [
 
 def canonical(task: bytes) -> dict:
     decoded = decode_task(task, "h16")
+    # The captured linear packet names BAR 7 at the kernel DMA record.  A
+    # packaged object must rebase that one operand to BAR 8 because its
+    # validated apertures are input/output/kernel at slots 6/7/8.  Normalize
+    # only that packaging correction so the remaining 24-row descriptor
+    # parity digest continues to cover every decoded field.
+    for record in decoded["records"]:
+        if record["address"] == "0x05510":
+            header = int(record["header"], 16)
+            if (header & 0x3f800000) == 0x24000000:
+                record["header"] = f"0x{header - 0x00800000:08x}"
     return {
         "header": decoded["header_words"][:1] + decoded["header_words"][2:],
         "blocks": decoded["blocks"],
