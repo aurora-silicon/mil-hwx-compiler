@@ -38,12 +38,13 @@ STAGED_DRIVER_SOURCES := lib/Driver/ANEStagedCompiler.mm plugins/H16G/Encoding/H
 PASS_SOURCES := lib/Pass/ANEPassManager.mm
 PLUGIN_SOURCES := lib/Plugin/ANEPluginRegistry.mm
 DRIVER_SOURCES := lib/Model/ANEBlobResolver.mm lib/Runtime/ANEExecutableBundle.mm lib/Driver/ANECompiler.mm
-PRODUCTION_COMPILER_SOURCES := $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) lib/Driver/ANECompiler.mm lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm
+H16_FORMULA_SOURCES := plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H13/H13Program.cpp
+PRODUCTION_COMPILER_SOURCES := $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) $(MIL_PARSER_SOURCES) $(GRAPH_SOURCES) $(OP_GRAPH_SOURCES) $(TRANSFORM_SOURCES) $(FUSION_SOURCES) $(LEGALIZE_SOURCES) $(SCHEDULED_SOURCES) $(STRUCTURED_TD_SOURCES) $(OBJECT_WRITER_SOURCES) $(CONSTANT_PACKER_SOURCES) $(STAGED_DRIVER_SOURCES) $(H16_FORMULA_SOURCES) lib/Driver/ANECompiler.mm lib/Model/ANEBlobResolver.mm lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/Runtime/ANEExecutableBundle.mm
 RUNTIME_SOURCES := lib/Runtime/ANEProvisionedRuntime.mm
 RUNTIME_BUNDLE_SOURCES := lib/HWX/ANEHWXArtifact.mm lib/HWX/HWXImage.mm lib/IR/ANEGraphIR.mm lib/Runtime/ANEExecutableBundle.mm $(RUNTIME_SOURCES)
 RUNTIME_INCLUDES := -Ilib/IR -Ilib/HWX -Ilib/Runtime
 BENCHMARK_STATS_SOURCES := lib/Runtime/ANEBenchmarkStats.cpp
-H13_SOURCES := plugins/H13/ANEH13Compiler.mm plugins/H13/H13Program.cpp plugins/H13/H13ANEC.cpp
+H13_SOURCES := plugins/H13/ANEH13Compiler.mm plugins/H13/H13ANEC.cpp
 H14_SOURCES := plugins/H14/ANEH14Compiler.mm plugins/H14/H14Program.cpp
 
 .PHONY: all test clean test-cli test-no-pattern-shortcuts
@@ -212,7 +213,7 @@ $(BUILD)/prepare_staged_attention: tests/hardware/prepare_staged_attention.mm $(
 $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding $^ $(FRAMEWORKS) $(CRYPTO_LIBS) -o $@
 
-$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H16G/Encoding/H16ConvProgram.cpp plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+$(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
@@ -368,7 +369,7 @@ test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
 	$(BUILD)/test_h14_conv_encoding
 	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
 
-H16_CONV_SOURCES := plugins/H16G/Encoding/H16ConvProgram.cpp
+H16_CONV_SOURCES := $(H16_FORMULA_SOURCES)
 $(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/H13Program.h | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
 $(BUILD)/h16_conv_support.o: plugins/H13/H13Program.cpp plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) | $(BUILD)
@@ -379,9 +380,11 @@ $(BUILD)/h16_transformer_linear_dump: tests/h16_transformer_linear_dump.cpp $(BU
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 $(BUILD)/h16_whisper_stem_dump: tests/h16_whisper_stem_dump.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
+$(BUILD)/h16_transformer_attention_dump: tests/h16_transformer_attention_dump.cpp $(BUILD)/h16_conv_formula.o $(BUILD)/h16_conv_support.o | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
-test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump
+test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump $(BUILD)/h16_transformer_attention_dump
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
 	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
@@ -389,6 +392,8 @@ test-h16g: test-h16g-conv-parity $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_line
 	python3 tests/test_h16g_transformer_linear_cli.py $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump
 	python3 tests/test_h16g_whisper_stem_cli.py $(BUILD)/mil-hwxc $(BUILD)/h16_whisper_stem_dump
 	python3 tests/test_h16g_whisper_stem2_parity.py $(BUILD)/h16_whisper_stem_dump
+	python3 tests/test_h16g_transformer_attention_parity.py $(BUILD)/h16_transformer_attention_dump
+	python3 tests/test_h16g_transformer_attention_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
 .PHONY: test-h16g-attention-reference
 # NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
 test-h16g-attention-reference:

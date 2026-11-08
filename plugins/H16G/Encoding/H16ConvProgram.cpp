@@ -1560,4 +1560,731 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
     out.formulaBuilt=true;
     return out;
 }
+
+namespace {
+U32 attentionAlign64(U32 value) { return (value+63u)&~63u; }
+
+void packAttentionLayoutTask(Task &task) {
+    task.bytes.clear();
+    for (U32 value : task.header) word(task.bytes,value);
+    record(task,{0x5500});
+    record(task,{0x0004,0x0008,0x000c});
+    std::vector<U32> common{0x0014,0x0018,0x001c,0x0030,0x0034,0x003c};
+    if (task.registers.count(0x0040)) common.push_back(0x0040);
+    common.push_back(0x004c);
+    record(task,common);
+    record(task,{0x4d08,0x4d18,0x4d1c});
+    record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4904,0x4910});
+    record(task,{0x5110,0x5114,0x5138});
+    record(task,{0x5900,0x5904,0x5918,0x5928,0x592c});
+    record(task,{0x4d10,0x4d14},0x22800000);
+    record(task,{0x5108,0x510c},0x23000000);
+    record(task,{0x4d00},0x22000000);
+    record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;
+    store(task.bytes,0,task.header[0]);
+}
+
+Task attentionLayoutTask(U32 tokens,U32 heads,U32 headDimension,
+                         AttentionLayout operation) {
+    const bool split=operation==AttentionLayout::Split;
+    const bool splitTranspose=operation==AttentionLayout::SplitTranspose;
+    const U32 width=heads*headDimension;
+    const U32 widthBytes=2*width;
+    const U32 headRowBytes=2*headDimension;
+    const U32 totalBytes=tokens*widthBytes;
+    const U32 sourceSkew=widthBytes>=1024 ? 0x50 : 0;
+    Task task;
+    task.header={0,0,0x04000068,0,0x68,0,0,0,0x00050009};
+    auto &r=task.registers;
+    r[0x0004]=headDimension;
+    r[0x0008]=split ? tokens : heads;
+    r[0x000c]=split ? heads : tokens;
+    r[0x0014]=headDimension;
+    r[0x0018]=split ? tokens : heads;
+    r[0x001c]=split ? heads : tokens;
+    r[0x0030]=splitTranspose ? 0x84000 : 0x14000;
+    r[0x0034]=split ? 4 : heads;
+    if (split) r[0x003c]=0x160000+(heads/2u)*0x10000;
+    else r[0x003c]=splitTranspose ? 0x30211100 : 0x210000;
+    if (split) {
+        const U32 exponent=heads<=2 ? 6 : heads<=3 ? 6 : heads<=5 ? 5
+                           : heads<=6 ? 4 : 3;
+        r[0x0040]=1u<<exponent;
+    } else if (!splitTranspose) r[0x0040]=0;
+    r[0x004c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130;
+    r[0x4114]=headRowBytes;
+    if (split) {
+        r[0x4118]=widthBytes+sourceSkew;
+        r[0x411c]=widthBytes; r[0x4120]=widthBytes;
+        r[0x414c]=4*r[0x4118];
+    } else {
+        r[0x4118]=tokens*headRowBytes;
+        r[0x411c]=r[0x4118]; r[0x4120]=r[0x4118];
+        r[0x414c]=totalBytes;
+    }
+    r[0x4148]=0x50017a;
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce;
+    r[0x4d10]=0; r[0x4d14]=0;
+    r[0x4d18]=split ? widthBytes
+                  : splitTranspose ? headRowBytes : tokens*headRowBytes;
+    r[0x4d1c]=split ? headRowBytes
+                  : splitTranspose ? widthBytes : headRowBytes;
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031; r[0x5108]=0; r[0x510c]=0;
+    if (splitTranspose) {
+        r[0x5110]=attentionAlign64(2*tokens)*headDimension;
+        r[0x5114]=attentionAlign64(2*tokens);
+    } else if (split) {
+        r[0x5110]=headRowBytes; r[0x5114]=tokens*headRowBytes;
+    } else {
+        r[0x5110]=headRowBytes; r[0x5114]=widthBytes;
+    }
+    r[0x5138]=0x1302031;
+    r[0x5500]=headRowBytes;
+    r[0x5900]=0x12; r[0x5904]=0x00a000a0;
+    r[0x5918]=0; r[0x5928]=0x007f0000; r[0x592c]=0x20010701;
+    packAttentionLayoutTask(task);
+    return task;
+}
+}
+
+std::string attentionLayoutRefusal(U32 tokens,U32 heads,U32 headDimension,
+                                   AttentionLayout operation) {
+    (void)operation;
+    if (!tokens || !heads || !headDimension) return "attention layout dimensions must be nonzero";
+    if (std::uint64_t(tokens)*heads*headDimension*2>std::numeric_limits<U32>::max())
+        return "attention layout surface exceeds the 32-bit packet envelope";
+    if (headDimension%16) return "attention layout head dimension must be a multiple of 16";
+    if (tokens!=128 && tokens!=1500 && tokens!=64 && tokens!=256 && tokens!=512)
+        return "attention layout sequence has neither measured nor held-out coverage";
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionLayout(
+    U32 tokens,U32 heads,U32 headDimension,AttentionLayout operation) {
+    if (auto why=attentionLayoutRefusal(tokens,heads,headDimension,operation);
+        !why.empty()) throw std::invalid_argument(why);
+    Task task=attentionLayoutTask(tokens,heads,headDimension,operation);
+    TransformerAttentionProgram out;
+    out.program.task=streamPrologue(Generation::H16G);
+    out.program.task.insert(out.program.task.end(),task.bytes.begin(),task.bytes.end());
+    out.program.taskCount=1;
+    out.program.firstTaskBytes=task.bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.formulaBuilt=true;
+    out.programRecordCount=3;
+    const U32 baseFormat=heads*11u/2u;
+    out.programFormatCode=baseFormat+
+        (operation==AttentionLayout::SplitTranspose && heads>=8 ? 1u : 0u);
+    out.revealed=tokens==1500 && headDimension==64 && (heads==6 || heads==8);
+    return out;
+}
+
+namespace {
+std::size_t appendAttentionTask(std::vector<std::uint8_t> &stream,Task &task) {
+    stream.resize((stream.size()+15)&~std::size_t(15),0);
+    const std::size_t start=stream.size();
+    stream.insert(stream.end(),task.bytes.begin(),task.bytes.end());
+    return start;
+}
+
+void packQKLoad(Task &task) {
+    task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x0044,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24}); record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},0x22800000);
+    record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16; store(task.bytes,0,task.header[0]);
+}
+
+void packQKCompute(Task &task,bool final,U32 resultFlags=0x23800000) {
+    task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
+    word(task.bytes,0); // extended H16 runtime/runtime matmul header
+    record(task,{0x5500,0x5518,0x551c});
+    std::vector<U32> tileTable;
+    for (U32 address=0x5564;address<=0x55dc;address+=4) tileTable.push_back(address);
+    record(task,tileTable);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24}); record(task,{0x4d68});
+    record(task,{0x4104,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});
+    record(task,{0x5114,0x511c,0x5138});
+    if (final) record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},0x21800000);
+    record(task,{0x4d10,0x4d14},0x23000000);
+    record(task,{0x5108,0x510c},resultFlags);
+    record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
+    for (U32 lane=0;lane<16;++lane)
+        record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16 | (task.header[0]&0xffff);
+    store(task.bytes,0,task.header[0]);
+}
+
+Task qkLoadTask(U32 tokens,U32 heads,U32 headDimension) {
+    Task task; task.header={0,0,0x68,0,0x00fff868,0,0,0,1};
+    auto &r=task.registers; const U32 rowBytes=2*headDimension;
+    const U32 planeBytes=tokens*rowBytes;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    r[4]=headDimension;r[8]=1;r[12]=tokens;
+    r[0x14]=headDimension;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x20;r[0x44]=6;r[0x4c]=0;
+    r[0x4104]=0x500172;r[0x4108]=0x500130;r[0x4114]=rowBytes;
+    r[0x4118]=planeBytes;r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x50087a;r[0x414c]=planeBytes;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=rowBytes;r[0x4d24]=planeBytes;r[0x4d68]=0x1002031;
+    r[0x5100]=0x10000f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=0x400;r[0x511c]=paddedRow*headDimension;
+    r[0x5138]=0x8302031;packQKLoad(task);return task;
+}
+
+Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) {
+    Task task; task.header={stage,0,final?0x04000000u:0u,0,
+        final?0x00fff860u:0x00fff820u,0,0,0,
+        final?0x0005000bu:0x00050003u};
+    auto &r=task.registers; const U32 headPairs=(heads+1)/2;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=headDimension;
+    r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=headPairs;r[0x34]=1;r[0x3c]=0x20200000;r[0x4c]=0x100000;
+    r[0x4104]=final?0x142:0x100142;r[0x4114]=0x100;
+    r[0x4118]=0x4000;r[0x411c]=0x4000;r[0x4120]=0x4000;
+    r[0x4148]=0x14a;r[0x414c]=0x4000;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x4d00]=(stage<<16)|0x21;r[0x4d08]=0xce;
+    r[0x4d10]=final?0:heads*96256;r[0x4d14]=0;
+    r[0x4d1c]=paddedRow;r[0x4d24]=paddedRow*headDimension;
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031|(stage<<16);r[0x5108]=final?0:heads*scorePlane/2;
+    r[0x510c]=0;r[0x5114]=paddedRow;r[0x511c]=scorePlane;
+    r[0x5138]=0x1302031;
+    r[0x5500]=final?0x302c0:0x20240;r[0x5510]=final?0:heads*96256;
+    r[0x5514]=0;r[0x5518]=paddedRow*headDimension;r[0x551c]=0x4000;
+    for (U32 lane=0;lane<15;++lane) r[0x5564+4*lane]=(lane+1)*0x400;
+    for (U32 lane=0;lane<16;++lane) r[0x55a0+4*lane]=0x400;
+    for (U32 lane=0;lane<16;++lane)
+        r[0x5520+4*lane]=(stage<<16)|(final?0x41:0xc1);
+    if (final) {
+        r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x200e0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;
+    }
+    packQKCompute(task,final);return task;
+}
+
+Task qkTransposeStageTask(U32 tokens,U32 heads,U32 headDimension) {
+    const bool shortSchedule=heads==6;
+    Task task;task.header={1,0,0,0,shortSchedule?0x28u:0x20u,0,0,
+        shortSchedule?0x0003ffffu:0x00ffffffu,0x00050001};
+    auto &r=task.registers;const U32 rowBytes=2*headDimension;
+    const U32 planeBytes=tokens*rowBytes;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 paddedPlane=paddedRow*headDimension;
+    r[4]=headDimension;r[8]=1;r[12]=tokens;r[0x14]=headDimension;
+    r[0x18]=1;r[0x1c]=tokens;r[0x24]=heads;r[0x30]=0x84000;
+    r[0x34]=1;r[0x3c]=0x30211100;r[0x4c]=0x100000;
+    r[0x4104]=0x142;r[0x4110]=heads*paddedPlane;r[0x4114]=rowBytes;
+    r[0x4118]=planeBytes;r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x400140;r[0x4150]=paddedRow;r[0x415c]=paddedPlane;
+    r[0x4904]=0x103c0c;r[0x4910]=0x3c00;
+    r[0x4d00]=0x10021;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=rowBytes;r[0x4d24]=planeBytes;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0030,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x4150,0x415c});record(task,{0x4904,0x4910});
+    record(task,{0x4d10,0x4d14},0x23000000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|1;store(task.bytes,0,task.header[0]);
+    return task;
+}
+
+Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
+                            U32 stage,bool final) {
+    const bool shortSchedule=heads==6;
+    Task task;task.header={stage,0,final?0x04000000u:0u,0,
+        shortSchedule?0x28u:(final?0x00fff860u:0x00fff820u),0,0,
+        final?0u:(shortSchedule?0x0003ffffu:0x00ffffffu),
+        final?0x0005000bu:0x00050003u};
+    auto &r=task.registers;const U32 pairs=(heads+1)/2;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 paddedPlane=paddedRow*headDimension;
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=headDimension;r[0x14]=tokens;
+    r[0x18]=1;r[0x1c]=tokens;r[0x24]=pairs;r[0x34]=1;
+    r[0x3c]=0x20200000;r[0x4c]=0x100000;
+    if (!final) {r[0x4104]=0x120;r[0x4110]=heads*96256;}
+    r[0x4114]=paddedRow;r[0x4120]=paddedPlane;
+    r[0x4148]=0x14a;r[0x414c]=heads*paddedPlane;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x5100]=0x01000031|(stage<<16);
+    r[0x5108]=final?0:heads*scorePlane/2;r[0x510c]=0;
+    r[0x5114]=paddedRow;r[0x511c]=scorePlane;r[0x5138]=0x1302031;
+    r[0x5500]=final?0x402c0:0x30240;r[0x5510]=final?0:heads*96256;
+    r[0x5514]=0;r[0x5518]=paddedPlane;r[0x551c]=0x4000;
+    for(U32 lane=0;lane<15;++lane)r[0x5564+4*lane]=(lane+1)*0x400;
+    for(U32 lane=0;lane<16;++lane)r[0x55a0+4*lane]=0x400;
+    for(U32 lane=0;lane<16;++lane)
+        r[0x5520+4*lane]=(stage<<16)|(final?0x41:0xc1);
+    if(final){r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x300e0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;}
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);word(task.bytes,0);
+    record(task,{0x5500,0x5518,0x551c});
+    std::vector<U32> table;for(U32 a=0x5564;a<=0x55dc;a+=4)table.push_back(a);record(task,table);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x004c});
+    if(!final)record(task,{0x4104,0x4110,0x4114,0x4120});
+    else record(task,{0x4114,0x4120,0x4148,0x414c});
+    if(!final)record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
+    if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},0x21800000);
+    record(task,{0x5108,0x510c},0x23800000);record(task,{0x5100},0x22000000);
+    for(U32 lane=0;lane<16;++lane)record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|stage;store(task.bytes,0,task.header[0]);
+    return task;
+}
+
+Task pvLoadTask(U32 tokens,U32 heads) {
+    Task task;task.header={0,0,0x68,0,0x68,0,0,0,0x00050001};
+    auto &r=task.registers;const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=tokens;r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x30]=0x14000;r[0x34]=1;r[0x3c]=0x200000;
+    r[0x40]=0;r[0x4c]=0x100000;
+    r[0x4104]=0x500172;r[0x4108]=0x500130;r[0x4114]=0x100;
+    r[0x4118]=tokens*0x100;r[0x411c]=tokens*0x100;r[0x4120]=tokens*0x100;
+    r[0x4148]=0x50087a;r[0x414c]=tokens*0x100;
+    r[0x4904]=0x103c0c;r[0x4910]=0x3c00;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=paddedRow;r[0x4d24]=scorePlane;r[0x4d68]=0x1002031;
+    r[0x5100]=0x10000f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=tokens*16;r[0x511c]=scorePlane;r[0x5138]=0x8302031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0030,0x0034,0x003c,0x0040,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
+                bool fused=false) {
+    const bool final=stage==heads;const U32 rowBytes=2*headDimension;
+    const U32 taskIndex=fused?10+stage:stage;
+    const U32 planeBytes=tokens*rowBytes;const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 scorePlane=tokens*paddedRow;const U32 remaining=heads-stage;
+    Task task;task.header={taskIndex,0,final?0x04000000u:0u,0,
+        heads==6?0x28u:(final?0x00fff860u:0x00fff820u),0,0,0,
+        final?0x0005000bu:0x00050003u};auto &r=task.registers;
+    r[4]=headDimension;r[8]=1;r[12]=tokens;r[0x14]=headDimension;
+    r[0x18]=1;r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x20200004;r[0x4c]=0x100000;
+    r[0x4104]=0x142|(fused&&stage==1?0x100000:0);r[0x4114]=rowBytes;r[0x4118]=planeBytes;
+    r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x14a|(fused&&stage==1&&heads==8?0x100000:0);r[0x414c]=planeBytes;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x4d00]=(taskIndex<<16)|0x21;r[0x4d08]=0xce;r[0x4d10]=remaining*planeBytes;
+    r[0x4d14]=0;r[0x4d1c]=rowBytes;r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031|(taskIndex<<16);r[0x5108]=remaining*planeBytes;
+    r[0x510c]=0;r[0x5114]=rowBytes;r[0x5138]=0x1302031;
+    r[0x5500]=((taskIndex+1)<<16)|(final?0x2c0:0x240);
+    r[0x5510]=remaining*scorePlane;r[0x5514]=0;r[0x551c]=2*planeBytes;
+    const U32 tileBytes=tokens*16;
+    for(U32 lane=0;lane<15;++lane)r[0x5564+4*lane]=(lane+1)*tileBytes;
+    for(U32 lane=0;lane<16;++lane)r[0x55a0+4*lane]=tileBytes;
+    for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=(taskIndex<<16)|(final?0x41:0xc1);
+    if(final){r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=(taskIndex<<16)|0xe0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;}
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);word(task.bytes,fused?0x0a:0);
+    record(task,{0x5500,0x551c});std::vector<U32> table;
+    for(U32 a=0x5564;a<=0x55dc;a+=4)table.push_back(a);record(task,table);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x5138});
+    if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},0x21800000);
+    record(task,{0x4d10,0x4d14},fused?0x23800000:0x23000000);
+    record(task,{0x5108,0x510c},fused?0x24000000:0x23800000);
+    record(task,{0x4d00},0x22000000);
+    record(task,{0x5100},0x22000000);for(U32 lane=0;lane<16;++lane)
+        record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|taskIndex;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedQKLoadTask(U32 tokens,U32 heads,U32 headDimension) {
+    Task task=qkLoadTask(tokens,heads,headDimension);auto &r=task.registers;
+    const U32 scorePlane=tokens*attentionAlign64(2*tokens);
+    task.header[4]=heads==6?0x68:0x00fff868;r[0x4508]=0x3e000000;
+    r[0x5108]=heads*scorePlane;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4108});record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4508});record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedQKComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage) {
+    Task task=qkComputeTask(tokens,heads,headDimension,stage,false);auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    task.header[4]=heads==6?0x28:0x00fff820;
+    r[0x4148]=0x44a;r[0x5100]=0x010000f1|(stage<<16);
+    r[0x5114]=4*paddedRow;r[0x5138]=0x04302031;
+    r[0x5500]=((stage+1)<<16)|0x240;
+    r[0x5510]=heads*(scorePlane+(stage==1?96256:0));
+    if(stage==2){r[0x4104]=0x142;r[0x4d10]=0;r[0x5108]=0;
+        for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=(stage<<16)|0x41;}
+    packQKCompute(task,false,0x21800000);return task;
+}
+
+Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
+    Task task;task.header={index,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};
+    auto &r=task.registers;const U32 channels=index==3?348:384;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=channels;r[0x14]=tokens;r[0x18]=1;r[0x1c]=channels;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
+    r[0x4100]=4;r[0x4104]=index==3?0x400442:0x442;r[0x4110]=heads*tokens*16;
+    r[0x4114]=1024;r[0x4118]=index==3?0x57000:0x60000;
+    r[0x411c]=r[0x4118];r[0x4120]=r[0x4118];
+    if(index==3)r[0x4148]=0x120;
+    if(index<=5)r[0x414c]=index==3?0x4800:index==4?0x3000:0x1800;
+    r[0x4150]=16;r[0x415c]=tokens*16;r[0x4500]=2;
+    const U32 begins[]={0,0,0,0x100300c1,0x11040021,0x12050021,0x130600e1};
+    const U32 offsets[]={0,0,0,0x34e000,0x234000,0x11a000,0};
+    r[0x4d00]=begins[index];r[0x4d08]=index==6?0xee:0xce;
+    r[0x4d10]=offsets[index];r[0x4d14]=0;r[0x4d1c]=4*paddedRow;
+    r[0x4d24]=scorePlane;r[0x4d68]=0x4002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4100,0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    std::vector<U32> l2;
+    if(r.count(0x4148))l2.push_back(0x4148);if(r.count(0x414c))l2.push_back(0x414c);
+    l2.push_back(0x4150);l2.push_back(0x415c);record(task,l2);record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxMaxTask(U32 tokens,U32 heads) {
+    Task task;task.header={7,0,0,0,heads==6?0x28u:0x00fff820u,0,0,0,0};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
+    r[0x34]=heads;r[0x3c]=0x30;r[0x44]=0x34;r[0x48]=16;r[0x4c]=0;
+    r[0x4104]=0x442;r[0x4108]=0x400100;r[0x4110]=heads*tokens*48;
+    r[0x4114]=32;r[0x4118]=tokens*32;r[0x411c]=tokens*32;r[0x4120]=tokens*32;
+    r[0x4128]=16;r[0x412c]=tokens*16;r[0x4148]=0x103;r[0x414c]=heads*tokens*16;
+    r[0x4150]=32;r[0x4154]=tokens*32;r[0x4158]=tokens*32;r[0x415c]=tokens*32;
+    r[0x4500]=0xc0000;r[0x4508]=0x3fb8a000;r[0x4d00]=0x14070041;
+    r[0x4d08]=0x4e;r[0x4d10]=0;r[0x4d14]=0;r[0x4d18]=scorePlane;
+    r[0x4d1c]=4*paddedRow;r[0x4d68]=0x4002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});record(task,{0x4500,0x4508});
+    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|7;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxExpTask(U32 tokens,U32 heads) {
+    Task task;task.header={8,0,0,0,heads==6?0x28u:0x00fff820u,0,0,
+        (1u<<(heads+1))-1,0x00050001};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
+    r[0x30]=0x14000;r[0x34]=heads;r[0x3c]=0x233300;r[0x40]=0;r[0x4c]=0x100000;
+    r[0x4104]=0x103;r[0x4110]=heads*tokens*16;r[0x4114]=32;
+    r[0x4118]=tokens*32;r[0x411c]=tokens*32;r[0x4120]=tokens*32;
+    r[0x4148]=0x142;r[0x414c]=heads*tokens*80;r[0x4150]=64;
+    r[0x4154]=tokens*64+16;r[0x4158]=tokens*64;r[0x415c]=tokens*64;
+    r[0x4900]=0x10082;r[0x4904]=0x123c0c;r[0x4910]=0x3c00;
+    r[0x5100]=0x800f1;r[0x5104]=0x2c000033;r[0x5108]=heads*scorePlane;
+    r[0x510c]=0;r[0x5110]=paddedRow;r[0x5114]=heads*paddedRow;r[0x5138]=0x1302031;
+    r[0x5500]=0x90240;for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=0x80020;
+    r[0x5610]=0x80021;r[0x5614]=128;r[0x5618]=0;r[0x561c]=0;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    std::vector<U32> first{0x5500};for(U32 a=0x5520;a<=0x5540;a+=4)first.push_back(a);record(task,first);
+    std::vector<U32> second;for(U32 a=0x5544;a<=0x555c;a+=4)second.push_back(a);record(task,second);
+    record(task,{0x5610,0x5614});record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x40,0x4c});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5104,0x5110,0x5114,0x5138});
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},0x24800000);
+    record(task,{0x5108,0x510c},0x21800000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|8;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxSumTask(U32 tokens,U32 heads) {
+    Task task;task.header={9,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
+    r[0x4104]=0x152;r[0x4110]=heads*tokens*16;r[0x4114]=1024;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4150]=16;r[0x415c]=heads*16;r[0x4500]=0x1000;
+    r[0x4d00]=0x10090021;r[0x4d08]=0xce;r[0x4d10]=heads*scorePlane;
+    r[0x4d14]=0;r[0x4d1c]=paddedRow;r[0x4d24]=heads*paddedRow;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|9;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxNormalizeTask(U32 tokens,U32 heads) {
+    Task task;task.header={10,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=tokens;r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=1;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x162;r[0x4114]=heads*16;r[0x4120]=16;
+    r[0x4124]=heads*tokens*16;r[0x4128]=1024;r[0x412c]=tokens*1024;
+    r[0x4130]=tokens*1024;r[0x4134]=tokens*1024;r[0x4148]=0x84a;
+    r[0x414c]=tokens*1024+heads*tokens*16;r[0x4500]=0x80004;
+    r[0x4d04]=0x110a0041;r[0x4d0c]=0x4e;r[0x4d28]=heads*scorePlane;
+    r[0x4d2c]=0;r[0x4d34]=heads*paddedRow;r[0x4d3c]=paddedRow;r[0x4d6c]=0x1002031;
+    r[0x5100]=0x010a00f1;r[0x5104]=0x11000033;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=tokens*16;r[0x511c]=scorePlane;r[0x5138]=0x8302031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c,0x4d34,0x4d3c});record(task,{0x4d6c});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4120,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
+    record(task,{0x4500});record(task,{0x5104,0x5114,0x511c,0x5138});
+    record(task,{0x4d28,0x4d2c},0x21800000);record(task,{0x5108,0x510c},0x21800000);
+    record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|10;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxSetupTask(U32 tokens,U32 heads) {
+    Task task;task.header={0,0,0x68,0,heads==8?0x00fff868u:0x68u,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
+    r[0x4100]=4;r[0x4104]=0x500172;r[0x4108]=0x500130;
+    r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4148]=0x500130;r[0x4150]=2*heads;r[0x415c]=16*heads;r[0x4500]=2;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=scorePlane;r[0x4d24]=paddedRow;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4100,0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},0x22800000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxMaxTask(U32 tokens,U32 heads) {
+    Task task;task.header={1,0,0,0,heads==8?0x00fff820u:0x28u,0,0,0,0};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x34]=tokens;r[0x3c]=0x30;r[0x44]=0x44;r[0x48]=2*heads;r[0x4c]=0;
+    r[0x4104]=0x142;r[0x4108]=0x400100;r[0x4110]=heads*tokens*50;
+    r[0x4114]=8*heads;r[0x4118]=66*heads;r[0x411c]=64*heads;r[0x4120]=64*heads;
+    r[0x4128]=2*heads;r[0x412c]=16*heads;r[0x4148]=0x103;
+    r[0x414c]=heads*tokens*16;r[0x4150]=4*heads;r[0x4154]=34*heads;
+    r[0x4158]=32*heads;r[0x415c]=32*heads;r[0x4500]=heads*0x18000;
+    r[0x4508]=0x3fb8a000;r[0x4d00]=0x100c1;r[0x4d08]=0xce;
+    r[0x4d10]=0;r[0x4d14]=0;r[0x4d18]=paddedRow;r[0x4d1c]=scorePlane;
+    r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
+    record(task,{0x4500,0x4508});record(task,{0x4d10,0x4d14},0x22800000);
+    record(task,{0x4d00},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|1;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxExpTask(U32 tokens,U32 heads) {
+    Task task;task.header={2,0,0,0,heads==8?0x00fff820u:0x28u,0,0,0x3ff,0x00050001};auto &r=task.registers;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x30]=0x14000;r[0x34]=tokens;r[0x3c]=0x1c4400;r[0x40]=heads;r[0x4c]=0x100000;
+    r[0x4104]=0x103;r[0x4110]=heads*tokens*16;r[0x4114]=4*heads;
+    r[0x4118]=34*heads;r[0x411c]=32*heads;r[0x4120]=32*heads;
+    r[0x4148]=0x84a;r[0x414c]=heads*174000;
+    r[0x4900]=0x10082;r[0x4904]=0x123c0c;r[0x4910]=0x3c00;
+    r[0x5100]=0x010200f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5110]=tokens*16;r[0x5138]=0x8302031;
+    r[0x5500]=0x30240;for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=0x20020;
+    r[0x5610]=0x20021;r[0x5614]=128;r[0x5618]=0;r[0x561c]=0;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    std::vector<U32> first{0x5500};for(U32 a=0x5520;a<=0x5540;a+=4)first.push_back(a);record(task,first);
+    std::vector<U32> second;for(U32 a=0x5544;a<=0x555c;a+=4)second.push_back(a);record(task,second);
+    record(task,{0x5610,0x5614});record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x40,0x4c});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5110,0x5138});
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},0x23800000);
+    record(task,{0x5108,0x510c},0x21800000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|2;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxSumTask(U32 tokens,U32 heads) {
+    Task task;task.header={3,0,0,0,heads==8?0x00fff820u:0x28u,0,0,7,1};auto &r=task.registers;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
+    r[0x4104]=0x852;r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4150]=2*heads;r[0x415c]=16*heads;r[0x4500]=0x1000;
+    r[0x4d00]=0x10030021;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d24]=tokens*16;r[0x4d68]=0x8002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},0x21800000);record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|3;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxNormalizeTask(U32 tokens,U32 heads) {
+    Task task;task.header={4,0,0x04000000,0,heads==8?0x00fff860u:0x28u,0,0,0,9};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x34]=4*heads;r[0x3c]=0x30;r[0x44]=heads+1;r[0x48]=1;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x842;r[0x4114]=2*heads;r[0x4118]=16*heads;
+    r[0x4124]=heads*tokens*16;r[0x4128]=heads*128;r[0x412c]=heads*1024;
+    r[0x4130]=heads*1024;r[0x4134]=heads*1024;r[0x4148]=0x14a;
+    r[0x414c]=heads*56768;r[0x4500]=0x80004;
+    r[0x4d04]=0x21040041;r[0x4d0c]=0x4e;r[0x4d28]=0;r[0x4d2c]=0;
+    r[0x4d30]=tokens*16;r[0x4d6c]=0x8002031;
+    r[0x5100]=0x01040031;r[0x5108]=0;r[0x510c]=0;r[0x5110]=paddedRow;
+    r[0x5114]=scorePlane;r[0x5138]=0x1302031;r[0x5500]=128;
+    r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x400e0;
+    r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{0x5500});
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c,0x4d30});record(task,{0x4d6c});record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
+    record(task,{0x4500});record(task,{0x5110,0x5114,0x5138});
+    record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x4d28,0x4d2c},0x21800000);record(task,{0x5108,0x510c},0x23000000);
+    record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|4;store(task.bytes,0,task.header[0]);return task;
+}
+}
+
+std::string attentionMatmulRefusal(U32 tokens,U32 heads,U32 headDimension,
+                                   AttentionMatmul operation) {
+    (void)operation;
+    if (auto why=attentionLayoutRefusal(tokens,heads,headDimension,
+        AttentionLayout::Split);!why.empty()) return why;
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionMatmul(
+    U32 tokens,U32 heads,U32 headDimension,AttentionMatmul operation) {
+    if (auto why=attentionMatmulRefusal(tokens,heads,headDimension,operation);
+        !why.empty()) throw std::invalid_argument(why);
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    Task load=operation==AttentionMatmul::PV ? pvLoadTask(tokens,heads)
+                                             : qkLoadTask(tokens,heads,headDimension);
+    appendAttentionTask(out.program.task,load);
+    if(operation==AttentionMatmul::QK){
+        Task compute=qkComputeTask(tokens,heads,headDimension,1,false);
+        Task store=qkComputeTask(tokens,heads,headDimension,2,true);
+        appendAttentionTask(out.program.task,compute);appendAttentionTask(out.program.task,store);
+        out.program.taskCount=3;out.programRecordCount=7;
+        out.programFormatCode=heads==6?209:heads==8?278:35*heads-1;
+    }else if(operation==AttentionMatmul::QKTransposeY){
+        if(heads==6){load.header[4]=0x68;store(load.bytes,16,0x68);}
+        out.program.task=streamPrologue(Generation::H16G);appendAttentionTask(out.program.task,load);
+        Task transpose=qkTransposeStageTask(tokens,heads,headDimension);
+        Task compute=qkTransposeComputeTask(tokens,heads,headDimension,2,false);
+        Task store=qkTransposeComputeTask(tokens,heads,headDimension,3,true);
+        appendAttentionTask(out.program.task,transpose);appendAttentionTask(out.program.task,compute);
+        appendAttentionTask(out.program.task,store);out.program.taskCount=4;
+        out.programRecordCount=9;out.programFormatCode=heads==6?200:heads==8?266:33*heads+2;
+    }else{
+        for(U32 stage=1;stage<=heads;++stage){Task head=pvHeadTask(tokens,heads,headDimension,stage);
+            appendAttentionTask(out.program.task,head);}
+        out.program.taskCount=heads+1;out.programRecordCount=2*heads+3;
+        out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
+    }
+    out.program.firstTaskBytes=load.bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.scratchAllocationBytes=operation==AttentionMatmul::PV
+        ? heads*tokens*attentionAlign64(2*tokens)
+        : heads*attentionAlign64(2*tokens)*headDimension;
+    out.program.formulaBuilt=true;
+    out.revealed=tokens==1500&&headDimension==64&&(heads==6||heads==8);
+    return out;
+}
+
+std::string attentionSoftmaxRefusal(U32 tokens,U32 heads) {
+    if(!heads)return "softmax head count must be nonzero";
+    if(tokens!=1500&&tokens!=128)return "softmax sequence has no measured or predicted law";
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionSoftmax(U32 tokens,U32 heads) {
+    if(auto why=attentionSoftmaxRefusal(tokens,heads);!why.empty())
+        throw std::invalid_argument(why);
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    Task tasks[]={softmaxSetupTask(tokens,heads),softmaxMaxTask(tokens,heads),
+        softmaxExpTask(tokens,heads),softmaxSumTask(tokens,heads),
+        softmaxNormalizeTask(tokens,heads)};
+    for(Task &task:tasks){const std::size_t start=appendAttentionTask(out.program.task,task);
+        if(task.kernelRelocation)out.program.kernelRelocations.push_back(start+task.kernelRelocation);}
+    out.program.taskCount=5;out.program.firstTaskBytes=tasks[0].bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.scratchAllocationBytes=std::uint64_t(heads)*tokens*tokens*2;
+    out.program.formulaBuilt=true;out.programRecordCount=11;
+    out.programFormatCode=heads==8?1054:132*heads-1;
+    out.revealed=tokens==1500&&heads==8;return out;
+}
+
+TransformerAttentionProgram encodeFusedAttention(
+    U32 tokens,U32 heads,U32 headDimension) {
+    if(auto why=attentionMatmulRefusal(tokens,heads,headDimension,
+        AttentionMatmul::PV);!why.empty())throw std::invalid_argument(why);
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    std::vector<Task> tasks;tasks.push_back(fusedQKLoadTask(tokens,heads,headDimension));
+    tasks.push_back(fusedQKComputeTask(tokens,heads,headDimension,1));
+    tasks.push_back(fusedQKComputeTask(tokens,heads,headDimension,2));
+    for(U32 index=3;index<=6;++index)tasks.push_back(fusedSoftmaxTileTask(tokens,heads,index));
+    tasks.push_back(fusedSoftmaxMaxTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxExpTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxSumTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxNormalizeTask(tokens,heads));
+    for(U32 stage=1;stage<=heads;++stage)
+        tasks.push_back(pvHeadTask(tokens,heads,headDimension,stage,true));
+    for(std::size_t index=0;index<tasks.size();++index) {
+        Task &task=tasks[index];const std::size_t start=appendAttentionTask(out.program.task,task);
+        if(index==8)out.program.kernelRelocations.push_back(start+task.kernelRelocation);
+    }
+    out.program.taskCount=U32(tasks.size());out.program.firstTaskBytes=tasks[0].bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.scratchAllocationBytes=std::uint64_t(heads)*tokens*
+        attentionAlign64(2*tokens);out.program.formulaBuilt=true;
+    out.programRecordCount=2*heads+23;out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
+    out.revealed=headDimension==64&&(heads==6||heads==8);return out;
+}
 }

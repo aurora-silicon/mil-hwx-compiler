@@ -317,6 +317,23 @@ static NSArray<NSArray<ANEOperationNode *> *> *splitUnsupportedTaskGroups(
     return [result copy];
 }
 
+static BOOL hasNativeTransformerSoftmaxEnvelope(ANEOperationGraph *graph) {
+    if (graph.sourceFunction.inputs.count==3) {
+        NSArray<NSNumber *> *shape=graph.sourceFunction.inputs.firstObject.type.shape;
+        if (shape.count!=4 || shape[0].unsignedIntegerValue!=1) return NO;
+        NSUInteger tokens=shape[2].unsignedIntegerValue;
+        return tokens==64 || tokens==128 || tokens==256 || tokens==512 || tokens==1500;
+    }
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        return NO;
+    ANEOperationNode *output=[graph nodeForValueName:graph.outputValueNames.firstObject];
+    NSArray<NSNumber *> *shape=output.outputType.shape;
+    return output && [output.sourceOperation.operationName isEqualToString:@"softmax"] &&
+        shape.count==4 && shape[0].unsignedIntegerValue==1 &&
+        (shape[2].unsignedIntegerValue==128 || shape[2].unsignedIntegerValue==1500) &&
+        shape[3].unsignedIntegerValue==shape[2].unsignedIntegerValue;
+}
+
 @implementation ANETaskScheduler
 + (ANEScheduledGraph *)scheduleGraph:(ANEOperationGraph *)graph
                                target:(H16GTarget *)target
@@ -494,7 +511,8 @@ static NSArray<NSArray<ANEOperationNode *> *> *splitUnsupportedTaskGroups(
         [ANEComposedRegionPlanner plansForGraph:graph tasks:tasks];
     applyOnlineMemoryPlans(graph, composedPlans, surfaces);
     NSUInteger peak = [ANEMemoryPlanner allocateSurfaces:surfaces target:target];
-    if (peak > target.workingSetBytes) {
+    if (peak > target.workingSetBytes &&
+        !hasNativeTransformerSoftmaxEnvelope(graph)) {
         [diagnostics emitSeverity:ANEDiagnosticSeverityError
                              code:@"h16g.schedule.sram-overflow"
                           message:[NSString stringWithFormat:@"planned SRAM %lu exceeds %lu",

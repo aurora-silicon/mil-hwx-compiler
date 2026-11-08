@@ -61,6 +61,53 @@ struct TransformerLinearProgram {
     std::size_t scratchBytes = 0;
 };
 
+/// Native transformer data movement over a contiguous fp16 tensor.  Split
+/// maps [1,S,H*D] to [1,H,S,D], SplitTranspose maps it to [1,H,D,S], and
+/// Merge is the inverse [1,H,S,D] to [1,S,H*D].  The measured rows have
+/// D=64; other requested shapes are emitted only as explicitly unrevealed
+/// predictions.
+enum class AttentionLayout { Split, SplitTranspose, Merge };
+struct TransformerAttentionProgram {
+    h13::Program program;
+    std::uint32_t programRecordCount = 0;
+    std::uint32_t programFormatCode = 0;
+    bool revealed = false;
+};
+
+std::string attentionLayoutRefusal(std::uint32_t tokens,
+                                   std::uint32_t heads,
+                                   std::uint32_t headDimension,
+                                   AttentionLayout operation);
+TransformerAttentionProgram encodeAttentionLayout(
+    std::uint32_t tokens, std::uint32_t heads,
+    std::uint32_t headDimension, AttentionLayout operation);
+
+/// Runtime/runtime attention matrix products. QK consumes [1,H,S,D] and
+/// [1,H,D,S]; QKTransposeY consumes two [1,H,S,D] tensors; PV consumes
+/// [1,H,S,S] and [1,H,S,D].
+enum class AttentionMatmul { QK, QKTransposeY, PV };
+std::string attentionMatmulRefusal(std::uint32_t tokens,
+                                   std::uint32_t heads,
+                                   std::uint32_t headDimension,
+                                   AttentionMatmul operation);
+TransformerAttentionProgram encodeAttentionMatmul(
+    std::uint32_t tokens, std::uint32_t heads,
+    std::uint32_t headDimension, AttentionMatmul operation);
+
+/// Native last-axis softmax over [1,H,S,S]. S=1500,H=8 is revealed;
+/// H=1/6 and the S=128 family remain explicit predictions without an
+/// isolated parity row.
+std::string attentionSoftmaxRefusal(std::uint32_t tokens,
+                                    std::uint32_t heads);
+TransformerAttentionProgram encodeAttentionSoftmax(std::uint32_t tokens,
+                                                   std::uint32_t heads);
+
+/// Fused scale-QK-softmax-PV over Q [1,H,S,D], K [1,H,D,S], and
+/// V [1,H,S,D].
+TransformerAttentionProgram encodeFusedAttention(
+    std::uint32_t tokens, std::uint32_t heads,
+    std::uint32_t headDimension);
+
 /// Empty when the transformer-linear formula has measured coverage.
 std::string transformerLinearRefusal(std::uint32_t tokens,
                                      std::uint32_t inputChannels,

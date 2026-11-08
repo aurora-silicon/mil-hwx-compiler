@@ -21,7 +21,8 @@ U64_MAX = (1 << 64) - 1
 # metadata, not task sizes; task_stream remains the structural authority.
 FORMATS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17,
            18, 20, 21, 23, 27, 30, 31, 36, 41, 43, 61, 72, 92, 145,
-           245, 368}
+           245, 368, 33, 44, 45, 66, 67, 68, 69, 101, 104, 167, 174,
+           200, 209, 263, 266, 278, 395, 398, 419, 659, 791, 1054, 1583}
 REGISTER_BLOCKS = ((0, 0x5c), (0x4100, 0x41a4), (0x44d0, 0x44d4),
                    (0x4500, 0x453c), (0x4900, 0x4930), (0x4d00, 0x4e44),
                    (0x5100, 0x5154), (0x5500, 0x5620), (0x5900, 0x5930))
@@ -289,9 +290,10 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     p = programs[0]
     require(len(p) in (0x8a0, 0x8c0), "program-size")
     mixed = len(p) == 0x8c0
-    # One-task materialized transposes use record code 3; convolution,
-    # linear and mixed programs use the established larger codes.
-    require(u32(p, 0x860) in (0x03, 0x10, 0x12, 0x1f, 0x20, 0x2d),
+    # Materialized transposes and the transformer families add bounded
+    # measured record codes to the convolution/linear set.
+    require(u32(p, 0x860) in (3, 7, 9, 11, 13, 15, 16, 18, 19, 27, 31, 32,
+                              35, 39, 45),
             "program-record-code")
     fmt = u32(p, 0x8b0 if mixed else 0x890)
     require(fmt in FORMATS, "program-format-code")

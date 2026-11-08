@@ -1340,6 +1340,419 @@ static ANEHWXArtifact *encodeMixedTaskProgram(
     return [[ANEHWXArtifact alloc] initWithImage:image bindings:bindings];
 }
 
+static ANEHWXArtifact *encodeTransformerLayoutProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=1 ||
+        graph.outputValueNames.count!=1) return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    ANEOperationNode *output=nodeNamed(graph,graph.outputValueNames.firstObject);
+    if (!output) return nil;
+    NSArray<NSNumber *> *in=input.type.shape,*out=output.outputType.shape;
+    if (input.type.elementType!=ANEElementTypeFP16 ||
+        output.outputType.elementType!=ANEElementTypeFP16) return nil;
+    NSUInteger active=0;
+    BOOL reshape=NO,transpose=NO;
+    for (ANEOperationNode *node in graph.nodes) {
+        if (node.kind==ANEOperationKindConstant) continue;
+        ++active;
+        reshape|=[node.operationName isEqualToString:@"reshape"];
+        transpose|=[node.operationName isEqualToString:@"transpose"];
+    }
+    if (active!=2 || !reshape || !transpose) return nil;
+    ane::h16::AttentionLayout operation;
+    NSUInteger tokens=0,heads=0,headDimension=0;
+    if (in.count==3 && out.count==4 &&
+        in[0].unsignedIntegerValue==1 && out[0].unsignedIntegerValue==1) {
+        tokens=in[1].unsignedIntegerValue;
+        heads=out[1].unsignedIntegerValue;
+        if (out[2].unsignedIntegerValue==tokens) {
+            operation=ane::h16::AttentionLayout::Split;
+            headDimension=out[3].unsignedIntegerValue;
+        } else if (out[3].unsignedIntegerValue==tokens) {
+            operation=ane::h16::AttentionLayout::SplitTranspose;
+            headDimension=out[2].unsignedIntegerValue;
+        } else return nil;
+        if (in[2].unsignedIntegerValue!=heads*headDimension) return nil;
+    } else if (in.count==4 && out.count==3 &&
+               in[0].unsignedIntegerValue==1 && out[0].unsignedIntegerValue==1) {
+        operation=ane::h16::AttentionLayout::Merge;
+        heads=in[1].unsignedIntegerValue;
+        tokens=in[2].unsignedIntegerValue;
+        headDimension=in[3].unsignedIntegerValue;
+        if (out[1].unsignedIntegerValue!=tokens ||
+            out[2].unsignedIntegerValue!=heads*headDimension) return nil;
+    } else return nil;
+    ane::h16::TransformerAttentionProgram encoded;
+    try {
+        encoded=ane::h16::encodeAttentionLayout((uint32_t)tokens,
+            (uint32_t)heads,(uint32_t)headDimension,operation);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.transformer-layout-fields",
+            [NSString stringWithUTF8String:exception.what()],output);
+        return nil;
+    }
+    const NSUInteger width=heads*headDimension;
+    const NSUInteger widthBytes=2*width;
+    const NSUInteger headRowBytes=2*headDimension;
+    const NSUInteger naturalBytes=tokens*widthBytes;
+    const NSUInteger inputRow=operation==ane::h16::AttentionLayout::Merge
+        ? headRowBytes : widthBytes;
+    const NSUInteger inputPlane=operation==ane::h16::AttentionLayout::Merge
+        ? tokens*headRowBytes : naturalBytes;
+    const NSUInteger outputRow=operation==ane::h16::AttentionLayout::Split
+        ? headRowBytes
+        : operation==ane::h16::AttentionLayout::SplitTranspose
+            ? alignUp(2*tokens,64) : widthBytes;
+    const NSUInteger outputPlane=operation==ane::h16::AttentionLayout::Split
+        ? tokens*headRowBytes
+        : operation==ane::h16::AttentionLayout::SplitTranspose
+            ? alignUp(2*tokens,64)*headDimension : naturalBytes;
+    const NSUInteger inputStorage=operation==ane::h16::AttentionLayout::Merge
+        ? naturalBytes : naturalBytes;
+    const NSUInteger outputStorage=operation==ane::h16::AttentionLayout::SplitTranspose
+        ? heads*outputPlane : naturalBytes;
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType
+            shape:in rowStrideBytes:inputRow planeStrideBytes:inputPlane
+            batchStrideBytes:inputStorage storageByteLength:inputStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[output.identifier stringByAppendingString:@"@output"]
+            shortName:output.identifier role:HWXObjectBindingRoleOutput
+            elementType:output.outputType.elementType shape:out
+            rowStrideBytes:outputRow planeStrideBytes:outputPlane
+            batchStrideBytes:outputStorage storageByteLength:outputStorage],
+    ];
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:1 recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode scratchByteLength:0
+        descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:objectBindings
+        kernelRelocationOffsets:@[] programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.transformer-layout-object",
+            error.localizedDescription ?: @"cannot construct transformer layout HWX",output);
+        return nil;
+    }
+    NSArray<ANEHWXBinding *> *runtimeBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name
+            role:ANESurfaceRoleInput logicalByteLength:naturalBytes
+            allocationByteLength:alignUp(inputStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:inputRow planeStrideBytes:inputPlane
+            batchStrideBytes:inputStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:output.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:naturalBytes
+            allocationByteLength:alignUp(outputStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:outputRow planeStrideBytes:outputPlane
+            batchStrideBytes:outputStorage],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+}
+
+static ANEHWXArtifact *encodeTransformerQKProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=2 ||
+        graph.outputValueNames.count!=1) return nil;
+    ANEOperationNode *matmul=nil;
+    NSUInteger active=0;
+    for (ANEOperationNode *node in graph.nodes) {
+        if (node.kind==ANEOperationKindConstant) continue;
+        ++active;
+        if ([node.operationName isEqualToString:@"matmul"]) matmul=node;
+    }
+    if (active!=1 || !matmul ||
+        ![graph.outputValueNames.firstObject isEqualToString:matmul.identifier])
+        return nil;
+    ANEGraphValue *left=matmul.sourceOperation.operands[@"x"].value;
+    ANEGraphValue *right=matmul.sourceOperation.operands[@"y"].value;
+    NSArray<NSNumber *> *ls=left.type.shape,*rs=right.type.shape;
+    NSArray<NSNumber *> *os=matmul.outputType.shape;
+    if (left.type.elementType!=ANEElementTypeFP16 ||
+        right.type.elementType!=ANEElementTypeFP16 ||
+        matmul.outputType.elementType!=ANEElementTypeFP16 ||
+        ls.count!=4 || rs.count!=4 || os.count!=4 ||
+        ls[0].unsignedIntegerValue!=1 || rs[0].unsignedIntegerValue!=1 ||
+        os[0].unsignedIntegerValue!=1) return nil;
+    NSUInteger heads=ls[1].unsignedIntegerValue;
+    NSUInteger tokens=ls[2].unsignedIntegerValue;
+    NSUInteger headDimension=ls[3].unsignedIntegerValue;
+    ane::h16::AttentionMatmul operation=ane::h16::AttentionMatmul::QK;
+    BOOL pv=NO;
+    if (ls[3].unsignedIntegerValue==tokens &&
+        rs[1].unsignedIntegerValue==heads &&
+        rs[2].unsignedIntegerValue==tokens &&
+        os[1].unsignedIntegerValue==heads &&
+        os[2].unsignedIntegerValue==tokens &&
+        [rs isEqualToArray:os]) {
+        pv=YES;operation=ane::h16::AttentionMatmul::PV;
+        headDimension=rs[3].unsignedIntegerValue;
+    }
+    NSArray<NSNumber *> *expectedRight=@[@1,@(heads),@(headDimension),@(tokens)];
+    NSArray<NSNumber *> *expectedRightTranspose=@[@1,@(heads),@(tokens),@(headDimension)];
+    NSArray<NSNumber *> *expectedOutput=@[@1,@(heads),@(tokens),@(tokens)];
+    BOOL transposeY=[rs isEqualToArray:expectedRightTranspose];
+    if (!pv && ((!transposeY && ![rs isEqualToArray:expectedRight]) ||
+        ![os isEqualToArray:expectedOutput]))
+        return nil;
+    if (transposeY && !pv) operation=ane::h16::AttentionMatmul::QKTransposeY;
+    ane::h16::TransformerAttentionProgram encoded;
+    try {
+        encoded=ane::h16::encodeAttentionMatmul((uint32_t)tokens,
+            (uint32_t)heads,(uint32_t)headDimension,
+            operation);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.transformer-qk-fields",
+            [NSString stringWithUTF8String:exception.what()],matmul);
+        return nil;
+    }
+    const NSUInteger headRow=2*headDimension;
+    const NSUInteger scoreRow=alignUp(2*tokens,64);
+    const NSUInteger leftPlane=pv ? tokens*scoreRow : tokens*headRow;
+    const NSUInteger leftStorage=heads*leftPlane;
+    const NSUInteger rightRow=(transposeY || pv) ? headRow : scoreRow;
+    const NSUInteger rightPlane=pv ? tokens*headRow
+        : transposeY ? tokens*headRow : scoreRow*headDimension;
+    const NSUInteger rightStorage=heads*rightPlane;
+    const NSUInteger outputRow=pv ? headRow : scoreRow;
+    const NSUInteger outputPlane=pv ? tokens*headRow : tokens*scoreRow;
+    const NSUInteger outputStorage=heads*outputPlane;
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:left.name shortName:left.name
+            role:HWXObjectBindingRoleInput elementType:left.type.elementType
+            shape:ls rowStrideBytes:(pv ? scoreRow : headRow) planeStrideBytes:leftPlane
+            batchStrideBytes:leftStorage storageByteLength:leftStorage],
+        [[HWXObjectBinding alloc]initWithSymbol:right.name shortName:right.name
+            role:HWXObjectBindingRoleInput elementType:right.type.elementType
+            shape:rs rowStrideBytes:rightRow planeStrideBytes:rightPlane
+            batchStrideBytes:rightStorage storageByteLength:rightStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[matmul.identifier stringByAppendingString:@"@output"]
+            shortName:matmul.identifier role:HWXObjectBindingRoleOutput
+            elementType:matmul.outputType.elementType shape:os
+            rowStrideBytes:outputRow planeStrideBytes:outputPlane
+            batchStrideBytes:outputStorage storageByteLength:outputStorage],
+    ];
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:[NSData data] bindings:objectBindings
+        kernelRelocationOffsets:@[] programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.transformer-qk-object",
+            error.localizedDescription ?: @"cannot construct transformer QK HWX",matmul);
+        return nil;
+    }
+    const NSUInteger leftLogical=tensorBytes(left.type);
+    const NSUInteger rightLogical=tensorBytes(right.type);
+    const NSUInteger outputLogical=tensorBytes(matmul.outputType);
+    NSArray<ANEHWXBinding *> *bindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:left.name role:ANESurfaceRoleInput
+            logicalByteLength:leftLogical allocationByteLength:alignUp(leftStorage,0x4000)
+            ioSurfaceIndex:0 rowStrideBytes:(pv ? scoreRow : headRow) planeStrideBytes:leftPlane
+            batchStrideBytes:leftStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:right.name role:ANESurfaceRoleInput
+            logicalByteLength:rightLogical allocationByteLength:alignUp(rightStorage,0x4000)
+            ioSurfaceIndex:1 rowStrideBytes:rightRow planeStrideBytes:rightPlane
+            batchStrideBytes:rightStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:matmul.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:outputLogical
+            allocationByteLength:alignUp(outputStorage,0x4000) ioSurfaceIndex:2
+            rowStrideBytes:outputRow planeStrideBytes:outputPlane
+            batchStrideBytes:outputStorage],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:bindings];
+}
+
+static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
+    ANEOperationNode *output=nodeNamed(graph,graph.outputValueNames.firstObject);
+    if (!output || ![output.sourceOperation.operationName isEqualToString:@"softmax"] ||
+        input.type.elementType!=ANEElementTypeFP16 ||
+        output.outputType.elementType!=ANEElementTypeFP16 ||
+        input.type.shape.count!=4 ||
+        ![input.type.shape isEqualToArray:output.outputType.shape]) return nil;
+    NSArray<NSNumber *> *shape=input.type.shape;
+    NSUInteger heads=shape[1].unsignedIntegerValue;
+    NSUInteger tokens=shape[2].unsignedIntegerValue;
+    if (shape[0].unsignedIntegerValue!=1 ||
+        shape[3].unsignedIntegerValue!=tokens) return nil;
+    ane::h16::TransformerAttentionProgram encoded;
+    try {
+        encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)heads);
+    } catch (const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.transformer-softmax-fields",
+            [NSString stringWithUTF8String:exception.what()],output);return nil;
+    }
+    NSError *error=nil;
+    NSData *constants=[H16GLUTEncoder constantRegionForOperationName:@"exp" error:&error];
+    if (!constants || constants.length!=128) {
+        emitError(diagnostics,@"h16g.encode.transformer-softmax-table",
+            error.localizedDescription ?: @"softmax exponential table is unavailable",output);
+        return nil;
+    }
+    const NSUInteger row=alignUp(2*tokens,64),plane=tokens*row;
+    const NSUInteger storage=heads*plane,logical=tensorBytes(input.type);
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType
+            shape:shape rowStrideBytes:row planeStrideBytes:plane
+            batchStrideBytes:storage storageByteLength:storage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[output.identifier stringByAppendingString:@"@output"]
+            shortName:output.identifier role:HWXObjectBindingRoleOutput
+            elementType:output.outputType.elementType shape:shape
+            rowStrideBytes:row planeStrideBytes:plane
+            batchStrideBytes:storage storageByteLength:storage],
+    ];
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+    for(std::size_t offset:encoded.program.kernelRelocations)
+        [relocations addObject:@(offset)];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:constants bindings:objectBindings
+        kernelRelocationOffsets:relocations programInfo:info error:&error];
+    if (!image) {
+        emitError(diagnostics,@"h16g.encode.transformer-softmax-object",
+            error.localizedDescription ?: @"cannot construct transformer softmax HWX",output);
+        return nil;
+    }
+    NSArray<ANEHWXBinding *> *bindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:input.name role:ANESurfaceRoleInput
+            logicalByteLength:logical allocationByteLength:alignUp(storage,0x4000)
+            ioSurfaceIndex:0 rowStrideBytes:row planeStrideBytes:plane
+            batchStrideBytes:storage],
+        [[ANEHWXBinding alloc]initWithIdentifier:output.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:logical
+            allocationByteLength:alignUp(storage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:row planeStrideBytes:plane batchStrideBytes:storage],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:bindings];
+}
+
+static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if (graph.sourceFunction.inputs.count!=3 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEGraphValue *q=graph.sourceFunction.inputs[0];
+    ANEGraphValue *k=graph.sourceFunction.inputs[1];
+    ANEGraphValue *v=graph.sourceFunction.inputs[2];
+    ANEOperationNode *output=nodeNamed(graph,graph.outputValueNames.firstObject);
+    NSArray<NSNumber *> *qs=q.type.shape,*ks=k.type.shape,*vs=v.type.shape;
+    if (!output || q.type.elementType!=ANEElementTypeFP16 ||
+        k.type.elementType!=ANEElementTypeFP16 || v.type.elementType!=ANEElementTypeFP16 ||
+        output.outputType.elementType!=ANEElementTypeFP16 || qs.count!=4 ||
+        ks.count!=4 || vs.count!=4 || ![qs isEqualToArray:vs] ||
+        ![output.outputType.shape isEqualToArray:qs]) return nil;
+    NSUInteger heads=qs[1].unsignedIntegerValue;
+    NSUInteger tokens=qs[2].unsignedIntegerValue;
+    NSUInteger headDimension=qs[3].unsignedIntegerValue;
+    NSArray<NSNumber *> *expectedK=@[@1,@(heads),@(headDimension),@(tokens)];
+    if (![ks isEqualToArray:expectedK]) return nil;
+    NSUInteger matmuls=0,softmaxNodes=0;
+    for(ANEOperationNode *node in graph.nodes) {
+        matmuls += [node.operationName isEqualToString:@"matmul"];
+        softmaxNodes += [node.sourceOperation.operationName isEqualToString:@"softmax"];
+    }
+    if (matmuls!=2 || !softmaxNodes) return nil;
+    ane::h16::TransformerAttentionProgram encoded;
+    try { encoded=ane::h16::encodeFusedAttention((uint32_t)tokens,
+        (uint32_t)heads,(uint32_t)headDimension); }
+    catch(const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.fused-attention-fields",
+            [NSString stringWithUTF8String:exception.what()],output);return nil;
+    }
+    NSError *error=nil;
+    NSData *constants=[H16GLUTEncoder constantRegionForOperationName:@"exp" error:&error];
+    if(!constants || constants.length!=128) {
+        emitError(diagnostics,@"h16g.encode.fused-attention-table",
+            error.localizedDescription ?: @"attention exponential table is unavailable",output);
+        return nil;
+    }
+    const NSUInteger headRow=2*headDimension,qPlane=tokens*headRow;
+    const NSUInteger qStorage=heads*qPlane,kRow=alignUp(2*tokens,64);
+    const NSUInteger kPlane=kRow*headDimension,kStorage=heads*kPlane;
+    NSArray<HWXObjectBinding *> *objectBindings=@[
+        [[HWXObjectBinding alloc]initWithSymbol:q.name shortName:q.name
+            role:HWXObjectBindingRoleInput elementType:q.type.elementType shape:qs
+            rowStrideBytes:headRow planeStrideBytes:qPlane
+            batchStrideBytes:qStorage storageByteLength:qStorage],
+        [[HWXObjectBinding alloc]initWithSymbol:k.name shortName:k.name
+            role:HWXObjectBindingRoleInput elementType:k.type.elementType shape:ks
+            rowStrideBytes:kRow planeStrideBytes:kPlane
+            batchStrideBytes:kStorage storageByteLength:kStorage],
+        [[HWXObjectBinding alloc]initWithSymbol:v.name shortName:v.name
+            role:HWXObjectBindingRoleInput elementType:v.type.elementType shape:vs
+            rowStrideBytes:headRow planeStrideBytes:qPlane
+            batchStrideBytes:qStorage storageByteLength:qStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[output.identifier stringByAppendingString:@"@output"]
+            shortName:output.identifier role:HWXObjectBindingRoleOutput
+            elementType:output.outputType.elementType shape:qs
+            rowStrideBytes:headRow planeStrideBytes:qPlane
+            batchStrideBytes:qStorage storageByteLength:qStorage],
+    ];
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+    for(std::size_t offset:encoded.program.kernelRelocations)
+        [relocations addObject:@(offset)];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount recordCount:encoded.programRecordCount
+        formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:constants bindings:objectBindings
+        kernelRelocationOffsets:relocations programInfo:info error:&error];
+    if(!image) {
+        emitError(diagnostics,@"h16g.encode.fused-attention-object",
+            error.localizedDescription ?: @"cannot construct fused attention HWX",output);
+        return nil;
+    }
+    const NSUInteger logical=tensorBytes(q.type);
+    NSArray<ANEHWXBinding *> *bindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:q.name role:ANESurfaceRoleInput
+            logicalByteLength:logical allocationByteLength:alignUp(qStorage,0x4000)
+            ioSurfaceIndex:0 rowStrideBytes:headRow planeStrideBytes:qPlane
+            batchStrideBytes:qStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:k.name role:ANESurfaceRoleInput
+            logicalByteLength:tensorBytes(k.type) allocationByteLength:alignUp(kStorage,0x4000)
+            ioSurfaceIndex:1 rowStrideBytes:kRow planeStrideBytes:kPlane
+            batchStrideBytes:kStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:v.name role:ANESurfaceRoleInput
+            logicalByteLength:logical allocationByteLength:alignUp(qStorage,0x4000)
+            ioSurfaceIndex:2 rowStrideBytes:headRow planeStrideBytes:qPlane
+            batchStrideBytes:qStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:output.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:logical
+            allocationByteLength:alignUp(qStorage,0x4000) ioSurfaceIndex:3
+            rowStrideBytes:headRow planeStrideBytes:qPlane batchStrideBytes:qStorage],
+    ];
+    return [[ANEHWXArtifact alloc]initWithImage:image bindings:bindings];
+}
+
 static ANEHWXArtifact *encodeLayoutProgram(
     ANEOperationGraph *graph, ANEScheduledGraph *scheduled,
     ANEDiagnosticEngine *diagnostics) {
@@ -1427,6 +1840,14 @@ static ANEHWXArtifact *encodeLayoutProgram(
                         scheduled:(ANEScheduledGraph *)scheduled
                         modelRoot:(NSURL *)modelRoot
                       diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    if (ANEHWXArtifact *attention=encodeTransformerFusedAttentionProgram(graph,diagnostics))
+        return attention;
+    if (ANEHWXArtifact *softmax=encodeTransformerSoftmaxProgram(graph,diagnostics))
+        return softmax;
+    if (ANEHWXArtifact *qk=encodeTransformerQKProgram(graph,diagnostics))
+        return qk;
+    if (ANEHWXArtifact *layout=encodeTransformerLayoutProgram(graph,diagnostics))
+        return layout;
     for (ANEOperationNode *node in graph.nodes)
         if ([node.operationName isEqualToString:@"add"] &&
             graph.sourceFunction.inputs.count==1)

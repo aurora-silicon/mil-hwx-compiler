@@ -4,6 +4,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: add formula-built transformer head split, split-transpose and merge;
+  batched runtime QK, transpose-y QK and PV; S=1500 row softmax; and the
+  fused scaled-QK/softmax/PV chain.  Whisper-tiny and Whisper-base descriptor
+  parity covers 15 measured rows, every emitted object passes the fail-closed
+  validator, and BERT/held-out geometries remain explicitly unrevealed.
 - H16G: keep the MobileNet prefix terminal ResultCfg in the task's measured
   direct or staged class.  Two- and three-task prefixes no longer inherit the
   full classifier's direct bit, which produced one plausible result before

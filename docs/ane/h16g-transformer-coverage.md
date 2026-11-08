@@ -18,6 +18,25 @@ A BERT layer is 23 MIL operations after Core ML conversion; the Whisper-tiny
 encoder is 99. Before this work every one of them was refused by name on
 both the H16G and the H17 routes.
 
+## Native attention formula update
+
+The H16G route now emits native rank-3/rank-4 head movement and batched
+runtime matmuls for the Whisper S=1500 geometries:
+
+| Form | Tiny | Base | Tasks |
+| --- | --- | --- | ---: |
+| split / split-transpose / merge | 6 x 64 heads | 8 x 64 heads | 1 |
+| QK | `[1,6,1500,64]` | `[1,8,1500,64]` | 3 |
+| transpose-y QK | same | same | 4 |
+| PV | same | same | heads + 1 |
+| last-axis softmax | unrevealed prediction | measured | 5 |
+| fused scaled QK + softmax + PV | measured | measured | heads + 11 |
+
+The compiler records S=128 and the public held-out axes as unrevealed
+predictions.  They pass the structural validator but do not claim descriptor
+or numerical parity.  Device qualification for all rows is pending.  Affine
+last-axis layer normalization is still outside the formula envelope.
+
 ## What the staged H16G backend already encodes
 
 The default H16G route (no `--format hwx`) already holds measured forms that
