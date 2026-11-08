@@ -4,6 +4,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: bind formula-built transformer-linear source, result and packed
+  weight/bias/post-op DMA records to the standalone object's BAR 6/7/8
+  apertures.  Extend strict DMA direction and extent validation to the
+  recognized 1x1-convolution task family; the former one-slot-early objects
+  are now rejected offline instead of reaching execution with unbound DMA.
 - H16G: rebase attention DMA records onto the standalone object's actual BAR
   apertures (external surfaces from slot 6 and the following kernel slot), and
   include the fused Q/K staging planes in scratch.  The fail-closed validator

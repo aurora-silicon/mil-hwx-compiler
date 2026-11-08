@@ -157,7 +157,8 @@ def strided_extent(offset: int, inner: int, middle: int, outer: int,
     return extent
 
 
-def dma_extent(dma: dict, registers: dict, target: dict) -> int | None:
+def dma_extent(dma: dict, registers: dict, target: dict,
+               family: str | None = None) -> int | None:
     """Return an exclusive DMA end when the task exposes enough geometry.
 
     H16 source and result engines expose dimensions in the common 0x0004 and
@@ -192,6 +193,14 @@ def dma_extent(dma: dict, registers: dict, target: dict) -> int | None:
     elif address == 0x5108:
         if registers.get(0x511c):
             return offset + product(registers.get(0x24, 1), registers[0x511c])
+        if (family == 'linear' and
+                all(key in registers for key in (0x14, 0x1c, 0x5114))):
+            # Linear ResultDMA writes one channel slice into each token row.
+            # 0x5150 carries the first output channel in its high halfword.
+            first_output = registers.get(0x5150, 0) >> 16
+            return strided_extent(offset + product(first_output, 2),
+                                  registers[0x1c], 1, registers[0x14], 0,
+                                  registers[0x5114])
         if all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110, 0x5114)):
             inner, middle, outer = (registers[0x14], registers[0x18],
                                     registers[0x1c])
@@ -231,16 +240,42 @@ def attention_program(task_count: int, record_code: int, format_code: int) -> bo
     return False
 
 
+def linear_program(tasks: list[dict], task_count: int,
+                   record_code: int, format_code: int) -> bool:
+    """Recognize formula-built 1x1 convolutions over transformer tokens.
+
+    Their metadata overlaps older convolution forms, so require the decoded
+    staging and compute record signatures as well as the record/format law.
+    The BAR slots are deliberately absent from the signature: one-slot-early
+    programs must still enter strict DMA validation and fail there.
+    """
+    if (len(tasks) != task_count or task_count < 2 or format_code != 0 or
+            record_code not in (0x10, 0x20)):
+        return False
+    staging = tasks[0]
+    staging_dma = {dma['address'] for dma in staging['dma']}
+    if (staging['registers'].get(0x4904) != 0x103c0c or
+            0x4d10 not in staging_dma):
+        return False
+    for task in tasks[1:]:
+        registers = task['registers']
+        addresses = {dma['address'] for dma in task['dma']}
+        if ((registers.get(0x4904, 0) & ~0x20010) != 0x103c00 or
+                not {0x5108, 0x5510}.issubset(addresses)):
+            return False
+    return True
+
+
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
-                 relocations: set[int], strict: bool) -> int:
+                 relocations: set[int], family: str | None) -> int:
     """Bind decoded-family DMA records and bound every computable extent.
 
     Register addresses are reused with different roles by other H16G engines.
-    Apply source/result direction semantics only to the attention families
-    identified by their task/record/format law; other families retain their
-    existing relocation and container bounds.
+    Apply source/result direction semantics only to decoded attention and
+    transformer-linear families; other families retain their existing
+    relocation and container bounds.
     """
-    if not strict:
+    if family is None:
         return 0
     by_vm = {target['vm']: target for target in targets}
     checked = 0
@@ -271,7 +306,7 @@ def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
             else:
                 require(target['kind'] in ('scratch', 'kernel'), "dma-coefficient-aperture")
             require(dma['offset'] < target['size'], "dma-offset")
-            extent = dma_extent(dma, task['registers'], target)
+            extent = dma_extent(dma, task['registers'], target, family)
             if extent is not None:
                 require(dma['offset'] <= extent <= target['size'], "dma-extent")
                 checked += 1
@@ -506,8 +541,10 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
     if kernel:
         dma_targets.append(dict(vm=kernel['vm'], size=kernel['size'],
                                 prot=kernel['prot'], kind='kernel'))
-    dma_strict = attention_program(tasks, u32(p, 0x860), fmt)
-    dma_extents = validate_dma(task_facts, p, dma_targets, seen, dma_strict)
+    record_code = u32(p, 0x860)
+    family = ('attention' if attention_program(tasks, record_code, fmt) else
+              'linear' if linear_program(task_facts, tasks, record_code, fmt) else None)
+    dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")
     region(st, ss, len(data), "string-range")

@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from h16g_validate import (ValidationError, task_stream, validate, validate_resources,
-                           validate_custom_bars, validate_execute)
+from h16g_validate import (ValidationError, linear_program, task_stream, validate,
+                           validate_resources, validate_custom_bars, validate_execute)
 
 
 def put(data, offset, value, width=4):
@@ -188,6 +188,22 @@ class ValidationTests(unittest.TestCase):
                 current = struct.unpack_from('<I', changed, offset)[0]
                 put(changed, offset, current + value if relative else value)
                 validate(changed)
+
+    def test_linear_dma_family_recognition_ignores_bar_slot(self):
+        tasks = [
+            dict(registers={0x4904: 0x103c0c},
+                 dma=[dict(address=0x4d10, slot=5)]),
+            dict(registers={0x4904: 0x123c10},
+                 dma=[dict(address=0x5108, slot=6),
+                      dict(address=0x5510, slot=8)]),
+        ]
+        # The old BAR numbers must not evade strict validation.
+        self.assertTrue(linear_program(tasks, 2, 0x10, 0))
+        self.assertFalse(linear_program(tasks, 2, 0x11, 0))
+        self.assertFalse(linear_program(tasks, 2, 0x10, 1))
+        changed = [dict(task, dma=list(task['dma'])) for task in tasks]
+        changed[1]['dma'] = [dict(address=0x5108, slot=6)]
+        self.assertFalse(linear_program(changed, 2, 0x10, 0))
 
     def test_mutated_container(self):
         raw, offsets = fixture(kernel=True)
