@@ -9,8 +9,11 @@ every hardware-visible edge to fp16, and emits both Numpy archives and the
 /path/to/python-with-numpy tools/h16-whisper-stem/reference.py build/whisper-stem-reference
 ```
 
-The generated data is intentionally not checked in. The default output holds
-Whisper-tiny (`d_model=384`) and Whisper-base (`d_model=512`) cases with:
+The generated data is intentionally not checked in. Each model directory has
+a correctly formed source-owned `parameters.bin`, standalone MIL for every
+operation, Numpy arrays, and row-padded input/expected surfaces. The default
+output holds Whisper-tiny (`d_model=384`) and Whisper-base (`d_model=512`)
+cases with:
 
 - input `[1,80,3000]`;
 - biased `1x3` SAME convolution at stride 1 and exact GELU;
