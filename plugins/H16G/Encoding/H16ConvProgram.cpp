@@ -578,6 +578,25 @@ bool mobileSpillBridge(unsigned edge, MobileNetL2Variant variant) {
     return edge && mobileResident(edge-1,variant.residentPrefix);
 }
 
+// DRAM scratch offset of a non-resident edge.  Edge 1 is the decoded spill
+// at offset 0.  Other DRAM edges take the ping-pong region of their index
+// parity, except that a task must never write the scratch region it is
+// reading: when the previous edge is also in DRAM at that offset, the edge
+// takes the other region.  Without this, a prefix package whose resident
+// run ends at edge 0 wrote edge 2 over its own edge-1 input.
+U32 mobileDramOffset(unsigned edge, MobileNetL2Variant variant) {
+    const U32 region=variant.scratchRegionBytes;
+    U32 previous=~0u;
+    for (unsigned e=0;e<=edge;++e) {
+        if (mobileResident(e,variant.residentPrefix)) { previous=~0u; continue; }
+        U32 offset=variant.measuredSpill && e==1 ? 0 : U32(e%2)*region;
+        if (offset==previous) offset=offset ? 0 : region;
+        if (e==edge) return offset;
+        previous=offset;
+    }
+    return 0;
+}
+
 std::uint64_t mobileSpan(unsigned edge) {
     const auto &s=mobileNetV1[edge];
     return std::uint64_t((s.width+s.stride-1)/s.stride)*mobileResultR[edge];
@@ -725,14 +744,13 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             const U32 width=(edge.width+edge.stride-1)/edge.stride;
             const U32 row=16*width,plane=row*width;
             r[0x4d00]=0x20000041 | i<<16; r[0x4d08]=0x4e;
-            const U32 offset=(i-1)==1 ? 0 : U32((i-1)%2)*variant.scratchRegionBytes;
-            setAddressAddend(r,0x4d10,offset); r[0x4d18]=row; r[0x4d1c]=plane;
+            setAddressAddend(r,0x4d10,mobileDramOffset(i-1,variant)); r[0x4d18]=row; r[0x4d1c]=plane;
             r[0x4d68]=0x08002031; t.sourceSlotFlags=0x21800000;
         } else {
             if (i<27 && mobileResident(i,variant.residentPrefix))
                 r[0x4110]=mobileResultBase[i]+static_cast<U32>(mobileSpan(i));
             r[0x4d00]=0x20000021 | i<<16;
-            setAddressAddend(r,0x4d10,((i-1)%2)*variant.scratchRegionBytes);
+            setAddressAddend(r,0x4d10,mobileDramOffset(i-1,variant));
             t.sourceSlotFlags=0x21800000;
         }
 
@@ -778,8 +796,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
                            mobileResultR[i]);
             const U32 width=(mobileNetV1[i].width+mobileNetV1[i].stride-1)/mobileNetV1[i].stride;
             const U32 row=16*width,plane=row*width;
-            const U32 offset=i==1 ? 0 : U32(i%2)*variant.scratchRegionBytes;
-            r[0x5100]=0x010000f1 | i<<16; setAddressAddend(r,0x5108,offset);
+            r[0x5100]=0x010000f1 | i<<16; setAddressAddend(r,0x5108,mobileDramOffset(i,variant));
             r[0x5110]=row; r[0x5114]=plane; r[0x5138]=0x08302031;
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
@@ -787,7 +804,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             if (i && mobileResident(i-1,variant.residentPrefix))
                 r[0x414c]=mobileResultBase[i-1]+static_cast<U32>(mobileSpan(i-1));
             r[0x5100]=(r[0x5100]&0xff00ff00u) | i<<16 | 0xf1;
-            setAddressAddend(r,0x5108,(i%2)*variant.scratchRegionBytes);
+            setAddressAddend(r,0x5108,mobileDramOffset(i,variant));
             t.resultSlotFlags=0x21800000;
             eraseRange(r,0x5900,0x59ff);
         }
@@ -929,12 +946,10 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
             const bool readsScratch=i && !mobileResident(U32(i-1),variant.residentPrefix);
             const bool writesScratch=i+1<programs.size() &&
                                      !mobileResident(U32(i),variant.residentPrefix);
-            const bool measuredWrite=variant.measuredSpill && i==1;
-            const bool measuredRead=variant.measuredSpill && i==2;
             h13::LinkedLayer entry{U32(i),1,readsScratch,
-                measuredRead ? 0u : U32((i-1)%2)*variant.scratchRegionBytes,
+                readsScratch ? mobileDramOffset(unsigned(i-1),variant) : 0u,
                 writesScratch,
-                measuredWrite ? 0u : U32(i%2)*variant.scratchRegionBytes};
+                writesScratch ? mobileDramOffset(unsigned(i),variant) : 0u};
             entry.inputEdge=i ? edgeCode(i-1) : 0;
             entry.outputEdge=i+1<programs.size() ? edgeCode(i) : 0;
             const bool linearFirst=variant.fieldSwap==
