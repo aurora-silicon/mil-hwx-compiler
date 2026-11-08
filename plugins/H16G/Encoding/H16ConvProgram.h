@@ -162,6 +162,20 @@ std::string sparseStride2Refusal(ConvShape shape);
 std::vector<std::uint8_t> packSparseStride2(ConvShape shape, const std::uint8_t *weights,
                                             const std::uint8_t *bias,
                                             std::array<std::uint32_t,16> &chunkBytes);
+// Full-model ResNet packing facts.  Unlike the isolated MobileNet sparse
+// form above, these pack dense groups-1 convolutions into sixteen KernelDMA
+// regions.  The 7x7 form is decoded only for the 3->64/s2 stem; the regular
+// form is decoded for biased 1x1/s2 and 3x3/s2 layers whose output count is a
+// multiple of sixteen.  These APIs encode kernel regions only: they do not
+// claim a standalone task schedule or a generic residual-DAG policy.
+std::vector<std::uint8_t> packResNetStride2(ConvShape shape,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes);
+std::vector<std::uint8_t> packResNetStem7x7(ConvShape shape,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes);
 // A chain of measured standalone tasks whose intermediates go through the
 // scratch BAR (slot 3) in DRAM, ping-ponging between two regions. Measured
 // uses the r2 DRAM-chain producer/consumer fields; DependencyOnly sets only

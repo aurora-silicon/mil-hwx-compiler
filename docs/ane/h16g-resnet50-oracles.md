@@ -42,6 +42,39 @@ isolated non-conv cases, and two complete bottleneck chains (projection and
 identity). Move any binary-analysis notes to the tainted research area. Only
 the reviewed decoded facts may be copied into the public repository.
 
+## Full-model capture
+
+The 2026-11-08 J616s capture contains the public random-weight full model, not
+the 55 isolated cases. `research/decode_h16g_resnet50_full.py` decodes that
+object in private and checks the exact operation/task association against the
+public `graph.json` before emitting JSON. The executed cache entry contains
+one program, 82 task descriptors, no task decode errors, a
+`[1,3,224,224]` input, and a 1000-element output surface.
+
+The stream separates into 53 convolution operations, one max-pool, 16 fused
+residual add/ReLU tasks, one global mean, and one linear head. The compiler
+schedules projection branches around the main branch and splits these wide
+convolutions across adjacent tasks:
+
+- `conv_25`: output-channel slices 64 + 176 + 16;
+- `conv_27`: 224 + 672 + 128;
+- `conv_29`, `conv_32`, `conv_35`, `conv_38`, and `conv_41`: 32 + 224;
+- `conv_43`: 256 + 256.
+
+The public source weights make kernel packing independently checkable. Dense
+stride-one packing reproduces the captured sections, as does the H16G sparse
+3x3/stride-two phase grammar for `conv_12`. The 7x7 stem uses sixteen
+output-lane regions; each region carries the four outputs' biases and three
+input-channel repetitions of sixteen phase-mask groups covering all 49 taps.
+
+One full graph does **not** separate every encoder field. In particular it
+does not establish a generic ExeCycles formula, dependency/live-mask formula,
+L2 branch allocation policy, or standalone forms of pool, add, mean, and
+linear. Position-dependent values are kept as full-program facts and are not
+promoted to general operation formulas. A compiler must either encode this
+exact 82-task DAG or obtain isolated/perturbed captures before claiming a
+generic primitive encoder.
+
 ## Admission gate
 
 Before a geometry becomes executable, independently verify every register
