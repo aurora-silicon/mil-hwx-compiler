@@ -60,7 +60,7 @@ def fixture(*, mixed=False, kernel=False, batch=1):
     fields = {0: 4, 4: len(p), 8: 4, 12: 0x22a if mixed else 0x222,
               0x820: 4, 0x824: len(task) // 4, 0x830: 1, 0x838: 0xffffffff,
               0x83c: 0xffffffff, 0x844: 0xffff,
-              0x848: 0x8b8 if mixed else 0x898, 0x860: 0x10, 0x868: 4,
+              0x848: 0x8b8 if mixed else 0x898, 0x860: 1, 0x868: 4,
               0x870: 4 if mixed else 2}
     fields.update({0x858: 128, 0x878: 2, 0x87c: 8, 0x880: 128,
                    0x888: 3, 0x88c: 8, 0x890: 0x08020004, 0x894: 8,
@@ -151,6 +151,65 @@ class ValidationTests(unittest.TestCase):
                         self.assertEqual(result['scratch'], mixed)
                         self.assertFalse(result['owner_fixture'])
 
+    def test_unpadded_final_task(self):
+        raw, _ = fixture()
+        task = raw[0x4000:0x403c]
+        self.assertEqual(task_stream(task, 1, record_hint=1), 1)
+        with self.assertRaisesRegex(ValidationError, 'task-size'):
+            task_stream(task[:-4], 1, record_hint=1)
+
+    def test_staged_program_hints(self):
+        shapes = [(7, 0x58, 1), (4, 0x2e, 0), (5, 0x3c, 0),
+                  (7, 0x58, 0), (25, 0x154, 0), (10, 0x75, 1)]
+        shapes += [(1, 16, work) for work in (8, 61, 92, 245, 368)]
+        for mixed in (False, True):
+            for tasks, hint, work in shapes:
+                with self.subTest(mixed=mixed, tasks=tasks, hint=hint, work=work):
+                    raw, offsets = fixture(mixed=mixed)
+                    p = command(raw, offsets, 4, 4)
+                    text = next(o + 72 for o in offsets
+                                if raw[o + 8:o + 14] == b'__TEXT')
+                    vm = struct.unpack_from('<Q', raw, text + 32)[0]
+                    stream = bytearray(16)
+                    put(stream, 0, 1)
+                    for task in range(tasks):
+                        capacity = hint // tasks + (task < hint % tasks)
+                        body = bytearray((9 + 2 * capacity) * 4)
+                        put(body, 0, (9 + 2 * capacity) << 16)
+                        # One coalesced record can stand for several hint units.
+                        put(body, 36, ((2 * capacity - 2) << 15) | (0x4100 // 4))
+                        stream.extend(body)
+                        # Pad between tasks only: the last one ends at EOF.
+                        if task + 1 < tasks:
+                            stream.extend(bytes(-len(stream) % 16))
+                    raw[0x4000:0x8000] = bytes(0x4000)
+                    raw[0x4000:0x4000 + len(stream)] = stream
+                    put(raw, text + 40, len(stream), 8)
+                    put(raw, text + 80 + 32, vm + len(stream), 8)
+                    put(raw, text + 80 + 48, 0x4000 + len(stream))
+                    put(raw, p + 0x20, vm + len(stream), 8)
+                    put(raw, p + 0x824, len(stream) // 4)
+                    put(raw, p + 0x830, tasks)
+                    put(raw, p + 0x860, hint)
+                    workoff = p + (0x8b0 if mixed else 0x890)
+                    put(raw, workoff, work)
+                    self.assertEqual(validate(raw)['tasks'], tasks)
+                    for bad in (0, hint + 1, 0xffffffff):
+                        put(raw, p + 0x860, bad)
+                        with self.assertRaisesRegex(ValidationError, 'program-record-bound'):
+                            validate(raw)
+                    put(raw, p + 0x860, hint)
+                    put(raw, workoff, 0x8000)
+                    validate(raw)
+                    for bad in (0x8001, 0xffffffff):
+                        put(raw, workoff, bad)
+                        with self.assertRaisesRegex(ValidationError, 'program-work-bound'):
+                            validate(raw)
+                    put(raw, workoff, work)
+                    put(raw, 0x4034, 0x6000 // 4)
+                    with self.assertRaisesRegex(ValidationError, 'task-register'):
+                        validate(raw)
+
     def test_mutated_container(self):
         raw, offsets = fixture(kernel=True)
         p = command(raw, offsets, 4, 4)
@@ -175,7 +234,7 @@ class ValidationTests(unittest.TestCase):
             'aperture-tail': (p + 0xb0, 0x30000000),
             'text-duplicate': (p + 0x810, 0), 'text-word-count': (p + 0x824, 16),
             'task-count': (p + 0x830, 2), 'record-code': (p + 0x860, 0x11),
-            'format-code': (p + 0x890, 0x8), 'program-reserved': (p + 0x100, 1),
+            'work-bound': (p + 0x890, 0x8001), 'program-reserved': (p + 0x100, 1),
             'linear-scratch': (p + 0x40, 0x30000000),
             'relocation-type': (0x3004, 0x05000005),
             'relocation-ordinal': (0x3004, 0x07000001),
@@ -334,7 +393,7 @@ class ValidationTests(unittest.TestCase):
         raw, offsets = fixture(mixed=True)
         p = command(raw, offsets, 4, 4)
         for off, value in ((0x40, 0), (0x858, 0), (0x880, 256), (0x858, 0x4001),
-                           (0x8b0, 8), (0x8bd, 1)):
+                           (0x8b0, 0x8001), (0x8bd, 1)):
             with self.subTest(off=off), self.assertRaises(ValidationError):
                 data = bytearray(raw)
                 put(data, p + off, value, 1 if off == 0x8bd else 4)
