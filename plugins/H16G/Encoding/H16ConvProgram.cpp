@@ -2837,9 +2837,8 @@ TransformerAttentionProgram encodeAttentionMatmul(
 }
 
 std::string attentionSoftmaxRefusal(U32 tokens,U32 heads) {
-    if(!heads)return "softmax head count must be nonzero";
-    if(heads>29)return "softmax head count exceeds the dependency mask";
-    if(tokens!=1500&&tokens!=128)return "softmax sequence has no measured or predicted law";
+    if(tokens!=1500 || heads!=8)
+        return "standalone softmax requires the measured S=1500, H=8 form";
     return {};
 }
 

@@ -127,15 +127,12 @@ def main() -> None:
         encoded = json.dumps([json.loads(canonical(task)) for task in tasks],
                              sort_keys=True, separators=(",", ":")).encode()
         assert hashlib.sha256(encoded).hexdigest() == digest
-    for sequence, heads in ((1500, 1), (1500, 6), (128, 1), (128, 12)):
-        stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
-        tasks = split_h14_tasks(stream[16:])
-        assert len(tasks) == 5
-        schedule_words = [struct.unpack_from("<9I", task)[4] for task in tasks]
-        assert schedule_words == [0x00fff868, 0x00fff820, 0x00fff820,
-                                  0x00fff820, 0x00fff860]
-        dependency_mask = struct.unpack_from("<9I", tasks[2])[7]
-        assert dependency_mask == (1 << (heads + 2)) - 1
+    stream = subprocess.check_output([DUMP, "softmax", "1500", "8"])
+    tasks = split_h14_tasks(stream[16:])
+    schedule_words = [struct.unpack_from("<9I", task)[4] for task in tasks]
+    assert schedule_words == [0x00fff868, 0x00fff820, 0x00fff820,
+                              0x00fff820, 0x00fff860]
+    assert struct.unpack_from("<9I", tasks[2])[7] == 0x3ff
     for heads, sizes, digest in FUSED_CASES:
         stream = subprocess.check_output([DUMP, "fused", "1500", str(heads), "64"])
         tasks = split_h14_tasks(stream[16:])

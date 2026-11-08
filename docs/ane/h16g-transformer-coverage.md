@@ -76,15 +76,13 @@ runtime matmuls for the Whisper S=1500 geometries:
 | QK | `[1,6,1500,64]` | `[1,8,1500,64]` | 3 |
 | transpose-y QK | same | same | 4 |
 | PV | same | same | heads + 1 |
-| last-axis softmax | unrevealed prediction | measured | 5 |
-| fused scaled QK + softmax + PV | measured | measured | heads + 11 |
+| last-axis softmax | refused after device hangs | measured and enabled | 5 |
+| fused scaled QK + softmax + PV | refused after accuracy failure | refused pending qualification | heads + 11 |
 
-The compiler records S=128 softmax and the public held-out movement and
-matmul axes as unrevealed predictions.  They pass the structural validator
-but do not claim descriptor or numerical parity.  Fused attention is limited
-to the measured S=1500, D=64, H=6/8 forms: its smaller predictions reused
-S=1500 scratch offsets and are now refused.  Device qualification for the
-corrected rows is pending.
+The compiler keeps public held-out movement and matmul axes as unrevealed
+predictions. They pass the structural validator but do not claim descriptor
+or numerical parity. Predicted standalone softmax and every fused-attention
+form are refused; only the measured S=1500, H=8 standalone softmax is exposed.
 
 The first corrected Whisper-tiny device run made the numerical and scheduling
 boundaries more precise.  Split/split-transpose/merge were bit exact, QK and
@@ -108,10 +106,13 @@ program, although standalone softmax is a serialized five-task program.  It
 now retains the captured standalone sequence `0x00fff868`, three
 `0x00fff820` words and terminal `0x00fff860`, independent of head count.  The
 dependency mask remains `(1 << (heads + 2)) - 1`, bounded to the 32-bit field.
-The H=8 measured row remains byte-identical.  A second device run with that
-serialized H=6 schedule still wedged.  A device kit now separates the measured
-H=8 object and the H=6 prefixes 0, 0--1, 0--2, 0--3, and 0--4 so execution can
-locate the first task that does not complete without changing encoder fields.
+The H=8 measured row remains byte-identical. A second device run with that
+serialized H=6 schedule still wedged. Prefix bisection then showed tasks
+0 and 0--1 refused at LOAD, 0--2 and 0--3 timed out at LOAD, and the full
+program timed out at EXECUTE. In contrast the measured H=8 program completed
+with relative L2 `9.4e-4`. The compiler therefore refuses H=6 and every other
+predicted standalone softmax with
+`h16g.encode.transformer-softmax-hardware-unproved`.
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
@@ -127,10 +128,10 @@ attention and transformer-linear task families, checks source and result
 direction, and bounds every DMA extent for which the task supplies complete
 geometry, including this hidden second score extent.
 
-## Native last-axis layer normalization
+## Last-axis layer-normalization evidence and refusal
 
-The H16G route emits the identity-affine normalization used by the captured
-BERT and Whisper encoder programs:
+The decoded construction covers the identity-affine normalization used by
+the captured BERT and Whisper encoder programs:
 
 | Shape | Tasks | Measured part | Predicted part |
 | --- | ---: | --- | --- |
@@ -146,21 +147,22 @@ The standalone boundary consumes the packaged identity gamma and zero beta
 vectors, then writes the external result.  These vectors are constants; they
 are not a scratch materialization.
 
-Packaged objects use BAR 6 for the external input, BAR 8 for the gamma/beta
+Research objects use BAR 6 for the external input, BAR 8 for the gamma/beta
 constant table, and BAR 7 for the external output.  The fail-closed validator
 recognizes the family, checks direction and aperture binding, and bounds four
 BERT or twelve Whisper DMA extents.  It rejects the earlier scratch-rebased
-objects.  BERT had run with zero exact results and ten translation faults;
-S=1500 had wedged.  The corrected objects pass the independent host HWX
-harness and await device qualification.
+objects. Corrected BERT removed the translation faults but returned all ones
+(relative L2 `306`), while the corrected S=1500 object timed out at EXECUTE
+and quarantined the session. Host structural success is therefore not treated
+as device qualification. The compiler refuses the family with
+`h16g.encode.transformer-layer-norm-hardware-unproved`.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
-`gamma` followed by fp16 `beta`.  Every pair in that capture is identity/zero,
-and the isolated random-affine probes were CPU-only.  The public compiler
-therefore accepts omitted parameters or explicit identity gamma and zero beta,
-and refuses non-identity values with
-`h16g.encode.transformer-layer-norm-affine-unproved`.  It does not pretend
-that locating constants proves how a non-identity pair is consumed.
+`gamma` followed by fp16 `beta`. Every pair in that capture is identity/zero,
+and the isolated random-affine probes were CPU-only. The decoded builder
+retains that evidence for offline parity, but no affine or non-affine
+standalone layer-normalization object is emitted publicly until the
+normalization path passes hardware qualification.
 
 ## What the staged H16G backend already encodes
 
@@ -213,7 +215,7 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| `layer_norm` (2) | `[1,128,768]` last axis | native identity-affine formula | five-task standalone program | corrected constant binding; device pending | non-identity affine facts |
+| `layer_norm` (2) | `[1,128,768]` last axis | refused with hardware diagnostic | five-task research program | constant all-ones output (relL2 306) | normalization dataflow |
 | `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
 | `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
@@ -230,11 +232,11 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count per layer) | Shape (tiny / base) | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | native formula | one task | v4 saves relL2 outputs; device pending | done |
-| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | v4 saves relL2 outputs; device pending | done for d=384/512 |
-| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | v4 saves relL2 outputs; device pending | done |
-| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | padded-source mapping corrected; device pending | device qualification |
-| `layer_norm` (2, +1 final) | `[1,1500,d]` | native identity-affine formula | eleven-task tiled program | corrected constant binding; device pending | non-identity affine facts |
+| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | native formula | one task | v4 relL2 `4.4e-4` | done |
+| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | v4 relL2 `1.4e-3` to `1.7e-3` | done for d=384/512 |
+| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | device-qualified with stem rows | done |
+| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | transpose exact; add relL2 `2.1e-4` | done |
+| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused with hardware diagnostic | eleven-task research program | EXECUTE timeout on tiny | normalization dataflow |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
 | `softmax` (1) | `[1,h,1500,1500]` | refused (SRAM overflow) | none | facts | tiled row softmax |
@@ -259,7 +261,7 @@ today:
 | Projections and FFN matmuls | only through 512-square tiles plus adds |
 | Residual add, BERT shapes | yes (512 view) |
 | FFN GELU `[1,128,3072]` | yes as two 512 views; the 1024 view is refused |
-| layer_norm | native identity-affine BERT/Whisper objects; device run pending |
+| layer_norm | no; standalone BERT/Whisper forms are refused after failed device qualification |
 
 Once the loader accepts these words by their meaning, the padded BERT
 self-attention and FFN sub-blocks built from the forms above need no compiler
@@ -267,10 +269,9 @@ change.
 
 ## What is needed next
 
-The remaining normalization gap is non-identity affine gamma/beta consumption.
-S=1500 softmax,
-attention data movement and batched runtime matmul over heads now have native
-encoders; the corrected objects still need device qualification.  The two
+The normalization dataflow and non-identity affine consumption remain open.
+S=1500 attention data movement and batched runtime matmul over heads have
+native encoders; H=6 softmax and fused attention remain named refusals. The two
 Whisper stem convolutions and encoder-axis transpose have measured descriptor
 parity; the positional constant uses the established contiguous ALU packet
 with its constant in the fourth aperture.

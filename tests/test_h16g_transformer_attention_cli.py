@@ -87,9 +87,6 @@ def main() -> None:
         "qkT_wbase": matmul("qkT", 1500, 8, 64),
         "pv_wtiny": matmul("pv", 1500, 6, 64),
         "softmax_wbase": softmax(1500, 8),
-        "softmax_wtiny": softmax(1500, 6),
-        "attn_wtiny": fused(1500, 6, 64),
-        "softmax_bert_prediction": softmax(128, 12),
         "split_held_prediction": layout("split", 64, 2, 80),
         "qk_held_prediction": matmul("qk", 64, 2, 80),
         "pv_held_prediction": matmul("pv", 64, 2, 80),
@@ -110,18 +107,31 @@ def main() -> None:
             assert validation.returncode == 0, name + ": " + validation.stdout + validation.stderr
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
-        # The fused held-out formula carried S=1500 scratch offsets into
-        # smaller shapes.  Those objects are unsafe, so keep the isolated
-        # movement/matmul predictions but refuse an unrevealed fused chain.
-        mil = root / "attn_held_refused.mil"
-        mil.write_text(fused(64, 2, 80))
-        refused = subprocess.run([str(COMPILER), "--mil", str(mil),
-            "--model-root", str(root), "--target", "H16G",
-            "--output", str(root / "attn_held_refused")],
-            capture_output=True, text=True, timeout=120)
-        assert refused.returncode != 0
-        assert "fused attention is limited to measured Whisper geometry" in refused.stderr
-    print(f"H16G transformer attention CLI PASS: {len(cases)} validated programs")
+        refused_cases = {
+            "softmax_wtiny": (softmax(1500, 6),
+                "h16g.encode.transformer-softmax-hardware-unproved"),
+            "softmax_bert": (softmax(128, 12),
+                "h16g.encode.transformer-softmax-hardware-unproved"),
+            "attn_wtiny": (fused(1500, 6, 64),
+                "h16g.encode.fused-attention-accuracy-unproved"),
+            "attn_wbase": (fused(1500, 8, 64),
+                "h16g.encode.fused-attention-accuracy-unproved"),
+            "attn_held": (fused(64, 2, 80),
+                "h16g.encode.fused-attention-accuracy-unproved"),
+        }
+        for name, (source, diagnostic) in refused_cases.items():
+            mil = root / f"{name}.mil"
+            mil.write_text(source)
+            output = root / name
+            refused = subprocess.run([str(COMPILER), "--mil", str(mil),
+                "--model-root", str(root), "--target", "H16G",
+                "--output", str(output)], capture_output=True, text=True,
+                timeout=120)
+            assert refused.returncode != 0, name
+            assert diagnostic in refused.stderr, (name, refused.stderr)
+            assert not output.exists(), name
+    print(f"H16G transformer attention CLI PASS: {len(cases)} validated, "
+          f"{len(refused_cases)} named refusals")
 
 
 if __name__ == "__main__":

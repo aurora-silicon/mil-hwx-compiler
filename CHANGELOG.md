@@ -4,6 +4,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: fail closed on the three transformer forms that did not pass J616s
+  qualification. Standalone softmax now admits only the measured S=1500,
+  H=8 form; H=6 is refused after its prefixes failed LOAD or hung and its
+  full program hung EXECUTE. Standalone layer normalization is refused after
+  BERT produced a constant output and the S=1500 form hung. Fused attention
+  is refused after its resident PV path missed the numerical bound. Each
+  refusal has a stable `h16g.encode.*` diagnostic; independently qualified
+  movement, QK/PV, linear, stem, transpose, positional-add, and ResNet forms
+  remain enabled.
 - H16G: allocate fused attention's complete two-plane score ping-pong extent;
   package layer-normalization identity gamma/zero beta at BAR 8 instead of
   treating the affine table as scratch; and expose the Whisper transpose's

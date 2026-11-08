@@ -117,9 +117,9 @@ TransformerAttentionProgram encodeAttentionMatmul(
     std::uint32_t tokens, std::uint32_t heads,
     std::uint32_t headDimension, AttentionMatmul operation);
 
-/// Native last-axis softmax over [1,H,S,S]. S=1500,H=8 is revealed;
-/// H=1/6 and the S=128 family remain explicit predictions without an
-/// isolated parity row.
+/// Native last-axis softmax over [1,H,S,S]. Only the measured S=1500,H=8
+/// standalone form is admitted; H=6 and the S=128 family failed or lack
+/// device qualification.
 std::string attentionSoftmaxRefusal(std::uint32_t tokens,
                                     std::uint32_t heads);
 TransformerAttentionProgram encodeAttentionSoftmax(std::uint32_t tokens,

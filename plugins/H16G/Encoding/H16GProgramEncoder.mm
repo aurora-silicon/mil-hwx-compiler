@@ -466,6 +466,9 @@ static BOOL fp16VectorIs(NSData *data,uint16_t expected) {
     return YES;
 }
 
+static BOOL standaloneLayerNormHardwareQualified(void) { return NO; }
+static BOOL fusedAttentionHardwareQualified(void) { return NO; }
+
 static ANEHWXArtifact *encodeTransformerLayerNormProgram(
     ANEOperationGraph *graph,NSURL *modelRoot,
     ANEDiagnosticEngine *diagnostics) {
@@ -508,6 +511,16 @@ static ANEHWXArtifact *encodeTransformerLayerNormProgram(
             @"transformer layer_norm requires epsilon=fp16(1e-5)",normalization);
         return nil;
     }
+    if(!standaloneLayerNormHardwareQualified()) {
+        emitError(diagnostics,
+            @"h16g.encode.transformer-layer-norm-hardware-unproved",
+            @"standalone H16G layer_norm is disabled: BERT produced a constant output and the S=1500 form wedged EXECUTE on J616s",
+            normalization);
+        return nil;
+    }
+    // Retain the decoded construction below as research evidence.  It must not
+    // become compiler output until a standalone form passes numerical device
+    // qualification without quarantining the session.
     const NSUInteger channels=shape[2].unsignedIntegerValue;
     for(NSString *name in @[@"gamma",@"beta"]) {
         ANEOperationNode *constant=producerForOperand(graph,normalization,name);
@@ -1914,6 +1927,13 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
     NSUInteger tokens=shape[2].unsignedIntegerValue;
     if (shape[0].unsignedIntegerValue!=1 ||
         shape[3].unsignedIntegerValue!=tokens) return nil;
+    if (tokens!=1500 || heads!=8) {
+        emitError(diagnostics,
+            @"h16g.encode.transformer-softmax-hardware-unproved",
+            @"standalone H16G softmax is enabled only for the measured S=1500, H=8 form; H=6 and other predictions are unsafe",
+            output);
+        return nil;
+    }
     ane::h16::TransformerAttentionProgram encoded;
     try {
         encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)heads);
@@ -1999,6 +2019,15 @@ static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
         softmaxNodes += [node.sourceOperation.operationName isEqualToString:@"softmax"];
     }
     if (matmuls!=2 || !softmaxNodes) return nil;
+    if(!fusedAttentionHardwareQualified()) {
+        emitError(diagnostics,
+            @"h16g.encode.fused-attention-accuracy-unproved",
+            @"fused H16G attention is disabled: the resident PV path failed numerical device qualification",
+            output);
+        return nil;
+    }
+    // Keep the decoded stream available to the parity tests, but never expose
+    // it through the compiler until the resident PV scale is device-proven.
     ane::h16::TransformerAttentionProgram encoded;
     try { encoded=ane::h16::encodeFusedAttention((uint32_t)tokens,
         (uint32_t)heads,(uint32_t)headDimension); }
