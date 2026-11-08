@@ -804,7 +804,10 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
         kernelBase+=length;
         out.tasks.push_back(std::move(t));
     }
-    out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
+    // Tasks start on 16-byte boundaries, but the stream ends exactly at the
+    // last task's final word, as in every decoded program. Zero bytes after
+    // the last task inside the declared __text leave the engine armed: the
+    // next EXECUTE of any program times out.
     out.kernelBytes=kernelBase;
     return out;
 }

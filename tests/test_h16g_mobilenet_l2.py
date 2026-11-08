@@ -59,7 +59,18 @@ def run(mode, count=28):
         args += [*map(str, layer), str(2 | (index != 27))]
     result = subprocess.run(args, capture_output=True, timeout=60)
     assert result.returncode == 0, result.stderr.decode()
-    return result.stdout, [decode_task(t, 'h16') for t in split_h14_tasks(result.stdout)]
+    tasks = [decode_task(t, 'h16') for t in split_h14_tasks(result.stdout)]
+    assert len(result.stdout) == exact_end(tasks), (mode, count, len(result.stdout))
+    return result.stdout, tasks
+
+
+def exact_end(tasks):
+    """Prologue, 16-byte aligned task starts, and no bytes after the last
+    task: trailing zero padding wedges the next EXECUTE on the J616s."""
+    end = 16
+    for task in tasks:
+        end = ((end + 15) & ~15) + task['size_bytes']
+    return end
 
 
 def words(tasks):
@@ -76,7 +87,7 @@ def main():
         actual_bytes = [t['size_bytes'] for t in rungs[mode]]
         if mode == 'mobilenet-l2-header':
             assert actual_bytes == TASK_BYTES, (mode, actual_bytes, TASK_BYTES)
-            assert len(streams[mode]) == 10208
+            assert len(streams[mode]) == exact_end(rungs[mode]) == 10200
     assert len(dram) == 28 and len(dram_stream) > 10200
 
     # Placement and arithmetic are invariant across all three rungs.  The NE

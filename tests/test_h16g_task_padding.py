@@ -20,7 +20,19 @@ class FinalTaskPadding(unittest.TestCase):
         self.assertEqual(task_stream(PREFIX + task(), 1), 1)
 
     def test_zero_final_padding(self):
-        self.assertEqual(task_stream(PREFIX + task() + bytes(4), 1), 1)
+        # Zero bytes after the last task wedge the next EXECUTE on hardware.
+        for pad in (4, 8, 12):
+            with self.assertRaises(ValidationError):
+                task_stream(PREFIX + task() + bytes(pad), 1)
+
+    def test_zero_final_block(self):
+        aligned = PREFIX + task() + bytes(4)          # ends on a 16-byte boundary
+        with self.assertRaises(ValidationError):
+            task_stream(aligned + bytes(16), 1)
+
+    def test_zero_final_padding_after_aligned_tasks(self):
+        with self.assertRaises(ValidationError):
+            task_stream(PREFIX + task() + bytes(4) + task() + bytes(4), 2)
 
     def test_nonzero_final_padding(self):
         with self.assertRaises(ValidationError): task_stream(PREFIX + task() + b'\0\0\0\1', 1)
