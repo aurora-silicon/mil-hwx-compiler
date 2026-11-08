@@ -4,6 +4,13 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: allocate fused attention's complete two-plane score ping-pong extent;
+  package layer-normalization identity gamma/zero beta at BAR 8 instead of
+  treating the affine table as scratch; and expose the Whisper transpose's
+  complete 3008-byte padded source rows.  DMA validation now bounds surfaces
+  by the tensor mapping rather than aligned segment padding and includes the
+  fused engine's implicit second score walk.  It rejects the earlier fused,
+  layer-normalization, and transpose objects offline.
 - H16G: bind Whisper stem1/stem2 and encoder-transpose source/result DMA to
   the standalone object's BAR 6/7 apertures (kernel stays at BAR 8), and give
   their row-padded surfaces physical object strides.  Strict DMA-family
@@ -19,7 +26,7 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 - H16G: add formula-built last-axis layer normalization for BERT
   `[1,128,768]` and Whisper `[1,1500,384/512]`.  The encoder carries the
   measured epsilon and reciprocal-width fields, tiled reduction schedules,
-  standalone scratch/output boundary, and packaged BAR 6/3/7 DMA law.
+  standalone affine/output boundary, and packaged BAR 6/8/7 DMA law.
   Offline validation bounds 4 BERT and 12 Whisper DMA extents.  Identity
   gamma and zero beta are accepted; non-identity affine parameters have no
   ANE oracle in the supplied corpus and retain a named refusal.

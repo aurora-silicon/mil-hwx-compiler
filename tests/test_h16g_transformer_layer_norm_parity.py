@@ -4,7 +4,7 @@
 The sealed prefix digests cover the isolated layer_norm->projection programs.
 The boundary digest covers the final standalone layer_norm in the full
 Whisper-tiny encoder after renumbering it as a standalone program and rebasing
-its scratch/output apertures to the object writer's BAR layout.
+its gamma/beta constant and output apertures to the object writer's BAR layout.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ CASES = [
      [180, 172, 172, 168, 196, 196, 192, 192, 184, 176, 248],
      "b95ec9b09570c0b57ad532181f3f2e804cc19ad3c138729f96eac024b533f4f6"),
 ]
-BOUNDARY_DIGEST = "0e50c51e244106441d454ca044038d814ddef9605b75ace0a04f5f6aa7c36c82"
+BOUNDARY_DIGEST = "ad844b14d8dcedef9d3db23a12430bf7e3c662980b29dff4f50217e87950ce9e"
 
 
 def canonical(task: bytes) -> dict:
@@ -67,8 +67,8 @@ def main() -> None:
             for record in task["records"]:
                 if record["address"] in ("0x04d10", "0x04d28"):
                     assert bar_slot(task, record["address"]) == 6
-        assert bar_slot(decoded[-2], "0x04d28") == 3
-        assert bar_slot(decoded[-1], "0x04d28") == 3
+        assert bar_slot(decoded[-2], "0x04d28") == 8
+        assert bar_slot(decoded[-1], "0x04d28") == 8
         assert bar_slot(decoded[-1], "0x05108") == 7
     tiny = split_h14_tasks(subprocess.check_output([DUMP, "1500", "384"])[16:])
     assert digest(tiny[-2:]) == BOUNDARY_DIGEST

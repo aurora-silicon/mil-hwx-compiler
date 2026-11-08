@@ -72,14 +72,15 @@ def main() -> None:
                     if address in ("0x04d10", "0x04d28", "0x05108"):
                         seen.add((address, slot(record)))
             assert ("0x04d10", 6) in seen or ("0x04d28", 6) in seen
-            assert ("0x04d28", 3) in seen
+            assert ("0x04d28", 8) in seen
             assert ("0x05108", 7) in seen
             validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
                 "--manifest", str(output / "manifest.json")],
                 capture_output=True, text=True, timeout=30)
             assert validation.returncode == 0, validation.stdout + validation.stderr
-            assert json.loads(validation.stdout)["dma_extents"] == \
-                (4 if tokens == 128 else 12)
+            facts = json.loads(validation.stdout)
+            assert facts["dma_extents"] == (4 if tokens == 128 else 12)
+            assert not facts["scratch"]
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
 

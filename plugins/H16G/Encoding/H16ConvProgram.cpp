@@ -822,13 +822,13 @@ Task layerNormBoundaryTask(U32 tokens,U32 channels,U32 index) {
     r[12]=r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=0x80;r[0x4c]=0;
     r[0x4104]=0x400100;r[0x4108]=0x142;r[0x4114]=row;r[0x4124]=0;
     r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;r[0x4150]=row;r[0x4500]=0x80004;
-    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0x3000;r[0x4d2c]=0;
+    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0;r[0x4d2c]=0;
     r[0x4d6c]=0x1002031;
     task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
     record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
     record(task,{0x4d0c});record(task,{0x4d6c});record(task,{0x4104,0x4108});
     record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x4150});
-    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(3));
+    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(8));
     record(task,{0x4d04},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|index;
     store(task.bytes,0,task.header[0]);return task;
 }
@@ -840,7 +840,8 @@ Task layerNormOutputTask(U32 tokens,U32 channels,U32 index) {
     r[0x44]=9;r[0x48]=0x20;r[0x4c]=0;r[0x4104]=0x400100;r[0x4108]=0x142;
     r[0x4118]=row;r[0x4124]=0x40;r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;
     r[0x4148]=0x14a;r[0x414c]=row+0x40;r[0x4500]=0x80000;
-    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0x3300;r[0x4d2c]=0;
+    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;
+    r[0x4d28]=2*channels;r[0x4d2c]=0;
     r[0x4d6c]=0x1002031;r[0x5100]=0x01000031|index<<16;
     r[0x5108]=r[0x510c]=0;r[0x5110]=row;r[0x5138]=0x1302031;
     r[0x5900]=0x12;r[0x5904]=0xa000a0;r[0x5908]=index<<16|0xe0;
@@ -852,7 +853,7 @@ Task layerNormOutputTask(U32 tokens,U32 channels,U32 index) {
     record(task,{0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
     record(task,{0x4500});record(task,{0x5110,0x5138});
     record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
-    record(task,{0x4d28,0x4d2c},taskBar(3));record(task,{0x5108,0x510c},taskBar(7));
+    record(task,{0x4d28,0x4d2c},taskBar(8));record(task,{0x5108,0x510c},taskBar(7));
     record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
     task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
 }
@@ -887,8 +888,14 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     }
     program.taskCount=U32(tasks.size());program.firstTaskBytes=tasks.front().bytes.size();
     program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
-    const std::size_t tensorBytes=std::size_t(tokens)*channels*2;
-    program.scratchAllocationBytes=tensorBytes+0x3300;program.formulaBuilt=true;
+    // The final two tasks consume the identity gamma and zero beta vectors
+    // found at the measured full-program constant boundary.  They are
+    // constants, not a scratch materialization: rebasing them to an empty
+    // standalone __DATA segment made every BERT result wrong and faulted DMA.
+    program.constants.assign(std::size_t(channels)*4,0);
+    for(U32 channel=0;channel<channels;++channel)
+        program.constants[2*channel+1]=0x3c; // fp16 1.0, little endian
+    program.scratchAllocationBytes=0;program.formulaBuilt=true;
     const std::uint64_t row=2*channels,plane=row*tokens;
     program.inputs={{5,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)}};
     program.output={4,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)};
@@ -897,7 +904,7 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     // and are not portable to this isolated object.
     out.programRecordCount=0x10;
     out.programFormatCode=20;
-    out.scratchBytes=program.scratchAllocationBytes;
+    out.scratchBytes=0;
     out.revealedInputPrefix=true;
     out.revealedOutputBoundary=tokens==1500&&channels==384;
     return out;
@@ -2498,6 +2505,7 @@ TransformerAttentionProgram encodeAttentionMatmul(
     out.program.scratchAllocationBytes=operation==AttentionMatmul::PV
         ? heads*tokens*attentionAlign64(2*tokens)
         : heads*attentionAlign64(2*tokens)*headDimension;
+    out.scratchBytes=out.program.scratchAllocationBytes;
     out.program.formulaBuilt=true;
     out.revealed=tokens==1500&&headDimension==64&&(heads==6||heads==8);
     return out;
@@ -2522,6 +2530,7 @@ TransformerAttentionProgram encodeAttentionSoftmax(U32 tokens,U32 heads) {
     out.program.taskCount=5;out.program.firstTaskBytes=tasks[0].bytes.size();
     out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
     out.program.scratchAllocationBytes=std::uint64_t(heads)*tokens*tokens*2;
+    out.scratchBytes=out.program.scratchAllocationBytes;
     out.program.formulaBuilt=true;out.programRecordCount=11;
     out.programFormatCode=heads==8?1054:132*heads-1;
     out.revealed=tokens==1500&&heads==8;return out;
@@ -2550,13 +2559,16 @@ TransformerAttentionProgram encodeFusedAttention(
     }
     out.program.taskCount=U32(tasks.size());out.program.firstTaskBytes=tasks[0].bytes.size();
     out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
-    // The fused program keeps both the padded score surface and Q/K staging
-    // planes in __DATA.  The old allocation stopped at the score surface even
-    // though task 0 begins its staging result there, so the first load DMA and
-    // later coefficient reads ran beyond the mapped scratch segment.
+    // The operation exposes one padded score surface, while the captured
+    // fused program allocates two complete score surfaces for the engine's
+    // implicit ping-pong walk.  Q staging starts at the first surface's end
+    // and fits inside that second half.  Allocating only score+Q made the
+    // visible bases look bounded but left the implicit second score walk
+    // outside the mapped __DATA segment.
     const std::uint64_t paddedRow=attentionAlign64(2*tokens);
-    out.program.scratchAllocationBytes=std::uint64_t(heads)*paddedRow*
-        (tokens+headDimension);out.program.formulaBuilt=true;
+    out.scratchBytes=std::uint64_t(heads)*paddedRow*tokens;
+    out.program.scratchAllocationBytes=2*out.scratchBytes;
+    out.program.formulaBuilt=true;
     out.programRecordCount=2*heads+23;out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
     out.revealed=headDimension==64&&(heads==6||heads==8);return out;
 }

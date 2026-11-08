@@ -374,10 +374,14 @@ static ANEHWXArtifact *encodeTransformerLayerNormProgram(
         formatCode:encoded.programFormatCode
         scratchByteLength:encoded.scratchBytes
         scratchAllocationByteLength:encoded.scratchBytes
-        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+        descriptorLayout:encoded.scratchBytes
+            ? HWXProgramDescriptorLayoutScratchBackedMixed
+            : HWXProgramDescriptorLayoutLinear];
+    info.kernelRegionConstants=YES;
     NSError *error=nil;
     NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
-        constantRegion:[NSData data] bindings:objectBindings
+        constantRegion:[NSData dataWithBytes:encoded.program.constants.data()
+            length:encoded.program.constants.size()] bindings:objectBindings
         kernelRelocationOffsets:@[] programInfo:info error:&error];
     if(!image) {
         emitError(diagnostics,@"h16g.encode.transformer-layer-norm-object",
@@ -564,13 +568,21 @@ static ANEHWXArtifact *encodeWhisperTransposeProgram(
     }
     NSData *td=[NSData dataWithBytes:encoded.program.task.data()
         length:encoded.program.task.size()];
+    const NSUInteger sourceRow=alignUp(1500*2,64);
+    const NSUInteger sourceStorage=channels*sourceRow;
+    const NSUInteger resultRow=channels*2;
+    const NSUInteger resultStorage=1500*resultRow;
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
-            role:HWXObjectBindingRoleInput elementType:input.type.elementType shape:in],
+            role:HWXObjectBindingRoleInput elementType:input.type.elementType shape:in
+            rowStrideBytes:sourceRow planeStrideBytes:sourceStorage
+            batchStrideBytes:sourceStorage storageByteLength:sourceStorage],
         [[HWXObjectBinding alloc]
             initWithSymbol:[transpose.identifier stringByAppendingString:@"@output"]
             shortName:transpose.identifier role:HWXObjectBindingRoleOutput
-            elementType:transpose.outputType.elementType shape:out],
+            elementType:transpose.outputType.elementType shape:out
+            rowStrideBytes:resultRow planeStrideBytes:resultStorage
+            batchStrideBytes:resultStorage storageByteLength:resultStorage],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:1 recordCount:encoded.programRecordCount
@@ -590,12 +602,14 @@ static ANEHWXArtifact *encodeWhisperTransposeProgram(
     NSArray<ANEHWXBinding *> *runtimeBindings=@[
         [[ANEHWXBinding alloc]initWithIdentifier:input.name
             role:ANESurfaceRoleInput logicalByteLength:bytes
-            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:0
-            rowStrideBytes:3000 planeStrideBytes:bytes batchStrideBytes:bytes],
+            allocationByteLength:alignUp(sourceStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:sourceRow planeStrideBytes:sourceStorage
+            batchStrideBytes:sourceStorage],
         [[ANEHWXBinding alloc]initWithIdentifier:transpose.identifier
             role:ANESurfaceRoleOutput logicalByteLength:bytes
-            allocationByteLength:alignUp(bytes,0x4000) ioSurfaceIndex:1
-            rowStrideBytes:channels*2 planeStrideBytes:bytes batchStrideBytes:bytes],
+            allocationByteLength:alignUp(resultStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:resultRow planeStrideBytes:resultStorage
+            batchStrideBytes:resultStorage],
     ];
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }
@@ -1671,7 +1685,7 @@ static ANEHWXArtifact *encodeTransformerQKProgram(
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:encoded.program.taskCount
         recordCount:encoded.programRecordCount formatCode:encoded.programFormatCode
-        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchByteLength:encoded.scratchBytes
         scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSError *error=nil;
@@ -1756,7 +1770,7 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:encoded.program.taskCount
         recordCount:encoded.programRecordCount formatCode:encoded.programFormatCode
-        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchByteLength:encoded.scratchBytes
         scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
@@ -1850,7 +1864,7 @@ static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:encoded.program.taskCount recordCount:encoded.programRecordCount
         formatCode:encoded.programFormatCode
-        scratchByteLength:encoded.program.scratchAllocationBytes
+        scratchByteLength:encoded.scratchBytes
         scratchAllocationByteLength:alignUp(encoded.program.scratchAllocationBytes,0x4000)
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td

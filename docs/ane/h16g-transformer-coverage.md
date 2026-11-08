@@ -56,8 +56,14 @@ strides and allocation spans in the object and runtime metadata.
 
 The offline validator recognizes the BAR-independent stem and transpose task
 signatures, so every v2 stem/transpose program is refused for an unbound slot.
-It also bounds the already-correct positional-add 6/8/7 DMA walks.  Corrected
-v3 device qualification remains pending.
+It also bounds the already-correct positional-add 6/8/7 DMA walks.  The v3
+device run showed that transpose had mapped only the dense 3000-byte rows even
+though its source task walks 3008-byte physical rows.  That truncated the tail
+of every channel and accounted for the 1,528/2,040 non-exact tiny/base values.
+The object and runtime descriptors now expose the complete padded source; the
+validator bounds DMA against that tensor mapping rather than the larger,
+aligned Mach-O segment.  A v4 runner saves every output and reports relative
+L2 against the reference.
 
 ## Native attention formula update
 
@@ -102,19 +108,24 @@ program, although standalone softmax is a serialized five-task program.  It
 now retains the captured standalone sequence `0x00fff868`, three
 `0x00fff820` words and terminal `0x00fff860`, independent of head count.  The
 dependency mask remains `(1 << (heads + 2)) - 1`, bounded to the 32-bit field.
-The H=8 measured row remains byte-identical.  Device qualification of the
-corrected H=6 softmax and fused attention remains pending.
+The H=8 measured row remains byte-identical.  A second device run with that
+serialized H=6 schedule still wedged.  A device kit now separates the measured
+H=8 object and the H=6 prefixes 0, 0--1, 0--2, 0--3, and 0--4 so execution can
+locate the first task that does not complete without changing encoder fields.
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
 the preceding slot numbers, which left the first source unbound and aliased
 later inputs/results.  The encoder rebases only those DMA records when it
-packages a standalone object.  Fused attention also allocates both the padded
-score surface and the padded Q/K staging planes; its first staging write begins
-at the end of the score surface.  `h16g_validate.py` recognizes the decoded
+packages a standalone object.  Fused attention exposes one padded score
+surface to the task but requires two complete score planes for the engine's
+implicit ping-pong walk.  The first Q staging write begins at the first score
+surface's end and fits within the second plane.  Allocating only the visible
+score plus Q staging left the hidden remainder unmapped; the device produced
+ten translation faults.  `h16g_validate.py` recognizes the decoded
 attention and transformer-linear task families, checks source and result
 direction, and bounds every DMA extent for which the task supplies complete
-geometry.
+geometry, including this hidden second score extent.
 
 ## Native last-axis layer normalization
 
@@ -131,15 +142,17 @@ The long form splits 1500 rows into three 384-row tiles and one 348-row tail.
 It encodes the fp16 value of `1e-5`, promoted to fp32 in the task, and fp32
 `1/d` for the reduction.  Reciprocal square root uses the task's direct
 normalization unit; there is no external reciprocal or rsqrt lookup table.
-The standalone boundary materializes a row-latency staging window and then
-writes the external result.  Its scratch allocation is `2*S*d + 0x3300`
-bytes.
+The standalone boundary consumes the packaged identity gamma and zero beta
+vectors, then writes the external result.  These vectors are constants; they
+are not a scratch materialization.
 
-Packaged objects use BAR 6 for the external input, BAR 3 for scratch, and BAR
-7 for the external output.  The fail-closed validator recognizes the family,
-checks direction and aperture binding, and bounds four BERT or twelve Whisper
-DMA extents.  All three objects also pass the independent host HWX harness.
-Device numerical qualification is pending.
+Packaged objects use BAR 6 for the external input, BAR 8 for the gamma/beta
+constant table, and BAR 7 for the external output.  The fail-closed validator
+recognizes the family, checks direction and aperture binding, and bounds four
+BERT or twelve Whisper DMA extents.  It rejects the earlier scratch-rebased
+objects.  BERT had run with zero exact results and ten translation faults;
+S=1500 had wedged.  The corrected objects pass the independent host HWX
+harness and await device qualification.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
 `gamma` followed by fp16 `beta`.  Every pair in that capture is identity/zero,
@@ -200,7 +213,7 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| `layer_norm` (2) | `[1,128,768]` last axis | native identity-affine formula | five-task standalone program | compiler; predicted output boundary, device pending | non-identity affine facts |
+| `layer_norm` (2) | `[1,128,768]` last axis | native identity-affine formula | five-task standalone program | corrected constant binding; device pending | non-identity affine facts |
 | `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
 | `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
@@ -217,11 +230,11 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count per layer) | Shape (tiny / base) | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | native formula | one task | corrected v3 device run pending | done |
-| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | corrected v3 device run pending | done for d=384/512 |
-| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | corrected v3 device run pending | done |
-| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | compiler; device pending | device qualification |
-| `layer_norm` (2, +1 final) | `[1,1500,d]` | native identity-affine formula | eleven-task tiled program | compiler; tiny boundary measured, base boundary predicted, device pending | non-identity affine facts |
+| conv1d k3 s1 stem (1 per model) | `[1,80,3000] -> [1,384/512,3000]` | native formula | one task | v4 saves relL2 outputs; device pending | done |
+| conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | v4 saves relL2 outputs; device pending | done for d=384/512 |
+| `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | v4 saves relL2 outputs; device pending | done |
+| `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | padded-source mapping corrected; device pending | device qualification |
+| `layer_norm` (2, +1 final) | `[1,1500,d]` | native identity-affine formula | eleven-task tiled program | corrected constant binding; device pending | non-identity affine facts |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
 | `softmax` (1) | `[1,h,1500,1500]` | refused (SRAM overflow) | none | facts | tiled row softmax |

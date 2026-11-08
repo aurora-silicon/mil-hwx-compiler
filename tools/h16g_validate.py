@@ -168,11 +168,29 @@ def dma_extent(dma: dict, registers: dict, target: dict,
     and kernel-relocation checks in validate_dma().
     """
     address, offset = dma['address'], dma['offset']
+    if (target['kind'] == 'kernel' and family == 'layer_norm' and
+            address == 0x4d28 and 4 in registers):
+        # The final two normalization stages broadcast one fp16 affine
+        # vector.  Their task dimensions describe the output tensor, not a
+        # contiguous walk through the gamma/beta constant table.
+        return offset + product(registers[4], 2)
     # Scratch-backed normalization stages reuse the common dimension words
     # for L2 tiles, not for a linear DRAM walk.  A result plane span at 0x511c
     # is nevertheless explicit and, with 0x24, proves the complete staged
     # allocation used by QK/PV loads.
     if target['kind'] == 'scratch':
+        if (family == 'fused-attention' and address == 0x5108 and
+                all(key in registers for key in (4, 12, 0x24, 0x511c)) and
+                registers[4] and registers[0x511c] % registers[4] == 0):
+            # Task 0 exposes Q staging after one padded score surface, but the
+            # measured fused container allocates a second complete score
+            # surface for the engine's implicit ping-pong walk.  The visible
+            # Q extent alone is smaller and failed to catch that allocation.
+            padded_row = registers[0x511c] // registers[4]
+            score_bytes = product(product(registers[0x24], registers[12]),
+                                  padded_row)
+            return max(offset + product(registers[0x24], registers[0x511c]),
+                       product(2, score_bytes))
         if (family == 'layer_norm' and address == 0x4d28 and
                 all(key in registers for key in (4, 8, 12))):
             return offset + product(product(registers[4], registers[8]),
@@ -274,6 +292,17 @@ def attention_program(task_count: int, record_code: int, format_code: int) -> bo
                 (task_count == heads + 1 and record_code == 2 * heads + 3) or
                 (task_count == 5 and record_code == 11) or
                 (task_count == heads + 11 and record_code == 2 * heads + 23)):
+            return True
+    return False
+
+
+def fused_attention_program(task_count: int, record_code: int,
+                            format_code: int) -> bool:
+    """Recognize the fused QK/softmax/PV family separately for scratch bounds."""
+    for heads in range(1, 65):
+        tail_format = 791 if heads == 6 else 1054 if heads == 8 else 132 * heads - 1
+        if (task_count == heads + 11 and record_code == 2 * heads + 23 and
+                format_code == tail_format):
             return True
     return False
 
@@ -393,11 +422,16 @@ def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
             require(target is not None, "dma-unknown-aperture")
             relocated = dma['patch'] in relocations
             if dma['address'] in source:
-                require((family == 'positional' and dma['address'] == 0x4d28 and
-                         target['kind'] == 'kernel') or
-                        target['kind'] == 'scratch' or
-                        target['kind'] == 'surface' and target['prot'] == 1,
-                        "dma-direction")
+                if family == 'layer_norm' and dma['address'] == 0x4d28:
+                    require(target['kind'] == 'kernel' or
+                            target['kind'] == 'surface' and target['prot'] == 1,
+                            "dma-direction")
+                else:
+                    require((family == 'positional' and dma['address'] == 0x4d28 and
+                             target['kind'] == 'kernel') or
+                            target['kind'] == 'scratch' or
+                            target['kind'] == 'surface' and target['prot'] == 1,
+                            "dma-direction")
             elif dma['address'] in result:
                 require(target['kind'] == 'scratch' or
                         target['kind'] == 'surface' and target['prot'] == 2,
@@ -634,8 +668,12 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         seen.add(patch)
         require(info >> 24 == 7 and info & 0xffffff == kernel['sections'][0]['ordinal'], "relocation-kind")
         require(u32(taskdata, patch) < kernel['sections'][0]['size'], "relocation-addend")
-    dma_targets = [dict(vm=s['vm'], size=s['size'], prot=s['prot'], kind='surface')
-                   for s in surface]
+    # LOAD maps the tensor descriptor's declared allocation, not all virtual
+    # padding in the aligned Mach-O segment.  Bounding against segment vmsize
+    # hid the Whisper transpose's final padded source row.
+    dma_targets = [dict(vm=s['vm'], size=by_short[short]['allocation'],
+                        prot=s['prot'], kind='surface')
+                   for s, (_, short) in zip(surface, refs)]
     if scratch:
         dma_targets.append(dict(vm=scratch['vm'], size=scratch['size'],
                                 prot=scratch['prot'], kind='scratch'))
@@ -644,7 +682,9 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
                                 prot=kernel['prot'], kind='kernel'))
     record_code = u32(p, 0x860)
     whisper_family = whisper_program(task_facts, tasks, record_code, fmt)
-    family = ('attention' if attention_program(tasks, record_code, fmt) else
+    family = ('fused-attention' if fused_attention_program(
+                  tasks, record_code, fmt) else
+              'attention' if attention_program(tasks, record_code, fmt) else
               'linear' if linear_program(task_facts, tasks, record_code, fmt) else
               whisper_family or
               ('positional' if positional_program(

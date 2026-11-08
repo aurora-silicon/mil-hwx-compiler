@@ -71,6 +71,10 @@ struct TransformerAttentionProgram {
     h13::Program program;
     std::uint32_t programRecordCount = 0;
     std::uint32_t programFormatCode = 0;
+    // Bytes the operation descriptor exposes to the task.  The backing
+    // allocation may be larger when the engine uses an implicit ping-pong
+    // half; h13::Program::scratchAllocationBytes carries that extent.
+    std::size_t scratchBytes = 0;
     bool revealed = false;
 };
 
