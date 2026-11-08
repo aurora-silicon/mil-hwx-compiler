@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Whisper 1x3 stride-1 descriptor parity and CLI qualification."""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "research"))
+from mint_oracles import decode_task, parse_hwx, split_h14_tasks  # noqa: E402
+
+COMPILER = Path(sys.argv[1]).resolve()
+DUMP = Path(sys.argv[2]).resolve()
+VALIDATOR = ROOT / "tools/h16g_validate.py"
+
+ROWS = {
+    (384, False): (185344, "a27203e5de84404cb86c460fdc14aab3e87c57d88ca40312968c1e15b3c31af2"),
+    (384, True): (187392, "44f87b4e0396dcdf1f0e820e7548daaaece3692b6bce07cc07b384be81126f24"),
+    (512, False): (246784, "98c3ce248b3557f0f5aed61cc31c58d5bf17de6fc6abd782a367a0f163472963"),
+    (512, True): (248832, "fcedba63e926f004950dde60348edcc94941fcc38de9bc77c561b6c61858507e"),
+}
+
+
+def pattern(elements: int, seed: int) -> bytes:
+    data = bytearray(2 * elements)
+    for index in range(elements):
+        struct.pack_into("<H", data, 2 * index,
+                         0x3000 | ((index * 37 + seed * 19) & 0x7ff))
+    return bytes(data)
+
+
+def blob(path: Path, payloads: list[bytes]) -> list[int]:
+    data = bytearray(struct.pack("<II", 1, 2) + bytes(56))
+    offsets = []
+    for payload in payloads:
+        offset = len(data); offsets.append(offset)
+        data += struct.pack("<IIQQ", 0xDEADBEEF, 1, len(payload), offset + 64)
+        data += bytes(40) + payload
+        data += bytes((-len(data)) % 64)
+    path.write_bytes(data)
+    return offsets
+
+
+def mil(tokens: int, channels: int, offsets: list[int], gelu: bool) -> str:
+    result = "y" if gelu else "c"
+    activation = (f'    tensor<fp16, [1, {channels}, {tokens}]> y = gelu('
+                  'x = c, mode = string("EXACT"))[name = string("y")];\n'
+                  if gelu else "")
+    return f'''program(1.3)
+[buildInfo = dict<string, string>({{}})]
+{{
+  func main<ios18>(tensor<fp16, [1, 80, {tokens}]> x) {{
+    string pt = const()[name = string("pt"), val = string("same")];
+    tensor<int32, [1]> st = const()[name = string("st"), val = tensor<int32, [1]>([1])];
+    tensor<int32, [2]> pd = const()[name = string("pd"), val = tensor<int32, [2]>([0, 0])];
+    tensor<int32, [1]> dl = const()[name = string("dl"), val = tensor<int32, [1]>([1])];
+    int32 gp = const()[name = string("gp"), val = int32(1)];
+    tensor<fp16, [{channels}, 80, 3]> w = const()[name = string("w"), val = tensor<fp16, [{channels}, 80, 3]>(BLOBFILE(path = string("@model_path/parameters.bin"), offset = uint64({offsets[0]})))];
+    tensor<fp16, [{channels}]> b = const()[name = string("b"), val = tensor<fp16, [{channels}]>(BLOBFILE(path = string("@model_path/parameters.bin"), offset = uint64({offsets[1]})))];
+    tensor<fp16, [1, {channels}, {tokens}]> c = conv(bias = b, dilations = dl, groups = gp, pad = pd, pad_type = pt, strides = st, weight = w, x = x)[name = string("c")];
+{activation}  }} -> ({result});
+}}
+'''
+
+
+def canonical(task: bytes) -> dict:
+    decoded = decode_task(task, "h16")
+    return {"header": decoded["header_words"][:1] + decoded["header_words"][2:],
+            "blocks": decoded["blocks"], "records": decoded["records"]}
+
+
+def section(data: bytes, wanted: bytes) -> bytes:
+    count = struct.unpack_from("<I", data, 16)[0]; cursor = 32
+    for _ in range(count):
+        command, length = struct.unpack_from("<II", data, cursor)
+        if command == 0x19:
+            segment = struct.unpack_from("<2I16s4Q4I", data, cursor)
+            at = cursor + 72
+            for _ in range(segment[-2]):
+                entry = struct.unpack_from("<16s16s2Q8I", data, at)
+                if entry[0].split(b"\0", 1)[0] == wanted:
+                    return data[entry[4]:entry[4] + entry[3]]
+                at += 80
+        cursor += length
+    return b""
+
+
+def run_case(root: Path, tokens: int, channels: int, gelu: bool) -> None:
+    weights = pattern(channels * 80 * 3, channels + tokens)
+    bias = pattern(channels, channels + tokens + 1)
+    offsets = blob(root / "parameters.bin", [weights, bias])
+    source = root / f"stem-{tokens}-{channels}-{int(gelu)}.mil"
+    source.write_text(mil(tokens, channels, offsets, gelu))
+    output = root / source.stem
+    result = subprocess.run([str(COMPILER), "--mil", str(source),
+        "--model-root", str(root), "--target", "H16G", "--output", str(output)],
+        capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    image = output / "program-0.hwx"; data = image.read_bytes()
+    kernel = section(data, b"__kern_0")
+    table = kernel[:128] if gelu else b""
+    payload = weights + bias + table
+    args = [str(DUMP), "task", str(tokens), str(channels), str(int(gelu))]
+    task = subprocess.run(args, input=payload, stdout=subprocess.PIPE,
+                          timeout=120, check=True).stdout
+    expected_kernel = subprocess.run([str(DUMP), "kernel", *args[2:]],
+        input=payload, stdout=subprocess.PIPE, timeout=120, check=True).stdout
+    assert parse_hwx(data, "h16")["program_descriptor"]["text_words"] * 4 == len(task)
+    assert hashlib.sha256(kernel).digest() == hashlib.sha256(expected_kernel).digest()
+    validation = subprocess.run([sys.executable, str(VALIDATOR), str(image)],
+        capture_output=True, text=True, timeout=30)
+    assert validation.returncode == 0, validation.stdout + validation.stderr
+
+
+def main() -> None:
+    for (channels, gelu), (kernel_bytes, digest) in ROWS.items():
+        payload = bytes(channels * 80 * 3 * 2 + channels * 2 +
+                        (128 if gelu else 0))
+        task = subprocess.run([str(DUMP), "task", "3000", str(channels),
+                               str(int(gelu))], input=payload,
+                              stdout=subprocess.PIPE, check=True).stdout
+        tasks = split_h14_tasks(task[16:])
+        encoded = json.dumps([canonical(value) for value in tasks],
+                             sort_keys=True, separators=(",", ":")).encode()
+        assert hashlib.sha256(encoded).hexdigest() == digest
+        kernel = subprocess.run([str(DUMP), "kernel", "3000", str(channels),
+                                 str(int(gelu))], input=payload,
+                                stdout=subprocess.PIPE, check=True).stdout
+        assert len(kernel) == kernel_bytes
+    with tempfile.TemporaryDirectory(prefix="h16g-whisper-stem-") as temp:
+        root = Path(temp)
+        run_case(root, 3000, 384, False)
+        run_case(root, 3000, 512, True)
+        run_case(root, 1000, 384, False)
+        run_case(root, 3001, 512, True)
+    print("H16G Whisper stem1 PASS: 4 parity rows, CLI/validator, "
+          "2 unrevealed T held-outs")
+
+
+if __name__ == "__main__":
+    main()

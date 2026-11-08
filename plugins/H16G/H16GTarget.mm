@@ -450,7 +450,7 @@ programCompositionCapabilityRows(void) {
 }
 - (BOOL)supportsFusedEpilogue:(NSString *)operationName
                  producerKind:(ANEOperationKind)producerKind {
-    return [operationName isEqualToString:@"relu"] &&
+    return ([@[@"relu",@"gelu"] containsObject:operationName]) &&
         (producerKind == ANEOperationKindConv ||
          producerKind == ANEOperationKindMatmul);
 }

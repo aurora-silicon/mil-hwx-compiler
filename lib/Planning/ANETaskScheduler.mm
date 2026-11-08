@@ -338,7 +338,8 @@ static NSArray<NSArray<ANEOperationNode *> *> *splitUnsupportedTaskGroups(
         [NSMutableDictionary dictionary];
     NSMutableSet<NSNumber *> *foldedEpilogues = [NSMutableSet set];
     for (ANEOperationNode *node in graph.nodes) {
-        if (node.kind != ANEOperationKindALU || node.inputs.count != 1 ||
+        if ((node.kind != ANEOperationKindALU &&
+             node.kind != ANEOperationKindLUT) || node.inputs.count != 1 ||
             node.externalValueNames.count != 0) continue;
         ANEOperationNode *producer = node.inputs[0];
         BOOL sameRegion = [regionForNode[@(producer.ordinal)]

@@ -74,6 +74,15 @@ TransformerLinearProgram encodeTransformerLinear(
     std::uint32_t outputChannels, const std::uint8_t *weights,
     std::size_t weightBytes, const std::uint8_t *bias,
     std::size_t biasBytes, TransformerLinearOptions options = {});
+
+/// Encode Whisper's biased 1x3, stride-1 stem projection. The logical MIL
+/// tensors are [1,80,T] -> [1,C,T]; the object records [1,1,80,T] and
+/// [1,1,C,T]. The optional GELU uses the same table contract as linear.
+TransformerLinearProgram encodeWhisperStem1(
+    std::uint32_t tokens, std::uint32_t outputChannels,
+    const std::uint8_t *weights, std::size_t weightBytes,
+    const std::uint8_t *bias, std::size_t biasBytes,
+    TransformerLinearOptions options = {});
 // Empty only for one of the nine measured geometries. Bias, VALID, dilation
 // and general scheduling are deliberately outside this API's envelope.
 std::string convRefusal(ConvShape shape);

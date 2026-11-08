@@ -470,6 +470,42 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
     pack(t);
     return t;
 }
+
+Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
+    Task t;
+    t.kernelSlotFlags=0x23800000;
+    t.sourceSlotFlags=0x22800000;
+    t.resultSlotFlags=0x23000000;
+    const U32 externalRow=align64(2*tokens);
+    t.header={0,0,0x04000068,0,
+              (gelu || cout>=512) ? 0x00fff868u : 0x68u,
+              0,0,0,0x50009};
+    auto &r=t.registers;
+    r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=80; r[0x1c]=cout;
+    r[0x28]=0x5002a043; r[0x34]=1; r[0x3c]=0x200000;
+    r[0x40]=4; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130;
+    r[0x4114]=0x150; r[0x4118]=r[0x411c]=r[0x4120]=80*0x150;
+    r[0x4148]=0x50017a; r[0x414c]=80*0x150;
+    r[0x4904]=0x103c10 | (gelu ? 0x20000 : 0); r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=externalRow; r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=externalRow; r[0x5138]=0x1302031;
+    r[0x5500]=0x102c0; r[0x5510]=0; r[0x5514]=0;
+    const U32 laneBytes=kernelBytes/16;
+    U32 offset=0;
+    for (U32 lane=0;lane<16;++lane) {
+        r[0x5520+4*lane]=0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (laneBytes!=64) r[0x55a0+4*lane]=laneBytes;
+        offset+=laneBytes;
+    }
+    r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5918]=0;
+    r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    pack(t);
+    return t;
+}
 }
 
 std::string transformerLinearRefusal(U32 tokens, U32 cin, U32 cout,
@@ -538,6 +574,43 @@ TransformerLinearProgram encodeTransformerLinear(
     result.programFormatCode=0;
     result.scratchBacked=wide;
     result.scratchBytes=program.scratchAllocationBytes;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperStem1(
+    U32 tokens, U32 cout, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options) {
+    if (!tokens || (cout!=384 && cout!=512))
+        throw std::invalid_argument(
+            "Whisper stem1 requires T>0 and the measured C384/C512 width");
+    if (!options.bias || !bias || biasBytes!=std::size_t(cout)*2 ||
+        !weights || weightBytes!=std::size_t(cout)*80*3*2)
+        throw std::invalid_argument(
+            "Whisper stem1 requires fp16 [C,80,3] weights and [C] bias");
+    if (options.gelu && (!options.geluTable || options.geluTableBytes!=128))
+        throw std::invalid_argument(
+            "Whisper stem1 GELU requires the decoded 128-byte table");
+    auto packed=packLinearSlice(80*3,0,cout,weights,bias,
+        options.gelu ? options.geluTable : nullptr,
+        options.gelu ? options.geluTableBytes : 0);
+    Task task=whisperStem1Task(tokens,cout,U32(packed.size()),options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    program.kernelRelocations={program.task.size()+task.kernelRelocation};
+    program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    program.constants=std::move(packed); program.taskCount=1;
+    program.firstTaskBytes=task.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[&](U32 height,U32 index) {
+        const std::uint64_t row=2*tokens,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,tokens,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(80,5)}; program.output=tensor(cout,4);
+    program.formulaBuilt=true;
+    result.programRecordCount=0x10; result.programFormatCode=0;
     return result;
 }
 
