@@ -131,6 +131,9 @@ def main() -> None:
         stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
         tasks = split_h14_tasks(stream[16:])
         assert len(tasks) == 5
+        schedule_words = [struct.unpack_from("<9I", task)[4] for task in tasks]
+        assert schedule_words == [0x00fff868, 0x00fff820, 0x00fff820,
+                                  0x00fff820, 0x00fff860]
         dependency_mask = struct.unpack_from("<9I", tasks[2])[7]
         assert dependency_mask == (1 << (heads + 2)) - 1
     for heads, sizes, digest in FUSED_CASES:

@@ -2103,7 +2103,10 @@ Task fusedSoftmaxNormalizeTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxSetupTask(U32 tokens,U32 heads) {
-    Task task;task.header={0,0,0x68,0,heads==8?0x00fff868u:0x68u,0,0,7,1};auto &r=task.registers;
+    // The five-task standalone program keeps the captured serialized schedule
+    // for every head count.  The 0x68/0x28 form belongs to softmax inside the
+    // much larger fused/full-model schedule; using it here wedges EXECUTE.
+    Task task;task.header={0,0,0x68,0,0x00fff868,0,0,7,1};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
     r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
@@ -2123,7 +2126,7 @@ Task softmaxSetupTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxMaxTask(U32 tokens,U32 heads) {
-    Task task;task.header={1,0,0,0,heads==8?0x00fff820u:0x28u,0,0,0,0};auto &r=task.registers;
+    Task task;task.header={1,0,0,0,0x00fff820,0,0,0,0};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x34]=tokens;r[0x3c]=0x30;r[0x44]=0x44;r[0x48]=2*heads;r[0x4c]=0;
@@ -2150,7 +2153,7 @@ Task softmaxExpTask(U32 tokens,U32 heads) {
     // one completion per head.  Keeping that literal for H=6 waits for two
     // completions which can never be produced and wedges EXECUTE.
     const U32 dependencyMask=(U32(1)<<(heads+2))-1;
-    Task task;task.header={2,0,0,0,heads==8?0x00fff820u:0x28u,0,0,
+    Task task;task.header={2,0,0,0,0x00fff820,0,0,
         dependencyMask,0x00050001};auto &r=task.registers;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x30]=0x14000;r[0x34]=tokens;r[0x3c]=0x1c4400;r[0x40]=heads;r[0x4c]=0x100000;
@@ -2175,7 +2178,7 @@ Task softmaxExpTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxSumTask(U32 tokens,U32 heads) {
-    Task task;task.header={3,0,0,0,heads==8?0x00fff820u:0x28u,0,0,7,1};auto &r=task.registers;
+    Task task;task.header={3,0,0,0,0x00fff820,0,0,7,1};auto &r=task.registers;
     r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
     r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
     r[0x4104]=0x852;r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
@@ -2193,7 +2196,7 @@ Task softmaxSumTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxNormalizeTask(U32 tokens,U32 heads) {
-    Task task;task.header={4,0,0x04000000,0,heads==8?0x00fff860u:0x28u,0,0,0,9};auto &r=task.registers;
+    Task task;task.header={4,0,0x04000000,0,0x00fff860,0,0,0,9};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x34]=4*heads;r[0x3c]=0x30;r[0x44]=heads+1;r[0x48]=1;r[0x4c]=0;
