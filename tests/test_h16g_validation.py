@@ -6,8 +6,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from h16g_validate import (ValidationError, linear_program, task_stream, validate,
-                           validate_resources, validate_custom_bars, validate_execute)
+from h16g_validate import (ValidationError, linear_program, positional_program,
+                           task_stream, validate, validate_resources,
+                           validate_custom_bars, validate_execute,
+                           whisper_program)
 
 
 def put(data, offset, value, width=4):
@@ -204,6 +206,26 @@ class ValidationTests(unittest.TestCase):
         changed = [dict(task, dma=list(task['dma'])) for task in tasks]
         changed[1]['dma'] = [dict(address=0x5108, slot=6)]
         self.assertFalse(linear_program(changed, 2, 0x10, 0))
+
+    def test_whisper_dma_family_recognition_ignores_bar_slot(self):
+        stem = [dict(registers={0x28: 0x5002a043, 0x4904: 0x123c10},
+                     dma=[dict(address=0x4d10, slot=5),
+                          dict(address=0x5108, slot=6),
+                          dict(address=0x5510, slot=8)])]
+        self.assertEqual(whisper_program(stem, 1, 0x10, 0), 'whisper-stem')
+        self.assertIsNone(whisper_program(stem, 1, 0x10, 1))
+        transpose = [dict(
+            registers={4: 1500, 0x14: 1500, 0x30: 0x84000},
+            dma=[dict(address=0x4d10, slot=5),
+                 dict(address=0x5108, slot=6)])]
+        self.assertEqual(whisper_program(transpose, 1, 3, 0),
+                         'whisper-transpose')
+        position = [dict(
+            registers={4: 1024, 8: 1024, 0x14: 1024, 0x18: 1024},
+            dma=[dict(address=0x4d10, slot=6),
+                 dict(address=0x4d28, slot=8),
+                 dict(address=0x5108, slot=7)])]
+        self.assertTrue(positional_program(position, 1, 0x10, 0x5c))
 
     def test_mutated_container(self):
         raw, offsets = fixture(kernel=True)

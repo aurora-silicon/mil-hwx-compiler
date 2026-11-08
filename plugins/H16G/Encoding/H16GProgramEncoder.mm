@@ -361,14 +361,21 @@ static ANEHWXArtifact *encodeWhisperStemProgram(
     NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
     for (std::size_t offset : encoded.program.kernelRelocations)
         [relocations addObject:@(offset)];
+    NSUInteger inputRow=alignUp(inputTokens*2,64);
+    NSUInteger outputRow=alignUp(outputTokens*2,64);
+    NSUInteger inputStorage=inputChannels*inputRow;
+    NSUInteger outputStorage=channels*outputRow;
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
             role:HWXObjectBindingRoleInput elementType:input.type.elementType
-            shape:in],
+            shape:in rowStrideBytes:inputRow planeStrideBytes:inputStorage
+            batchStrideBytes:inputStorage storageByteLength:inputStorage],
         [[HWXObjectBinding alloc]
             initWithSymbol:[result.identifier stringByAppendingString:@"@output"]
             shortName:result.identifier role:HWXObjectBindingRoleOutput
-            elementType:result.outputType.elementType shape:result.outputType.shape],
+            elementType:result.outputType.elementType shape:result.outputType.shape
+            rowStrideBytes:outputRow planeStrideBytes:outputStorage
+            batchStrideBytes:outputStorage storageByteLength:outputStorage],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:encoded.program.taskCount
@@ -390,17 +397,17 @@ static ANEHWXArtifact *encodeWhisperStemProgram(
     NSArray<ANEHWXBinding *> *runtimeBindings=@[
         [[ANEHWXBinding alloc]initWithIdentifier:input.name
             role:ANESurfaceRoleInput logicalByteLength:inputBytes
-            allocationByteLength:alignUp(inputBytes,0x4000) ioSurfaceIndex:0
-            rowStrideBytes:inputTokens*2 planeStrideBytes:inputBytes
-            batchStrideBytes:inputBytes],
+            allocationByteLength:alignUp(inputStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:inputRow planeStrideBytes:inputStorage
+            batchStrideBytes:inputStorage],
         [[ANEHWXBinding alloc]initWithIdentifier:weight.identifier
             role:ANESurfaceRoleWeight logicalByteLength:constants.length
             allocationByteLength:constants.length ioSurfaceIndex:-1],
         [[ANEHWXBinding alloc]initWithIdentifier:result.identifier
             role:ANESurfaceRoleOutput logicalByteLength:outputBytes
-            allocationByteLength:alignUp(outputBytes,0x4000) ioSurfaceIndex:1
-            rowStrideBytes:outputTokens*2 planeStrideBytes:outputBytes
-            batchStrideBytes:outputBytes],
+            allocationByteLength:alignUp(outputStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:outputRow planeStrideBytes:outputStorage
+            batchStrideBytes:outputStorage],
     ];
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
 }

@@ -178,6 +178,10 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return offset + product(planes, registers[0x511c])
         return None
     if address == 0x4d10:
+        if (family == 'positional' and
+                all(key in registers for key in (4, 8, 0x4d18))):
+            return strided_extent(offset, registers[4], registers[8], 1,
+                                  registers[0x4d18], 0)
         if all(key in registers for key in (4, 8, 12, 0x4d18, 0x4d1c)):
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d18], registers[0x4d1c])
@@ -187,10 +191,18 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset, registers[4], 1, registers[12], 0,
                                   registers[0x4d1c])
     elif address == 0x4d28:
+        if (family == 'positional' and
+                all(key in registers for key in (4, 8, 0x4d30))):
+            return strided_extent(offset, registers[4], registers[8], 1,
+                                  registers[0x4d30], 0)
         if all(key in registers for key in (4, 8, 12, 0x4d34, 0x4d3c)):
             return strided_extent(offset, registers[4], registers[8], registers[12],
                                   registers[0x4d34], registers[0x4d3c])
     elif address == 0x5108:
+        if (family == 'positional' and
+                all(key in registers for key in (0x14, 0x18, 0x5110))):
+            return strided_extent(offset, registers[0x14], registers[0x18], 1,
+                                  registers[0x5110], 0)
         if registers.get(0x511c):
             return offset + product(registers.get(0x24, 1), registers[0x511c])
         if (family == 'linear' and
@@ -201,6 +213,19 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset + product(first_output, 2),
                                   registers[0x1c], 1, registers[0x14], 0,
                                   registers[0x5114])
+        if (family == 'whisper-stem' and
+                all(key in registers for key in (0x14, 0x5114))):
+            # Stem output tasks write one channel slice into padded token
+            # rows. The measured one-lane tail omits 0x1c, which means 16.
+            return strided_extent(offset, registers[0x14], 1,
+                                  registers.get(0x1c, 16), 0,
+                                  registers[0x5114])
+        if (family == 'whisper-transpose' and
+                all(key in registers for key in (0x14, 0x1c, 0x5114))):
+            # Transpose materializes [T,C]: C contiguous halfwords for each
+            # of T rows, unlike the stem's channel-major padded surfaces.
+            return strided_extent(offset, registers[0x1c], 1,
+                                  registers[0x14], 0, registers[0x5114])
         if all(key in registers for key in (0x14, 0x18, 0x1c, 0x5110, 0x5114)):
             inner, middle, outer = (registers[0x14], registers[0x18],
                                     registers[0x1c])
@@ -266,14 +291,58 @@ def linear_program(tasks: list[dict], task_count: int,
     return True
 
 
+def whisper_program(tasks: list[dict], task_count: int,
+                    record_code: int, format_code: int) -> str | None:
+    """Recognize the formula-built stem and encoder-layout task families.
+
+    BAR slots are excluded deliberately so the v2 one-slot-early objects are
+    recognized and refused by strict DMA binding checks.
+    """
+    if len(tasks) != task_count or format_code != 0:
+        return None
+    if task_count == 1 and record_code == 3:
+        task = tasks[0]
+        registers = task['registers']
+        addresses = {dma['address'] for dma in task['dma']}
+        if (registers.get(4) == registers.get(0x14) == 1500 and
+                registers.get(0x30) == 0x84000 and
+                {0x4d10, 0x5108}.issubset(addresses) and
+                0x5510 not in addresses):
+            return 'whisper-transpose'
+    if record_code != {1: 16, 2: 31, 3: 45}.get(task_count):
+        return None
+    for task in tasks:
+        registers = task['registers']
+        addresses = {dma['address'] for dma in task['dma']}
+        if (registers.get(0x28) not in (0x5002a043, 0x5000c043) or
+                (registers.get(0x4904, 0) & ~0x20000) != 0x103c10 or
+                not {0x4d10, 0x5108, 0x5510}.issubset(addresses)):
+            return None
+    return 'whisper-stem'
+
+
+def positional_program(tasks: list[dict], task_count: int,
+                       record_code: int, format_code: int) -> bool:
+    """Recognize the 1024-square binary task used for positional addition."""
+    if (len(tasks) != task_count or task_count != 1 or record_code != 0x10 or
+            format_code != 0x5c):
+        return False
+    task = tasks[0]
+    registers = task['registers']
+    addresses = {dma['address'] for dma in task['dma']}
+    return (registers.get(4) == registers.get(8) ==
+            registers.get(0x14) == registers.get(0x18) == 1024 and
+            {0x4d10, 0x4d28, 0x5108}.issubset(addresses))
+
+
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
                  relocations: set[int], family: str | None) -> int:
     """Bind decoded-family DMA records and bound every computable extent.
 
     Register addresses are reused with different roles by other H16G engines.
-    Apply source/result direction semantics only to decoded attention and
-    transformer-linear families; other families retain their existing
-    relocation and container bounds.
+    Apply source/result direction semantics only to decoded attention,
+    transformer-linear, Whisper stem/layout, and positional-add families;
+    other families retain their existing relocation and container bounds.
     """
     if family is None:
         return 0
@@ -294,7 +363,9 @@ def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],
             require(target is not None, "dma-unknown-aperture")
             relocated = dma['patch'] in relocations
             if dma['address'] in source:
-                require(target['kind'] == 'scratch' or
+                require((family == 'positional' and dma['address'] == 0x4d28 and
+                         target['kind'] == 'kernel') or
+                        target['kind'] == 'scratch' or
                         target['kind'] == 'surface' and target['prot'] == 1,
                         "dma-direction")
             elif dma['address'] in result:
@@ -542,8 +613,12 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
         dma_targets.append(dict(vm=kernel['vm'], size=kernel['size'],
                                 prot=kernel['prot'], kind='kernel'))
     record_code = u32(p, 0x860)
+    whisper_family = whisper_program(task_facts, tasks, record_code, fmt)
     family = ('attention' if attention_program(tasks, record_code, fmt) else
-              'linear' if linear_program(task_facts, tasks, record_code, fmt) else None)
+              'linear' if linear_program(task_facts, tasks, record_code, fmt) else
+              whisper_family or
+              ('positional' if positional_program(
+                  task_facts, tasks, record_code, fmt) else None))
     dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")

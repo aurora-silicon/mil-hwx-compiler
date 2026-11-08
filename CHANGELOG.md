@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: bind Whisper stem1/stem2 and encoder-transpose source/result DMA to
+  the standalone object's BAR 6/7 apertures (kernel stays at BAR 8), and give
+  their row-padded surfaces physical object strides.  Strict DMA-family
+  recognition now rejects the one-slot-early stem objects offline and bounds
+  stem, transpose, and positional-add walks.  Transformer and stem GELU
+  references now interpolate the decoded H16G table instead of evaluating
+  mathematical erf; the preserved fused-linear result improves from relative
+  L2 `1.77e-2` to `6.46e-4` without changing its task or table placement.
 - H16G: bind formula-built transformer-linear source, result and packed
   weight/bias/post-op DMA records to the standalone object's BAR 6/7/8
   apertures.  Extend strict DMA direction and extent validation to the

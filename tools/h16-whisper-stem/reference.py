@@ -2,9 +2,9 @@
 """Generate deterministic fp16 references for the Whisper convolution stem.
 
 The reference follows Core ML's rank-3 ``[1,C,T]`` spelling: kernel size 3,
-SAME padding, stride 1 followed by stride 2, a bias and exact GELU after each
+SAME padding, stride 1 followed by stride 2, a bias and H16G LUT GELU after each
 convolution, then ``[1,C,1500] -> [1,1500,C]`` and a constant positional add.
-All multiply-accumulates and nonlinearities are evaluated in float64 and each
+Multiply-accumulates and LUT interpolation are evaluated in float64 and each
 hardware-visible edge is rounded to fp16.
 
 The output is deliberately generated, not checked in.  It contains one NPZ
@@ -19,8 +19,12 @@ import json
 import math
 from pathlib import Path
 import struct
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from h16g_gelu import h16g_gelu  # noqa: E402
 
 
 MODELS = {"tiny": 384, "base": 512}
@@ -121,13 +125,6 @@ def conv1d_same(x16: np.ndarray, weight16: np.ndarray,
     return output.astype(np.float16)
 
 
-def exact_gelu(x16: np.ndarray) -> np.ndarray:
-    """Core ML's default EXACT GELU, rounded once at the output edge."""
-    x = x16.astype(np.float64)
-    erf = np.frompyfunc(lambda v: math.erf(v / math.sqrt(2.0)), 1, 1)
-    return (0.5 * x * (1.0 + erf(x).astype(np.float64))).astype(np.float16)
-
-
 def surface(array: np.ndarray) -> bytes:
     """Pack a CxT fp16 tensor with each external row aligned to 64 bytes."""
     if array.ndim != 2 or array.dtype != np.float16:
@@ -156,9 +153,9 @@ def generate_model(output: Path, name: str, channels: int, seed: int) -> dict:
     position = (rng.standard_normal((1500, channels)) * 0.02).astype(np.float16)
 
     conv1 = conv1d_same(x, w1, b1, 1)
-    gelu1 = exact_gelu(conv1)
+    gelu1 = h16g_gelu(conv1)
     conv2 = conv1d_same(gelu1, w2, b2, 2)
-    gelu2 = exact_gelu(conv2)
+    gelu2 = h16g_gelu(conv2)
     tokens = np.ascontiguousarray(gelu2.T)
     positional = (tokens.astype(np.float64) +
                   position.astype(np.float64)).astype(np.float16)
@@ -199,10 +196,10 @@ def generate_model(output: Path, name: str, channels: int, seed: int) -> dict:
         "input": [1, 80, 3000],
         "conv1": {"weight": [channels, 80, 3], "stride": 1,
                   "output": [1, channels, 3000], "bias": True,
-                  "postOperation": "gelu_exact"},
+                  "postOperation": "gelu_h16g_lut"},
         "conv2": {"weight": [channels, channels, 3], "stride": 2,
                   "output": [1, channels, 1500], "bias": True,
-                  "postOperation": "gelu_exact"},
+                  "postOperation": "gelu_h16g_lut"},
         "transpose": {"permutation": [0, 2, 1],
                       "output": [1, 1500, channels]},
         "positionalAdd": {"constant": [1, 1500, channels],

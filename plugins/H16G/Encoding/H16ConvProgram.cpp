@@ -8,8 +8,8 @@ namespace ane::h16 {
 namespace {
 using U32 = std::uint32_t;
 // Standalone H16G objects place input, output and __KERN_0 at BAR slots
-// 6, 7 and 8. Kernel-bearing formula tasks must name the final aperture.
-constexpr U32 packagedKernelSlotFlags = 0x24000000u;
+// 6, 7 and 8. Formula tasks must use this object-writer BAR law rather than
+// the one-slot-earlier numbering retained by sanitized captures.
 struct Schedule {
     U32 cin, cout, width, kernel, stride, groups;
     bool bias;
@@ -485,9 +485,9 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
 
 Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
     Task t;
-    t.kernelSlotFlags=packagedKernelSlotFlags;
-    t.sourceSlotFlags=0x22800000;
-    t.resultSlotFlags=0x23000000;
+    t.kernelSlotFlags=taskBar(8);
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
     const U32 externalRow=align64(2*tokens);
     t.header={0,0,0x04000068,0,
               (gelu || cout>=512) ? 0x00fff868u : 0x68u,
@@ -594,9 +594,9 @@ Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
                       U32 taskIndex, U32 taskCount, U32 kernelBase,
                       const std::array<U32,16> &chunkBytes, bool gelu) {
     Task t;
-    t.kernelSlotFlags=packagedKernelSlotFlags;
-    t.sourceSlotFlags=0x22800000;
-    t.resultSlotFlags=0x23000000;
+    t.kernelSlotFlags=taskBar(8);
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
     const bool first=taskIndex==0,last=taskIndex+1==taskCount;
     t.header={taskIndex,0,first ? (last ? 0x04000068u : 0x68u)
                                : (last ? 0x04000000u : 0u),
@@ -646,8 +646,8 @@ Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
 
 Task whisperTransposeTask(U32 channels) {
     Task t;
-    t.sourceSlotFlags=0x22800000;
-    t.resultSlotFlags=0x23000000;
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
     t.header={0,0,0x04000068,0,0x68,0,0,0,0x50009};
     auto &r=t.registers;
     r[0x5500]=0x80;
