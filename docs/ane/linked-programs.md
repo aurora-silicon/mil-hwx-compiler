@@ -335,3 +335,31 @@ the kernel; that is an estimate.
    (the decoded two-task c1024 form) the extra tasks would also stop
    re-reading their input.
 3. Run with perf level 5 and measure the real uplift.
+
+## Native MobileNet ring (`--schedule linked-ring`)
+
+`linked-ring` is the H13 native-frame MobileNetV1 schedule.  It is separate
+from `linked` and `linked-l2`, whose emitted bytes remain unchanged.  The
+schedule admits the direct 3x3-s2 3-to-32 stem and direct stride-2 depthwise
+tasks, keeps every pointwise convolution in one task through 2,099,200
+coefficient bytes, and links one convolution to one descriptor.
+
+Coefficient streams above 1 MiB are allowed only for a whole-output tile in
+the decoded 7x7 class (`TileHeight == output height`).  ANECOMP fleet44 ran
+1024-to-1024 at 7x7 in 172 us busy as one task versus 195 us as four tasks;
+the same 2.1 MB kernel attached to a multi-tile 14x14 task wedged the engine,
+so larger spatial forms retain the established 1 MiB split.
+
+The first depthwise result uses the sole interleave-8 DRAM spill.  The next
+pointwise task stages 64 source pixels (467,712 bytes) above a 1,609,216-byte
+resident result, for a 2,076,928-byte peak inside the 2 MiB circular arena.
+All later edges stay resident.  SourceCfg, ResultCfg, DMA dependency/cache
+hints, row-bank skews and placements are selected from geometry and edge
+role; no captured task stream is embedded in the implementation.
+
+Build the standard unmirrored network and its ANECOMP device ladder with:
+
+```sh
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py out/mn --frame native --no-perop
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/ring_kit.py out/h13-ring
+```

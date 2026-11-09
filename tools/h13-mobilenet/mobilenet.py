@@ -1,6 +1,7 @@
 """MobileNetV1 224 (alpha 1.0) as one H13 linked conv chain.
 
-usage: mobilenet.py OUTDIR [--weights model.tflite] [--seed N] [--head ane|cpu]
+usage: mobilenet.py OUTDIR [--weights model.tflite] [--seed N]
+                    [--head ane|cpu] [--frame mirrored|native]
 
 The ANE runs the network in a mirrored frame: the host flips the image on
 both spatial axes and every 3x3 kernel likewise. TensorFlow's SAME padding at
@@ -39,13 +40,16 @@ def tf_layers():
     out.append(('fc', 1024, 1001, 1))
     return out
 
-def ane_layers(head='ane', relu6=True):
+def ane_layers(head='ane', frame='mirrored', relu6=True):
     activation = dict(relu=not relu6, relu6=relu6)
-    layers = [dict(cout=32, k=3, s=1, g=1, bias=True, **activation)]
+    layers = [dict(cout=32, k=3, s=2 if frame == 'native' else 1,
+                   g=1, bias=True, **activation)]
     c = 32
     for co, s in CFG:
-        layers.append(dict(cout=c, k=3, s=1, g=c, bias=True, **activation))
-        layers.append(dict(cout=co, k=1, s=s, g=1, bias=True, **activation))
+        layers.append(dict(cout=c, k=3, s=s if frame == 'native' else 1,
+                           g=c, bias=True, **activation))
+        layers.append(dict(cout=co, k=1, s=1 if frame == 'native' else s,
+                           g=1, bias=True, **activation))
         c = co
     if head == 'ane':
         layers.append(dict(cout=1024, k=1, s=1, g=1, bias=True,
@@ -64,8 +68,17 @@ def random_tf_weights(seed=0):
         ws.append(dict(w=w.astype(np.float32), b=b.astype(np.float32)))
     return ws
 
-def to_ane_params(tfw, head='ane'):
+def to_ane_params(tfw, head='ane', frame='mirrored'):
     """TF-frame float weights -> the mirrored-frame fp16 chain parameters."""
+    if frame == 'native':
+        params = [dict(w=np.ascontiguousarray(P['w']).astype(np.float16),
+                       b=P['b'].astype(np.float16)) for P in tfw[:27]]
+        if head == 'ane':
+            w = np.zeros((1024, 1024, 1, 1), np.float32)
+            b = np.zeros(1024, np.float32)
+            w[:1001] = tfw[27]['w']; b[:1001] = tfw[27]['b']
+            params.append(dict(w=w.astype(np.float16), b=b.astype(np.float16)))
+        return params
     params = []
     # Stem: out[o, k, l] = sum_{c,dy,dx} w[o,c,dy,dx] x[c, 2k+dy-?, ...] in the
     # mirrored frame the taps are rows 2k-1, 2k, 2k+1 (pad 1, even centres).
@@ -92,8 +105,10 @@ def to_ane_params(tfw, head='ane'):
         params.append(dict(w=w.astype(np.float16), b=b.astype(np.float16)))
     return params
 
-def preprocess(img):
+def preprocess(img, frame='mirrored'):
     """[3,224,224] float image in [-1, 1] -> mirrored space-to-depth [16,112,112] fp16."""
+    if frame == 'native':
+        return np.ascontiguousarray(img).astype(np.float16)
     m = img[:, ::-1, ::-1]
     s = np.zeros((16, 112, 112), np.float32)
     for c in range(3):
@@ -132,6 +147,7 @@ if __name__ == '__main__':
     ap.add_argument('--target', choices=['H13', 'H14'], default='H13')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--head', choices=['ane', 'cpu'], default='ane')
+    ap.add_argument('--frame', choices=['mirrored', 'native'], default='mirrored')
     ap.add_argument('--no-perop', action='store_true')
     ap.add_argument('--relu', action='store_true',
                     help='emit unbounded ReLU instead of the default fused ReLU6')
@@ -142,15 +158,17 @@ if __name__ == '__main__':
         tfw = mobilenet_v1_weights(a.weights)
     else:
         tfw = random_tf_weights(a.seed)
-    layers = ane_layers(a.head, relu6=not a.relu)
-    params = to_ane_params(tfw, a.head)
+    layers = ane_layers(a.head, a.frame, relu6=not a.relu)
+    params = to_ane_params(tfw, a.head, a.frame)
     milc = os.environ.get('MILC', 'build/mil-hwxc')
     shutil.rmtree(a.out, ignore_errors=True)
-    mil, params, outshape = conv_mil(layers, (16, 112, 112), os.path.join(a.out, 'src'), weights=params)
-    save_params(os.path.join(a.out, 'params.npz'), layers, params, (16, 112, 112))
+    inshape = (3, 224, 224) if a.frame == 'native' else (16, 112, 112)
+    mil, params, outshape = conv_mil(layers, inshape, os.path.join(a.out, 'src'), weights=params)
+    save_params(os.path.join(a.out, 'params.npz'), layers, params, inshape)
     np.savez(os.path.join(a.out, 'tfweights.npz'), **{f'w{i}': P['w'] for i, P in enumerate(tfw)},
              **{f'b{i}': P['b'] for i, P in enumerate(tfw)})
-    m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), os.environ.get('LINKED_SCHEDULE', 'linked'))
+    default_schedule = 'linked-ring' if a.frame == 'native' else 'linked'
+    m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), os.environ.get('LINKED_SCHEDULE', default_schedule))
     msg = (f"{a.out}: {len(layers)} layers, linked {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
     if not a.no_perop:

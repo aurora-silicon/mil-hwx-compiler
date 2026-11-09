@@ -2496,14 +2496,25 @@ int convPadding(const ConvShape &shape) {
 
 /// The decoded single-task template this family borrows its invariant words
 /// from: same kernel, stride, group form and bias, smallest surface first.
-const OracleConvTemplate *convFamilyBase(const ConvShape &shape) {
+const OracleConvTemplate *convFamilyBase(const ConvShape &shape,
+                                         bool linkedRing = false) {
     const ConvKind kind = convKind(shape);
     const OracleConvTemplate *best = nullptr;
     for (const auto &candidate : kConvTasks) {
-        if (candidate.taskCount != 1 || candidate.kernel != shape.kernel ||
-            candidate.kernelWidth != shape.kernelWidth ||
-            candidate.stride != shape.stride || candidate.bias != shape.bias)
+        if (candidate.taskCount != 1 || candidate.bias != shape.bias)
             continue;
+        const bool exactFamily = candidate.kernel == shape.kernel &&
+            candidate.kernelWidth == shape.kernelWidth &&
+            candidate.stride == shape.stride;
+        const bool ringStemBase = linkedRing && convKind(shape) == ConvKind::Dense &&
+            shape.kernel == 3 && shape.stride == 2 &&
+            candidate.kernel == 1 && candidate.kernelWidth == 1 &&
+            candidate.stride == 2;
+        const bool ringDepthwiseBase = linkedRing &&
+            convKind(shape) == ConvKind::Depthwise && shape.kernel == 3 &&
+            shape.stride == 2 && candidate.kernel == 3 &&
+            candidate.kernelWidth == 3 && candidate.stride == 1;
+        if (!exactFamily && !ringStemBase && !ringDepthwiseBase) continue;
         if (candidate.input.channels < 64 || candidate.input.height > 64 ||
             candidate.input.width > 64)
             continue;
@@ -2512,7 +2523,7 @@ const OracleConvTemplate *convFamilyBase(const ConvShape &shape) {
                         candidate.input, candidate.output};
         if (convKind(probe) != kind) continue;
         // Same padding form, so the base's ConvCfg pad bits are the family's.
-        if (shape.kernel > 1 &&
+        if (exactFamily && shape.kernel > 1 &&
             (convPadding(probe) == 0) != (convPadding(shape) == 0)) continue;
         if (!best || candidate.wordCount < best->wordCount ||
             (candidate.wordCount == best->wordCount &&
@@ -2554,7 +2565,8 @@ std::uint32_t l2Skew(std::uint32_t stride, std::uint32_t width,
     return inputs >= 32 ? 0x30 : 0x20;
 }
 
-std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
+std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
+                            bool linkedRing = false) {
     plan.kind = convKind(shape);
     if (plan.kind == ConvKind::Other)
         return "grouped convolutions other than depthwise have no generic form";
@@ -2563,7 +2575,8 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
         return "the generic form covers square 1x1 and 3x3 kernels";
     if (shape.stride != 1 && shape.stride != 2)
         return "the generic form covers stride 1 and 2";
-    if (shape.stride == 2 && (shape.kernel != 1 || plan.kind != ConvKind::Dense))
+    if (!linkedRing && shape.stride == 2 &&
+        (shape.kernel != 1 || plan.kind != ConvKind::Dense))
         return "stride 2 is generic only for dense 1x1 kernels";
     if (convPadding(shape) < 0)
         return "the output surface implies neither same nor valid padding";
@@ -2572,11 +2585,13 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
     if (!in.channels || !out.channels || !in.height || !in.width ||
         !out.height || !out.width)
         return "convolution surfaces must be nonempty";
-    if (in.channels % 16 || out.channels % 16)
+    const bool nativeStem = linkedRing && shape.kernel == 3 && shape.stride == 2 &&
+        plan.kind == ConvKind::Dense && in.channels == 3 && out.channels == 32;
+    if ((!nativeStem && in.channels % 16) || out.channels % 16)
         return "the generic form needs channel counts that are multiples of 16";
     if (in.width > 4096 || in.height > 16384)
         return "the generic form caps rows at 4096 columns";
-    if (!convFamilyBase(shape))
+    if (!convFamilyBase(shape, linkedRing))
         return "no decoded template of this family supplies the invariant words";
     plan.inputPerTask = in.channels;
     plan.rowL2 = static_cast<std::uint32_t>(
@@ -2589,7 +2604,7 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
     // Output-channel tasks: each task's kernel bytes must fit the budget.
     const std::uint64_t perChannel = (reduction + (shape.bias ? 1 : 0)) * 2;
     std::uint32_t slice = out.channels;
-    if (shape.stride == 2) {
+    if (shape.stride == 2 && !linkedRing) {
         // The zero-skipping stride-2 section is byte-proven only up to 8
         // interleaved lanes, and a 16-lane program (128 -> 256 at 56 -> 28)
         // hung the M1 Pro engine. A wider stride-2 layer therefore runs as
@@ -2604,7 +2619,11 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
         if (slice * perChannel > kGenericKernelBudget)
             return "a strided 128-channel task exceeds the per-task kernel budget";
     }
-    if (plan.kind == ConvKind::Dense && slice * perChannel > kGenericKernelBudget) {
+    const bool largeKernelNeedsSplit = linkedRing &&
+        (out.height > 7 || out.width > 7);
+    if (plan.kind == ConvKind::Dense &&
+        slice * perChannel > kGenericKernelBudget &&
+        (!linkedRing || largeKernelNeedsSplit)) {
         if (shape.stride != 1)
             return "a strided convolution above the per-task kernel budget has no generic split";
         std::uint64_t fit = kGenericKernelBudget / perChannel;
@@ -2620,7 +2639,7 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
             if (lanes != chunks.front())
                 return "the output channels split into lane chunks of different widths";
     }
-    if (shape.stride == 2) {
+    if (shape.stride == 2 && !linkedRing) {
         // Device-verified only up to 8 interleaved lanes per plane (one lane
         // chunk): a 16-lane zero-skipping section (128 -> 256 at 56 -> 28)
         // hung the engine on the M1 Pro, matching the decoded record that the
@@ -2630,7 +2649,7 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
             return "stride 2 is verified only up to 8 interleaved lanes "
                    "(at most 128 output channels per task)";
     }
-    if (plan.kind == ConvKind::Depthwise &&
+    if (!linkedRing && plan.kind == ConvKind::Depthwise &&
         out.channels * perChannel > kGenericKernelBudget)
         return "depthwise kernel exceeds the per-task kernel budget";
     plan.slices.clear();
@@ -2654,6 +2673,10 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan) {
     }
     if (!plan.tileHeight)
         return "one output row does not fit the L2 tiling budget";
+    if (linkedRing && plan.slices.size() == 1 &&
+        out.channels * perChannel > kGenericKernelBudget &&
+        plan.tileHeight != out.height)
+        return "a coefficient stream above 1 MiB requires one whole-output tile";
     return {};
 }
 
@@ -2697,14 +2720,20 @@ std::string convGenericRefusal(ConvShape shape) {
     return planConvGeneric(shape, plan);
 }
 
-Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
-                          std::size_t weightBytes, const std::uint8_t *bias,
-                          std::size_t biasBytes) {
+std::string convLinkedRingRefusal(ConvShape shape) {
     ConvGenericPlan plan{};
-    const std::string refusal = planConvGeneric(shape, plan);
+    return planConvGeneric(shape, plan, true);
+}
+
+static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
+                                 std::size_t weightBytes,
+                                 const std::uint8_t *bias,
+                                 std::size_t biasBytes, bool linkedRing) {
+    ConvGenericPlan plan{};
+    const std::string refusal = planConvGeneric(shape, plan, linkedRing);
     if (!refusal.empty())
         throw std::invalid_argument("h13.conv-outside-envelope: " + refusal);
-    const auto *base = convFamilyBase(shape);
+    const auto *base = convFamilyBase(shape, linkedRing);
     const auto &in = shape.input;
     const auto &out = shape.output;
     const std::uint32_t taps = shape.kernel * shape.kernelWidth;
@@ -2758,20 +2787,23 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
         part.output.channels = slice;
         std::vector<std::uint8_t> packed;
         std::uint32_t lanes = 1;
-        if (plan.kind == ConvKind::Depthwise) {
+        if (plan.kind == ConvKind::Depthwise && shape.stride == 1) {
             packed = packConvDepthwise(taps, slice, weights, bias);
         } else {
-            const auto chunks = laneChunks(slice, laneCap(in));
+            const auto chunks = linkedRing && shape.stride == 2
+                ? std::vector<std::uint32_t>{slice / 16}
+                : laneChunks(slice, laneCap(in));
             lanes = chunks.front();
             const std::uint8_t *w = weights +
                 static_cast<std::size_t>(firstChannel) * reduction * 2;
             const std::uint8_t *b = bias ? bias + firstChannel * 2 : nullptr;
             if (shape.stride == 2) {
-                if (chunks.size() != 1)
+                if (!linkedRing && chunks.size() != 1)
                     throw std::invalid_argument(
                         "h13.conv-outside-envelope: the generic strided "
                         "section needs one lane chunk");
-                packed = packConvStrided(reduction, chunks, w, b, false);
+                packed = packConvStrided(reduction, chunks, w, b,
+                                          linkedRing);
             } else {
                 packed = packConvDense(reduction, chunks, w, b, false);
             }
@@ -2833,6 +2865,8 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
             (static_cast<std::uint32_t>(pad) << 17) |
             (static_cast<std::uint32_t>(pad) << 22);
         putRegister(task, offset, bytes, 0x0001c, convCfg);
+        if (shape.stride == 2)
+            putRegister(task, offset, bytes, 0x0c800, 0x182u);
         putRegister(task, offset, bytes, 0x00028, plan.tileHeight);
         putRegister(task, offset, bytes, 0x00034, common34);
         putRegister(task, offset, bytes, 0x0480c, plan.rowL2);
@@ -2868,6 +2902,21 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
     program.scratchAllocationBytes = 0;
     if (program.constants.empty()) program.constants.assign(64, 0);
     return program;
+}
+
+
+Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
+                          std::size_t weightBytes, const std::uint8_t *bias,
+                          std::size_t biasBytes) {
+    return encodeConvFormula(shape, weights, weightBytes, bias, biasBytes,
+                             false);
+}
+
+Program encodeConvLinkedRing(ConvShape shape, const std::uint8_t *weights,
+                             std::size_t weightBytes, const std::uint8_t *bias,
+                             std::size_t biasBytes) {
+    return encodeConvFormula(shape, weights, weightBytes, bias, biasBytes,
+                             true);
 }
 
 namespace {
@@ -3366,6 +3415,343 @@ Program linkConvChain(const std::vector<Program> &layers,
     if (alignUp(program.task.size(), 0x10) != program.constantOffsetBytes)
         throw std::logic_error(
             "h13.linked-outside-envelope: kernel base would not match the constant offset");
+    return program;
+}
+
+namespace {
+
+struct MobileRingGeometry {
+    std::uint32_t ci, co, hi, wi, ho, wo, kernel, stride;
+    bool depthwise;
+    std::uint32_t sourceChannel, sourceRow;
+    std::uint64_t sourceSpan;
+};
+
+std::uint32_t mobileRingSkew(const MobileRingGeometry &g) {
+    // H13's bank rotation is a function of the native MobileNet surface and
+    // consumer role.  These cases are shape classes, not layer numbers: the
+    // same rule therefore rebuilds every prefix independently.
+    if (g.wi == 112) return g.stride == 2 ? 0x20u : 0x30u;
+    if (g.wi == 56) return g.ci == 64 ? 0x80u : 0x30u;
+    if (g.wi == 28) return g.stride == 2 ? 0x40u : 0x50u;
+    if (g.wi == 14) return g.stride == 2 ? 0x20u : 0x30u;
+    if (g.wi == 7) return 0x30u;
+    throw std::invalid_argument(
+        "h13.linked-ring-outside-envelope: unsupported MobileNet surface");
+}
+
+bool mobileRingOverlap(std::uint64_t a, std::uint64_t an,
+                       std::uint64_t b, std::uint64_t bn) {
+    return ringOverlap(a, an, b, bn);
+}
+
+} // namespace
+
+Program linkMobileNetRing(const std::vector<Program> &layers,
+                          std::vector<LinkedLayer> *layout) {
+    if (layers.empty() || layers.size() > 28)
+        throw std::invalid_argument(
+            "h13.linked-ring-outside-envelope: expected a MobileNet prefix of 1..28 convolutions");
+    for (const auto &layer : layers)
+        if (!layer.formulaBuilt || layer.taskCount != 1 || layer.inputs.size() != 1)
+            throw std::invalid_argument(
+                "h13.linked-ring-outside-envelope: every layer must be one formula-built convolution task");
+
+    std::vector<MobileRingGeometry> g;
+    g.reserve(layers.size());
+    for (const auto &layer : layers) {
+        const auto reg = [&](std::uint32_t a) {
+            return loadLE32(layer.task,
+                h13RegisterOffset(layer.task, 0, layer.firstTaskBytes, a));
+        };
+        MobileRingGeometry x{};
+        x.hi = reg(0x00000) >> 16; x.wi = reg(0x00000) & 0xffff;
+        x.ci = reg(0x0000c); x.co = reg(0x00010);
+        x.ho = reg(0x00014) >> 16; x.wo = reg(0x00014) & 0xffff;
+        x.kernel = reg(0x0001c) & 0x1f;
+        x.stride = (reg(0x0001c) >> 13) & 3;
+        x.depthwise = layer.depthwiseConv;
+        if (g.empty()) {
+            const bool stem = x.ci == 3 && x.co == 32 && x.hi == 224 &&
+                x.wi == 224 && x.ho == 112 && x.wo == 112 &&
+                x.kernel == 3 && x.stride == 2;
+            const bool standaloneDepthwise = layers.size() == 1 && x.depthwise &&
+                x.ci == x.co && x.kernel == 3 && x.stride == 2;
+            if (!stem && !standaloneDepthwise)
+                throw std::invalid_argument(
+                    "h13.linked-ring-outside-envelope: prefix does not start "
+                    "with the native 3x3-s2 MobileNet stem");
+            if (stem) {
+                x.sourceChannel = 2 * x.wi;
+                x.sourceRow = x.ci * x.sourceChannel;
+            } else {
+                x.sourceChannel = static_cast<std::uint32_t>(align16(2ull * x.wi));
+                x.sourceRow = x.ci * x.sourceChannel + mobileRingSkew(x);
+            }
+        } else if (g.size() == 2 && layers.size() >= 4) {
+            // The sole DRAM-to-L2 bridge stages 64 source pixels while its
+            // whole 112-wide result remains resident.
+            x.sourceChannel = 2 * 64;
+            x.sourceRow = x.ci * x.sourceChannel + 0x50;
+        } else {
+            x.sourceChannel = static_cast<std::uint32_t>(align16(2ull * x.wi));
+            x.sourceRow = x.ci * x.sourceChannel + mobileRingSkew(x);
+        }
+        x.sourceSpan = static_cast<std::uint64_t>(x.hi) * x.sourceRow;
+        if (!g.empty() && (g.back().co != x.ci || g.back().ho != x.hi ||
+                           g.back().wo != x.wi))
+            throw std::invalid_argument(
+                "h13.linked-ring-outside-envelope: MobileNet layer surfaces are not a straight native chain");
+        g.push_back(x);
+    }
+
+    Program program = layers.size() == 1 ? layers.front()
+                                         : linkConvChain(layers, nullptr, false);
+    auto spans = taskSpans(program);
+    if (spans.size() != layers.size())
+        throw std::logic_error("h13.linked-ring: task/layer count changed while linking");
+
+    const std::size_t n = layers.size();
+    std::vector<std::uint32_t> sourceCfg(n, 0x500172u), resultCfg(n, 0x14au);
+    std::vector<std::uint64_t> sourceBase(n, 0), resultBase(n, 0), resultSpan(n, 0);
+    std::vector<bool> readsScratch(n, false), writesScratch(n, false), outResident(n, false);
+    if (n == 1) {
+        resultCfg[0] = 0x500172u;
+        resultBase[0] = g[0].sourceSpan;
+    }
+    if (n >= 2) {
+        sourceCfg[1] = 0x160u;
+        outResident[0] = true;
+        resultCfg[0] = 0x500170u;
+        resultSpan[0] = g[1].sourceSpan;
+        resultBase[0] = 0;
+        sourceBase[0] = resultSpan[0];
+        sourceBase[1] = 0;
+    }
+    if (n >= 4) {
+        // The one intentional spill separates conv_1 and conv_2.
+        writesScratch[1] = true;
+        readsScratch[2] = true;
+        resultCfg[1] = 0x84au;
+        resultBase[1] = g[1].sourceSpan;
+        sourceCfg[2] = 0x842u;
+        outResident[2] = true;
+        resultCfg[2] = 0x140u;
+        resultBase[2] = 0;
+        resultSpan[2] = g[3].sourceSpan;
+        sourceBase[2] = resultSpan[2];
+        sourceBase[3] = 0;
+        sourceCfg[3] = 0x160u;
+        for (std::size_t i = 3; i + 1 < n; ++i) {
+            const auto &consumer = g[i + 1];
+            const bool alias = consumer.depthwise;
+            if (alias) {
+                const bool phaseStart = !g[i].depthwise &&
+                    g[i].co > g[i].ci && consumer.wi >= 28;
+                sourceCfg[i + 1] = phaseStart ? 0x160u : 0x144u;
+            } else {
+                const bool pointwiseAlias = !g[i].depthwise &&
+                    g[i].kernel == 1 && consumer.kernel == 1 &&
+                    g[i].co == consumer.ci && consumer.co == consumer.ci;
+                sourceCfg[i + 1] = pointwiseAlias ? 0x144u
+                    : consumer.wo >= 56 ||
+                        (consumer.wo == 28 && consumer.co > consumer.ci)
+                    ? 0x120u : 0x104u;
+            }
+            outResident[i] = true;
+            resultCfg[i] = 0x140u;
+            resultSpan[i] = consumer.sourceSpan;
+            std::uint64_t candidate = align16(sourceBase[i] + g[i].sourceSpan) % kL2Bytes;
+            if (!g[i].depthwise && g[i].co > g[i].ci) {
+                candidate = 0;
+            } else if (g[i].depthwise && i + 2 < n &&
+                       !g[i + 1].depthwise && g[i + 1].co > g[i + 1].ci) {
+                // Reserve the expanding pointwise result at ring base zero.
+                const std::uint64_t future = g[i + 2].sourceSpan;
+                if (mobileRingOverlap(candidate, resultSpan[i], 0, future))
+                    candidate = align16(future);
+            }
+            resultBase[i] = candidate;
+            sourceBase[i + 1] = candidate;
+        }
+    } else if (n == 2) {
+        // Apple's short prefixes write the terminal surface directly rather
+        // than introducing the full-network spill.
+        resultCfg[1] = 0x142u;
+        resultBase[1] = g[1].sourceSpan;
+    } else if (n == 3) {
+        sourceCfg[2] = 0x120u;
+        resultCfg[1] = 0x140u;
+        outResident[1] = true;
+        resultSpan[1] = g[2].sourceSpan;
+        resultBase[1] = g[1].sourceSpan;
+        sourceBase[2] = resultBase[1];
+        resultCfg[2] = 0x142u;
+        resultBase[2] = align16(sourceBase[2] + g[2].sourceSpan) % kL2Bytes;
+    }
+
+    if (n >= 4) {
+        const std::size_t last = n - 1;
+        if (g[last].depthwise && g[last].wi == 56 &&
+            sourceCfg[last] == 0x160u)
+            sourceCfg[last] = 0x144u;
+        if (!g[last].depthwise && g[last].wi <= 28 &&
+            sourceCfg[last] == 0x120u)
+            sourceCfg[last] = 0x104u;
+        outResident[last] = false;
+        const std::uint64_t externalBytes = layers[last].output.allocationBytes;
+        resultCfg[last] = sourceCfg[last] == 0x120u && externalBytes > kDep104MaxEdge
+            ? 0x142u : 0x14au;
+        resultBase[last] = align16(sourceBase[last] + g[last].sourceSpan) % kL2Bytes;
+    }
+
+    // Scratch is derived from the interleave-8 bridge: four channel groups,
+    // 16 halfwords per pixel, plus the two ordinary padded surface slots the
+    // H13 program descriptor reserves around it.
+    std::uint64_t scratch = 0, spillBytes = 0;
+    if (n >= 4) {
+        const std::uint64_t spillRow = 16ull * g[1].wo;
+        const std::uint64_t spillPlane = spillRow * g[1].ho;
+        spillBytes = spillPlane * (g[1].co / 8);
+        scratch = 2 * layers[1].output.allocationBytes + spillBytes;
+    }
+    program.scratchAllocationBytes = scratch;
+
+    if (layout) layout->clear();
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto span = spans[i];
+        auto &task = program.task;
+        const std::size_t off = span.offset, bytes = span.bytes;
+        const bool last = i + 1 == n;
+        const bool inAlias = sourceCfg[i] == 0x160u || sourceCfg[i] == 0x144u;
+        const bool inDependent = sourceCfg[i] == 0x120u || sourceCfg[i] == 0x104u;
+        const bool outAlias = outResident[i] && i + 1 < n &&
+            (sourceCfg[i + 1] == 0x160u || sourceCfg[i + 1] == 0x144u);
+        const bool outDependent = outResident[i] && i + 1 < n &&
+            (sourceCfg[i + 1] == 0x120u || sourceCfg[i + 1] == 0x104u);
+
+        std::uint32_t control = 0;
+        if (!inAlias && !inDependent) control |= 0x10000000u;
+        if (!outResident[i]) control |= 0x20000000u;
+        if (!inDependent && !readsScratch[i]) control |= 0x800u;
+        if (inAlias) control |= 0x2000u;
+        if (outAlias) control |= 0x4000u;
+        if ((!outDependent || last) && !writesScratch[i]) control |= 0x9000u;
+        storeLE32(task, off + 8, 0x400u |
+            ((!inAlias && !inDependent && !readsScratch[i]) ? 0x08u : 0u) |
+            (last ? 0x22u : 0u));
+        storeLE32(task, off + 16, last ? 0x00fff86au
+            : ((inAlias || inDependent || readsScratch[i])
+                ? 0x00fff800u : 0x00fff868u));
+        storeLE32(task, off + 24, control);
+
+        putRegister(task, off, bytes, 0x04804, sourceCfg[i]);
+        putRegister(task, off, bytes, 0x04808, static_cast<std::uint32_t>(sourceBase[i]));
+        putRegister(task, off, bytes, 0x0480c, g[i].sourceChannel);
+        putRegister(task, off, bytes, 0x04810, g[i].sourceRow);
+        putRegister(task, off, bytes, 0x04814, g[i].ci * g[i].sourceChannel);
+        putRegister(task, off, bytes, 0x04818,
+                    (inAlias || inDependent) ? 0u : g[i].ci * g[i].sourceChannel);
+        putRegister(task, off, bytes, 0x04830, resultCfg[i]);
+        putRegister(task, off, bytes, 0x04834, static_cast<std::uint32_t>(resultBase[i]));
+        if (outResident[i]) {
+            putRegister(task, off, bytes, 0x04838, g[i + 1].sourceChannel);
+            putRegister(task, off, bytes, 0x0483c, g[i + 1].sourceRow);
+            putRegister(task, off, bytes, 0x04840, g[i].co * g[i + 1].sourceChannel);
+            putRegister(task, off, bytes, 0x04844, 0);
+        } else {
+            if (n == 1 || resultCfg[i] == 0x142u) {
+                const std::uint32_t channel = resultCfg[i] == 0x142u &&
+                    sourceCfg[i] == 0x120u ? 0x80u
+                    : static_cast<std::uint32_t>(layers[i].output.nchw[5]);
+                const std::uint32_t skew = resultCfg[i] == 0x142u &&
+                    sourceCfg[i] == 0x120u ? 0x2000u / g[i].co : 0x80u;
+                putRegister(task, off, bytes, 0x04838, channel);
+                putRegister(task, off, bytes, 0x0483c, g[i].co * channel + skew);
+                putRegister(task, off, bytes, 0x04840, g[i].co * channel);
+                putRegister(task, off, bytes, 0x04844, g[i].co * channel);
+            } else {
+                for (std::uint32_t a : {0x04838u, 0x0483cu, 0x04840u, 0x04844u})
+                    putRegister(task, off, bytes, a, 0);
+            }
+        }
+
+        std::uint32_t selectors = loadLE32(task, off + 32);
+        if (inAlias) {
+            selectors = (selectors & ~31u) | 3u;
+            putRegister(task, off, bytes, 0x13800, 0x48880u);
+            putRegister(task, off, bytes, 0x13808,
+                        (i == 1 || i == 3) && n >= 4
+                            ? static_cast<std::uint32_t>(spillBytes) : 0u);
+        } else if (inDependent) {
+            selectors &= ~(31u | (1u << 5));
+            putRegister(task, off, bytes, 0x13800, 0x8880u);
+            for (std::uint32_t a : {0x13808u,0x1380cu,0x13810u,0x13814u,0x13818u})
+                putRegister(task, off, bytes, a, 0);
+            putRegister(task, off, bytes, 0x13838, 0x01000000u);
+        } else if (readsScratch[i]) {
+            selectors = (selectors & ~31u) | 3u;
+            putRegister(task, off, bytes, 0x13800, 0x53901u);
+            putRegister(task, off, bytes, 0x13808, 0);
+            putRegister(task, off, bytes, 0x1380c, 16u * g[1].wo);
+            putRegister(task, off, bytes, 0x13810, 16u * g[1].wo * g[1].ho);
+            putRegister(task, off, bytes, 0x13814, static_cast<std::uint32_t>(spillBytes));
+            putRegister(task, off, bytes, 0x13818, static_cast<std::uint32_t>(spillBytes));
+            putRegister(task, off, bytes, 0x13838, 0x08002031u);
+        } else {
+            putRegister(task, off, bytes, 0x13800, 0x33881u);
+        }
+
+        if (outResident[i]) {
+            putRegister(task, off, bytes, 0x17800, 0xc0u);
+            if (outAlias) {
+                selectors = (selectors & ~(31u << 12)) | (3u << 12);
+                putRegister(task, off, bytes, 0x17804,
+                            (i == 0 || i == 2) && n >= 4
+                                ? static_cast<std::uint32_t>(spillBytes) : 0u);
+            } else {
+                selectors &= ~((31u << 12) | (1u << 17));
+                for (std::uint32_t a : {0x17804u,0x17808u,0x1780cu,0x17810u,0x17814u})
+                    putRegister(task, off, bytes, a, 0);
+                putRegister(task, off, bytes, 0x17818, 0x01000000u);
+            }
+        } else if (writesScratch[i]) {
+            selectors = (selectors & ~(31u << 12)) | (3u << 12);
+            putRegister(task, off, bytes, 0x17800, 0x040003c1u);
+            putRegister(task, off, bytes, 0x17804, 0);
+            putRegister(task, off, bytes, 0x17808, 16u * g[i].wo);
+            putRegister(task, off, bytes, 0x1780c, 16u * g[i].wo * g[i].ho);
+            putRegister(task, off, bytes, 0x17810, static_cast<std::uint32_t>(spillBytes));
+            putRegister(task, off, bytes, 0x17814, static_cast<std::uint32_t>(spillBytes));
+            putRegister(task, off, bytes, 0x17818, 0x08302031u);
+        } else {
+            putRegister(task, off, bytes, 0x17800,
+                        resultCfg[i] == 0x142u || n == 1 ? 0xc1u : 0x040000c1u);
+        }
+        selectors = (selectors & ~(1u << 23)) | (last ? 0u : 1u << 23);
+        storeLE32(task, off + 32, selectors);
+
+        if (g[i].depthwise && (inAlias || inDependent || outResident[i])) {
+            const auto c24 = loadLE32(task,
+                h13RegisterOffset(task, off, bytes, 0x00024));
+            putRegister(task, off, bytes, 0x00024, c24 | 0x4000u);
+        }
+        if (g[i].stride == 2)
+            putRegister(task, off, bytes, 0x0c800, 0x182u);
+
+        if (layout) {
+            LinkedLayer item{static_cast<std::uint32_t>(i), 1,
+                readsScratch[i], 0, writesScratch[i], 0};
+            item.inputEdge = (inAlias ? (sourceCfg[i] == 0x160u ? 1 : 2)
+                                      : (inDependent ? (sourceCfg[i] == 0x104u ? 3 : 4) : 0));
+            item.outputEdge = outAlias ? (sourceCfg[i + 1] == 0x160u ? 1 : 2)
+                : (outDependent ? (sourceCfg[i + 1] == 0x104u ? 3 : 4) : 0);
+            item.l2Source = (inAlias || inDependent) ? sourceBase[i] : 0;
+            item.l2Result = outResident[i] ? resultBase[i] : 0;
+            item.l2ResultBytes = outResident[i] ? resultSpan[i] : 0;
+            layout->push_back(item);
+        }
+    }
     return program;
 }
 
