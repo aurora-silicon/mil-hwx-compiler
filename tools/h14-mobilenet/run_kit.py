@@ -29,6 +29,7 @@ def main():
     parser.add_argument('--runner', type=Path, required=True)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--repeat', type=int, default=1)
+    parser.add_argument('--max-relative-l2', type=float, default=1e-2)
     args = parser.parse_args()
     kit, runner = args.kit.resolve(), args.runner.resolve()
     index = json.loads((kit / 'kit.json').read_text())
@@ -51,6 +52,9 @@ def main():
             expected = refs['outputs_float64'][0]
             relative = float(np.linalg.norm(actual.astype(np.float64) - expected) /
                              max(np.linalg.norm(expected), 1e-30))
+            if not np.isfinite(actual).all() or relative > args.max_relative_l2:
+                raise SystemExit(f'{case}: relative L2 {relative:.6g} exceeds '
+                                 f'{args.max_relative_l2:.6g}')
             report = dict(case=str(case.relative_to(kit)), relative_l2=relative,
                           runtime=json.loads(run.stdout.strip().splitlines()[-1]))
             reports.append(report)
