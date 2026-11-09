@@ -18,7 +18,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "research"))
 sys.path.insert(0, str(ROOT / "tests"))
-from h13_td import decode_task, register_words, split_h13_tasks, split_h14_tasks  # noqa: E402
+from h13_td import decode_task, register_words, split_h14_tasks  # noqa: E402
 from timeouts import scaled_timeout  # noqa: E402
 
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/mil-hwxc").resolve()
@@ -113,8 +113,10 @@ def compile_case(root, target, geometry, bias, bounds):
     stream_bytes = struct.unpack_from("<Q", data, 0x10)[0]
     raw = data[0x1000:0x1000 + stream_bytes]
     if target == "H13":
-        tasks = split_h13_tasks(raw, manifest["firstTaskBytes"] // 4 - 1,
-                                manifest["taskDescriptors"])
+        # These four SPEC geometries are one-task programs and H13 records do
+        # not publish firstTaskBytes in the package manifest.
+        assert manifest["programs"][0]["taskDescriptors"] == 1
+        tasks = [raw]
     else:
         tasks = split_h14_tasks(raw)
     assert len(tasks) == 1
