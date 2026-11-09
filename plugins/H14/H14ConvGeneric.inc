@@ -1044,10 +1044,12 @@ std::vector<std::uint8_t> mobileTask(
     }
     ringDense(task, 0x1908,
               {static_cast<std::uint32_t>(coefficientBase), 0}, 1);
+    // BAR slots follow the H14 linked ABI that the ABI-2 runner and libane
+    // bind: program input on slot 4, final output on slot 5, scratch on 3.
     if (first || readsScratch)
-        ringDense(task, 0x1110, {0, 0}, first ? 5 : 3);
+        ringDense(task, 0x1110, {0, 0}, first ? 4 : 3);
     if (writesScratch || last)
-        ringDense(task, 0x1508, {0, 0}, writesScratch ? 3 : 4);
+        ringDense(task, 0x1508, {0, 0}, writesScratch ? 3 : 5);
 
     // Firmware's compact-task envelope starts at 312 bytes.  Padding is a
     // harmless write to the documented dead destination extension, derived

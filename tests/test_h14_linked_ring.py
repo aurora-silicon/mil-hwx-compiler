@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """H14 native ring: TF-SAME, bind safety, fused clip, and a 192 rule build."""
 import json
+import struct
 import os
 from pathlib import Path
 import sys
@@ -18,10 +19,23 @@ sys.path.insert(0, str(MOBILE))
 sys.path.insert(0, str(ROOT / 'tests'))
 from chain import chain_ref, compile_chain, conv_mil, conv_ref  # noqa: E402
 from h14_libane_overrun import overruns  # noqa: E402
+sys.path.insert(0, str(ROOT / 'research'))
+from h13_td import decode_task, split_h14_tasks  # noqa: E402
 import mobilenet as M  # noqa: E402
 
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else
                 ROOT / 'build/mil-hwxc').resolve()
+
+
+def io_bars(anec):
+    _, _, count, text_bytes, _ = struct.unpack_from('<QIIQQ', anec)
+    found = set()
+    for raw in split_h14_tasks(anec[0x1000:0x1000 + text_bytes]):
+        for record in decode_task(raw, 'h14')['records']:
+            header, address = int(record['header'], 16), int(record['address'], 16)
+            if header & 0x20000000 and address in (0x1110, 0x1508):
+                found.add((address, (header >> 23) & 63))
+    return found
 
 
 def compile_size(root, size, relu6):
@@ -40,6 +54,9 @@ def compile_size(root, size, relu6):
                    for task in manifest['tasks']) == 27
     anec = (root / 'linked' / manifest['programs'][0]['file']).read_bytes()
     assert not overruns(anec)
+    # Same port ABI as the linked emitter and the ABI-2 runner: program input
+    # on BAR 4, final output on BAR 5, scratch on BAR 3.
+    assert io_bars(anec) == {(0x1110, 4), (0x1110, 3), (0x1508, 3), (0x1508, 5)}
     return layers, params, output
 
 

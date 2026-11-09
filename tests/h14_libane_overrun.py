@@ -9,9 +9,15 @@ sys.path.insert(0, str(ROOT / 'research'))
 from h13_td import decode_task, register_words, split_h14_tasks  # noqa: E402
 
 
+# The ABI-2 port table binds BAR 4 to the input buffer (header channel 5),
+# BAR 5 to the output buffer (channel 4) and BAR 3 to scratch (channel 3).
+BAR_CHANNEL = {4: 5, 5: 4}
+
+
 def _bar_slots(task):
     return {int(record['address'], 16):
-            (int(record['header'], 16) >> 23) & 63
+            BAR_CHANNEL.get((int(record['header'], 16) >> 23) & 63,
+                            (int(record['header'], 16) >> 23) & 63)
             for record in task['records']
             if int(record['header'], 16) & 0x20000000}
 
