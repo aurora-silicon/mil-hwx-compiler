@@ -335,3 +335,57 @@ the kernel; that is an estimate.
    (the decoded two-task c1024 form) the extra tasks would also stop
    re-reading their input.
 3. Run with perf level 5 and measure the real uplift.
+
+## Native MobileNet ring (`--schedule linked-ring`)
+
+`linked-ring` is the H13 native-frame MobileNetV1 schedule.  It is separate
+from `linked` and `linked-l2`, whose emitted bytes remain unchanged.  The
+schedule admits the direct 3x3-s2 3-to-32 stem and direct stride-2 depthwise
+tasks, keeps every pointwise convolution in one task through 2,099,200
+coefficient bytes, and links one convolution to one descriptor.
+
+The native-s2 coefficient stream is the H13 phase-sparse grammar selected by
+`KernelCfg 0x182` and kernel-DMA mode `0x60`.  It emits the stride phases in
+tap groups `(0,2,6,8)`, `(1,7)`, `(3,5)`, and `(4)`, serializes each mask
+immediately before its selected fp16 values, drops both signed zero forms,
+and 64-byte-aligns each of the 16 chunks.  The stem pairs adjacent output
+channels; depthwise channels are striped by `channel % 16`.
+
+Native k3/s2 layers use TensorFlow SAME phase: for an even input extent, the
+single required zero row and column are on the bottom/right.  The builder
+spells those MIL convolutions with `pad_type="same"`, and the float64 chain
+reference computes the same asymmetric padding.  Fused finite-fp16 conv clips
+from the H13 ReLU6 path are accepted unchanged; MobileNetV1 with clip(0, 6)
+therefore remains one task per convolution (28 tasks including the padded
+classifier).
+
+Coefficient streams above 1 MiB are allowed only for a whole-output tile in
+the decoded 7x7 class (`TileHeight == output height`).  ANECOMP fleet44 ran
+1024-to-1024 at 7x7 in 172 us busy as one task versus 195 us as four tasks;
+the same 2.1 MB kernel attached to a multi-tile 14x14 task wedged the engine,
+so larger spatial forms retain the established 1 MiB split.
+
+The first depthwise result uses the sole interleave-8 DRAM spill.  The next
+pointwise task stages 64 source pixels (467,712 bytes) above a 1,609,216-byte
+resident result, for a 2,076,928-byte peak inside the 2 MiB circular arena.
+All later edges stay resident.  SourceCfg, ResultCfg, DMA dependency/cache
+hints, row-bank skews and placements are selected from geometry and edge
+role; no captured task stream is embedded in the implementation.
+
+The native tasks' TileDMA size words describe conservative hardware transfer
+windows, not just the logical external NCHW span.  For example, the stem keeps
+Apple's `[1,3,224,224]` plane/row strides (`100352`/`448`) while its source
+size words advertise `917504` bytes.  The private converted Apple container
+allocates only the NCHW span and therefore also trips libane's generic
+`ane_bind_overrun` rule.  `linked-ring` preserves the decoded task words and
+NCHW strides, but rounds the ANEC channel allocation up to the largest live
+source/destination size word.  This is intentionally a harmless larger BO;
+the 34-program kit generator runs the host port of `ane_bind_overrun` before
+declaring the kit complete.
+
+Build the standard unmirrored network and its ANECOMP device ladder with:
+
+```sh
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py out/mn --frame native --no-perop
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/ring_kit.py out/h13-ring
+```

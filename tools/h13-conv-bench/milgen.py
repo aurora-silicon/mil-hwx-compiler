@@ -28,7 +28,10 @@ def conv_mil(layers, inshape, outdir, seed=0, relu_all=True, weights=None):
     for i, L in enumerate(layers):
         co, k, s, g = L['cout'], L['k'], L.get('s', 1), L.get('g', 1)
         pad = L.get('pad', 'same')
-        if pad == 'same': p = (k - 1) // 2; ho = (h + 2*p - k)//s + 1; wo = (w + 2*p - k)//s + 1
+        if pad == 'tf_same':
+            p = 0; ho = -(-h // s); wo = -(-w // s)
+        elif pad == 'same':
+            p = (k - 1) // 2; ho = (h + 2*p - k)//s + 1; wo = (w + 2*p - k)//s + 1
         else: p = 0; ho = (h - k)//s + 1; wo = (w - k)//s + 1
         cig = c // g
         if weights is not None: wt = weights[i]['w']; bs = weights[i].get('b')
@@ -39,7 +42,7 @@ def conv_mil(layers, inshape, outdir, seed=0, relu_all=True, weights=None):
         wi = len(arrays); arrays.append(wt)
         bi = None
         if bs is not None: bi = len(arrays); arrays.append(bs)
-        pt = 'custom' if pad == 'same' and k > 1 else 'valid'
+        pt = 'same' if pad == 'tf_same' else ('custom' if pad == 'same' and k > 1 else 'valid')
         padv = [p, p, p, p] if pt == 'custom' else [0, 0, 0, 0]
         body.append(f'    string pt{i} = const()[name = string("pt{i}"), val = string("{pt}")];')
         body.append(f'    tensor<int32, [2]> st{i} = const()[name = string("st{i}"), val = tensor<int32, [2]>([{s}, {s}])];')

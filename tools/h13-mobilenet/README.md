@@ -10,6 +10,7 @@ On the host:
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mkchain.py cases/c2 64,16,16 '64,1,1,1,1,1;64,1,1,1,1,1'
 # MobileNetV1 224 with fused ReLU6 (random weights, or --weights mobilenet_v1_1_224_quant.tflite)
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn-native --frame native --no-perop
 python3 tools/h13-mobilenet/mn_refs.py cases/mn 16     # test images + float64 references
 python3 tools/h13-mobilenet/prefixes.py cases/mn cases/mn-prefix   # per-layer profile
 ```
@@ -24,6 +25,10 @@ python3 tools/h13-mobilenet/run_chain.py cases/mn 1000     # linked vs per-layer
 python3 tools/h13-mobilenet/mn_eval.py cases/mn labels.txt # logits vs the CPU reference
 tools/h13-mobilenet/run_prefixes.sh cases/mn-prefix 50     # busy time per layer inside the stream
 ```
+
+`--frame native` keeps the TensorFlow frame and native stride-2 layers.  It
+selects H13 `linked-ring` by default.  `ring_kit.py` packages the native stem,
+four stride-2 depthwise rungs, p01..p28, the full network, and float64 refs.
 
 `anechain` runs one program, or several with a host copy of each output into
 the next input, and prints p50/p99 wall time, inf/s and engine busy time from

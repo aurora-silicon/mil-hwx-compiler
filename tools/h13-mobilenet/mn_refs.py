@@ -53,7 +53,7 @@ tfw = [dict(w=tz[f'w{i}'], b=tz[f'b{i}']) for i in range(28)]
 imgs, inputs, lr, ltf = [], [], [], []
 for i in range(count):
     img = (pattern_image(2000 + i) if i % 4 else smooth_image(1000 + i)).astype(np.float32)
-    x = M.preprocess(img)
+    x = M.preprocess(img, 'native' if inshape == (3, 224, 224) else 'mirrored')
     out = chain_ref(x, layers, params)[-1]
     logits = out.astype(np.float64).mean(axis=(1, 2))[:1001] if len(layers) == 28 else None
     imgs.append(img); inputs.append(x); lr.append(logits)

@@ -249,8 +249,9 @@ test: $(BUILD)/test_diagnostics $(BUILD)/test_benchmark_stats $(BUILD)/test_mil_
 	bash tests/test_release_hygiene.sh
 
 .PHONY: test-h13
-test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
+test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_linked_ring $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	$(BUILD)/test_h13_encoding
+	$(BUILD)/test_h13_linked_ring
 	$(BUILD)/test_h13_anec
 	python3 tests/test_h13_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_split_cli.py $(BUILD)/mil-hwxc
@@ -269,11 +270,17 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	python3 tests/test_conv_clip_fusion.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_linked_cli.py $(BUILD)/mil-hwxc
 	python3 research/h13_l2_edge_parity.py $(BUILD)/mil-hwxc research/oracles/h13-l2-edges/*.json
+	python3 research/h13_mobilenet_ring_parity.py $(BUILD)/mil-hwxc
+	python3 tests/test_h13_linked_ring_relu6.py $(BUILD)/mil-hwxc
+	python3 tests/test_h13_ring_kit_bind.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_select_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_chain_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_transpose_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_slice_cli.py $(BUILD)/mil-hwxc
 	python3 research/mint_conv_probes.py --check
+
+$(BUILD)/test_h13_linked_ring: tests/test_h13_linked_ring.cpp plugins/H13/H13Program.cpp plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) | $(BUILD)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror plugins/H13/H13Program.cpp $< -o $@
 .PHONY: test-h13-reference
 test-h13-reference: $(BUILD)/mil-hwxc
 	python3 tests/test_h13_reference.py $(BUILD)/mil-hwxc

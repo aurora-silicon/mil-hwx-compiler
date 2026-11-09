@@ -1150,7 +1150,7 @@ static NSDictionary *h16ExecuteResources(const ane::h13::Program &program) {
 
 static NSData *encodeHWX(const ane::h13::Program &program,
                          const std::vector<std::uint8_t> &anec,
-                         NSError **error) {
+                         NSError **error, bool rawH13Task = false) {
     // The writer walks this array to assign surface addresses. Apple's matmul
     // objects place the output surface below both operands, a broadcast puts
     // it between them, and every other decoded object places the inputs first.
@@ -1165,7 +1165,8 @@ static NSData *encodeHWX(const ane::h13::Program &program,
             HWXObjectBindingRoleInput, index)];
     }
     if (outputIndex >= program.inputs.size()) [bindings addObject:output];
-    NSData *task = [NSData dataWithBytes:gConvGeneration ? program.task.data()
+    NSData *task = [NSData dataWithBytes:(gConvGeneration || rawH13Task)
+                           ? program.task.data()
                            : anec.data() + ane::h13::anecHeaderBytes
                                   length:program.task.size()];
     NSData *constants = [NSData dataWithBytes:program.constants.data()
@@ -1593,8 +1594,9 @@ struct H13ConvPlan {
 /// The linked schedule sets this while it compiles: every layer of a linked
 /// program must be formula-built so the linker can reroute its surfaces.
 static BOOL gLinkedScheduleForcesGenericConv = NO;
+static BOOL gLinkedRingSchedule = NO;
 static BOOL forceGenericConv(void) {
-    if (gLinkedScheduleForcesGenericConv) return YES;
+    if (gLinkedScheduleForcesGenericConv || gLinkedRingSchedule) return YES;
     const char *value = getenv("MILHWXC_H13_CONV_GENERIC");
     return value && value[0] == '1';
 }
@@ -1815,7 +1817,10 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H13ConvPlan *plan) {
     if (!ane::h13::supportsConvParity(candidate.shape) || forceGenericConv()) {
         // No decoded template: the formula-built encoder takes the geometry
         // when it is a symmetric same/valid pad it can express.
-        if (rank3 || !ane::h13::convGenericRefusal(candidate.shape).empty())
+        const std::string refusal = gLinkedRingSchedule
+            ? ane::h13::convLinkedRingRefusal(candidate.shape)
+            : ane::h13::convGenericRefusal(candidate.shape);
+        if (rank3 || !refusal.empty())
             return NO;
         if (declaredPads) {
             const long long same = (kernel - 1) / 2;
@@ -2256,14 +2261,19 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             ane::h13::packConvWeights(convolution.shape, weightBytes,
                 weights.length, biasBytes, biasData.length).size() ==
                 ane::h13::convParitySectionBytes(convolution.shape);
-        if (!sectionFits &&
-            !ane::h13::convGenericRefusal(convolution.shape).empty())
+        const std::string formulaRefusal = gLinkedRingSchedule
+            ? ane::h13::convLinkedRingRefusal(convolution.shape)
+            : ane::h13::convGenericRefusal(convolution.shape);
+        if (!sectionFits && !formulaRefusal.empty())
             return reject(diagnostics,
                 [NSString stringWithFormat:
                     @"H13 stride-2 convolution section differs from the decoded size and %s",
-                    ane::h13::convGenericRefusal(convolution.shape).c_str()],
+                    formulaRefusal.c_str()],
                 operation, @"h13.conv-outside-envelope");
-        program = convolution.generic || !sectionFits
+        program = gLinkedRingSchedule
+            ? ane::h13::encodeConvLinkedRing(convolution.shape, weightBytes,
+                weights.length, biasBytes, biasData.length)
+            : convolution.generic || !sectionFits
             ? ane::h13::encodeConvGeneric(convolution.shape, weightBytes,
                 weights.length, biasBytes, biasData.length)
             : ane::h13::encodeConvParity(convolution.shape, weightBytes,
@@ -3090,9 +3100,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     if (![schedule isEqualToString:@"per-op"] &&
         ![schedule isEqualToString:@"chain"] &&
         ![schedule isEqualToString:@"linked"] &&
+        ![schedule isEqualToString:@"linked-ring"] &&
         ![schedule isEqualToString:@"linked-l2"] && !requestedH16MobileL2)
         return reject(diagnostics,
-            @"schedule must be 'per-op', 'chain', 'linked', or a supported H16G linked-l2 rung/bisection schedule", nil,
+            @"schedule must be 'per-op', 'chain', 'linked', 'linked-ring', or a supported H16G linked-l2 rung/bisection schedule", nil,
             @"h13.unsupported-schedule");
     if ((!gConvGeneration || gConvGeneration==17) && requestedH16MobileL2)
         return reject(diagnostics,
@@ -3113,15 +3124,26 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     // negative control.
     const BOOL measuredSpillL2 =
         ![schedule isEqualToString:@"linked-l2-baseline-spill"];
-    const BOOL linkedSchedule = linkedL2 || [schedule isEqualToString:@"linked"];
+    const BOOL linkedRing = [schedule isEqualToString:@"linked-ring"];
+    if (gConvGeneration && linkedRing)
+        return reject(diagnostics, @"linked-ring is an H13-only schedule", nil,
+                      @"h13.unsupported-schedule");
+    const BOOL linkedSchedule = linkedL2 || linkedRing ||
+        [schedule isEqualToString:@"linked"];
     struct LinkedGenericScope {
         BOOL previous;
-        explicit LinkedGenericScope(BOOL on)
-            : previous(gLinkedScheduleForcesGenericConv) {
+        BOOL previousRing;
+        explicit LinkedGenericScope(BOOL on, BOOL ring)
+            : previous(gLinkedScheduleForcesGenericConv),
+              previousRing(gLinkedRingSchedule) {
             if (on) gLinkedScheduleForcesGenericConv = YES;
+            if (ring) gLinkedRingSchedule = YES;
         }
-        ~LinkedGenericScope() { gLinkedScheduleForcesGenericConv = previous; }
-    } linkedScope(linkedSchedule);
+        ~LinkedGenericScope() {
+            gLinkedScheduleForcesGenericConv = previous;
+            gLinkedRingSchedule = previousRing;
+        }
+    } linkedScope(linkedSchedule, linkedRing);
     NSArray<MILToken *> *tokens = lexer.lexAllTokens;
     if (diagnostics.errorCount) return NO;
     MILParser *parser = [[MILParser alloc] initWithTokens:tokens
@@ -3233,9 +3255,14 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     candidate, @"h13.linked-outside-envelope");
             current = candidate.results[0];
         }
-        if (convolutions < 2 || current != function.returnValues[0])
+        if (convolutions < (linkedRing ? 1u : 2u) ||
+            current != function.returnValues[0])
             return reject(diagnostics,
-                @"H13 linked scheduling needs two or more convolutions ending in the function result",
+                linkedRing
+                    ? @"H13 linked-ring scheduling needs one or more "
+                       @"convolutions ending in the function result"
+                    : @"H13 linked scheduling needs two or more convolutions "
+                       @"ending in the function result",
                 sourceOperations[0], @"h13.linked-outside-envelope");
     }
     if (chainSchedule) {
@@ -4579,7 +4606,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         }
         if (linkedSchedule) {
             if (chainPrograms.size() != programRecords.count ||
-                chainPrograms.size() < 2)
+                chainPrograms.size() < (linkedRing ? 1u : 2u))
                 throw std::logic_error(
                     "h13.linked-outside-envelope: linked program bookkeeping is inconsistent");
             for (NSDictionary *record in programRecords)
@@ -4615,6 +4642,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             } else if (gConvGeneration) {
                 combined=ane::h16::linkDramChain(
                     convGeneration(),gConvLayers,chainPrograms,&layout);
+            } else if (linkedRing) {
+                combined=ane::h13::linkMobileNetRing(chainPrograms,&layout);
             } else {
                 combined=ane::h13::linkConvChain(chainPrograms,&layout,linkedL2);
             }
@@ -4622,7 +4651,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
-                combinedPayload = encodeHWX(combined, bytes, error);
+                combinedPayload = encodeHWX(combined, bytes, error, linkedRing);
                 if (!combinedPayload) return NO;
             } else {
                 combinedPayload = [NSData dataWithBytes:bytes.data()
@@ -4658,7 +4687,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 if (layout[index].writesScratch) {
                     regions[result] = @{
                         @"offset": @(layout[index].writeOffset),
-                        @"bytes": gConvGeneration && linkedL2 && measuredSpillL2
+                        @"bytes": (gConvGeneration && linkedL2 && measuredSpillL2) || linkedRing
                             ? @(combined.scratchAllocationBytes)
                             : [record[@"outputs"] firstObject][@"allocationBytes"],
                         @"nchw": [record[@"outputs"] firstObject][@"nchw"]};
@@ -4676,7 +4705,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 @"file": file, @"bytes": @(combinedPayload.length),
                 @"taskDescriptors": @(combined.taskCount),
                 @"encoder": gConvGeneration && linkedL2
-                    ? @"h16g-mobilenet-linked-l2" : @"h13-linked-conv",
+                    ? @"h16g-mobilenet-linked-l2"
+                    : (linkedRing ? @"h13-mobilenet-linked-ring"
+                                  : @"h13-linked-conv"),
                 @"inputs": firstRecord[@"inputs"], @"constantInputs": @{},
                 @"outputs": lastRecord[@"outputs"],
                 @"constantOffset": @(combined.constantOffsetBytes),
@@ -4951,7 +4982,9 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     }];
     if (chainSchedule || linkedSchedule)
         [manifest addEntriesFromDictionary:@{
-            @"schedule": linkedL2 ? schedule : (linkedSchedule ? @"linked" : @"chain"),
+            @"schedule": linkedL2 ? schedule
+                : (linkedRing ? @"linked-ring"
+                              : (linkedSchedule ? @"linked" : @"chain")),
             @"tasks": taskRecords, @"scratch": scratch}];
     if (programRecords.count == 1)
         [manifest addEntriesFromDictionary:programRecords[0]];

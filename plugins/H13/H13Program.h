@@ -329,6 +329,15 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
                           std::size_t weightBytes,
                           const std::uint8_t *bias = nullptr,
                           std::size_t biasBytes = 0);
+/// Formula encoder used only by the H13 `linked-ring` schedule.  It keeps
+/// the legacy generic envelope byte-stable while admitting the native
+/// MobileNet stem/depthwise stride-2 forms and one-task coefficient streams
+/// through 2,099,200 bytes.
+std::string convLinkedRingRefusal(ConvShape shape);
+Program encodeConvLinkedRing(ConvShape shape, const std::uint8_t *weights,
+                             std::size_t weightBytes,
+                             const std::uint8_t *bias = nullptr,
+                             std::size_t biasBytes = 0);
 /// The constant-section size the decoded template for this geometry records.
 std::size_t convParitySectionBytes(ConvShape shape);
 /// Encodes Apple's own convolution task stream for the geometry.
@@ -405,6 +414,13 @@ struct LinkedLayer {
 Program linkConvChain(const std::vector<Program> &layers,
                       std::vector<LinkedLayer> *layout = nullptr,
                       bool l2Resident = false);
+
+/// Links a native-frame MobileNetV1 prefix with the H13 2 MiB circular L2
+/// policy.  The full 28-layer chain has one interleave-8 spill (layer 1 to
+/// layer 2); every later edge is resident.  Placements and role words are
+/// derived from layer geometry and edge roles, not captured task bytes.
+Program linkMobileNetRing(const std::vector<Program> &layers,
+                          std::vector<LinkedLayer> *layout = nullptr);
 
 Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::uint8_t> encodeANEC(const Program &program);
