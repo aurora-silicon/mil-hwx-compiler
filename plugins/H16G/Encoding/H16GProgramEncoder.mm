@@ -294,7 +294,8 @@ static ANEHWXArtifact *encodeResNet50Program(
             batchStrideBytes:2048 storageByteLength:2048],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
-        initWithTaskCount:82 recordCount:encoded.programRecordCount
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount
         formatCode:encoded.programFormatCode scratchByteLength:encoded.scratchBytes
         scratchAllocationByteLength:encoded.scratchBytes
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
@@ -2195,9 +2196,9 @@ static ANEHWXArtifact *encodeLayoutProgram(
 }
 
 @implementation H16GProgramEncoder
-+ (ANEHWXArtifact *)encodeExactResNetGraph:(ANEOperationGraph *)graph
-                                  modelRoot:(NSURL *)modelRoot
-                                diagnostics:(ANEDiagnosticEngine *)diagnostics {
++ (ANEHWXArtifact *)encodeResidualGraph:(ANEOperationGraph *)graph
+                              modelRoot:(NSURL *)modelRoot
+                            diagnostics:(ANEDiagnosticEngine *)diagnostics {
     return encodeResNet50Program(graph,modelRoot,diagnostics);
 }
 + (ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
