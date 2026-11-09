@@ -151,7 +151,7 @@ if __name__ == '__main__':
     ap.add_argument('--target', choices=['H13', 'H14'], default='H13')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--head', choices=['ane', 'cpu'], default='ane')
-    ap.add_argument('--frame', choices=['mirrored', 'native'], default='mirrored')
+    ap.add_argument('--frame', choices=['mirrored', 'native'], default='native')
     ap.add_argument('--no-perop', action='store_true')
     ap.add_argument('--relu', action='store_true',
                     help='emit unbounded ReLU instead of the default fused ReLU6')
