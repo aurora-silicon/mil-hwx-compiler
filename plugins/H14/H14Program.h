@@ -88,6 +88,7 @@ struct TensorLayout {
 
 struct Program {
     bool formulaBuilt = false;
+    bool depthwiseConv = false;
     std::uint64_t scratchAllocationBytes = 0;
     /// Complete __TEXT/__text content: the zero-size prefix frame followed by
     /// 16-byte aligned tasks, with the final task left unpadded.
@@ -174,6 +175,11 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
                           const std::uint8_t *bias = nullptr,
                           std::size_t biasBytes = 0);
 void fuseConvRelu(Program &program);
+/// Fuses a finite fp16 clip into a formula-built convolution by selecting the
+/// NE lookup-table epilogue and prepending the 128-byte bounds descriptor to
+/// every kernel-DMA lane.
+void fuseConvClip(Program &program, std::uint16_t lower,
+                  std::uint16_t upper);
 struct LinkedLayer {
     std::uint32_t firstTask, taskCount;
     std::uint64_t inputOffset, outputOffset;

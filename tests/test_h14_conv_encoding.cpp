@@ -1,4 +1,5 @@
 #include "H14Program.h"
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
@@ -7,6 +8,10 @@ using namespace ane::h14;
 static std::uint32_t word(const std::vector<std::uint8_t> &v, std::size_t at) {
     assert(at + 4 <= v.size());
     return v[at] | std::uint32_t(v[at+1]) << 8 | std::uint32_t(v[at+2]) << 16 | std::uint32_t(v[at+3]) << 24;
+}
+static std::uint16_t half(const std::vector<std::uint8_t> &v, std::size_t at) {
+    assert(at + 2 <= v.size());
+    return v[at] | std::uint16_t(v[at+1]) << 8;
 }
 static std::uint32_t reg(const Program &p, std::size_t off, std::uint32_t addr) {
     const auto end = off + ((word(p.taskStream, off) >> 16) & 0x7ff) * 4;
@@ -89,6 +94,66 @@ int main() {
     assert(word(layers[0].taskStream,16+8)==0x2a);
     fuseConvRelu(layers[1]);
     assert(reg(layers[1],16,0xd04)&0x10000);
+    for (const bool dw : {false, true}) {
+        auto base = dw ? conv(32,32,16,3,1,true) : conv(64,64,16);
+        const auto oldConstants = base.constants;
+        const auto oldTaskBytes = ((word(base.taskStream,16)>>16)&0x7ff)*4;
+        std::array<std::uint32_t,16> offsets{}, sizes{};
+        for (unsigned lane=0;lane<16;++lane) {
+            offsets[lane]=reg(base,16,0x1958+4*lane);
+            sizes[lane]=reg(base,16,0x1998+4*lane);
+        }
+        auto relu=base;
+        fuseConvRelu(relu);
+        assert(reg(relu,16,0xd04)==0x00111c10);
+
+        auto clip=base;
+        fuseConvClip(clip,0x0000,0x4600);
+        assert(reg(clip,16,0xd04)==0x00121c10);
+        assert(clip.constants.size()==oldConstants.size()+16*128);
+        const auto clipTaskBytes=((word(clip.taskStream,16)>>16)&0x7ff)*4;
+        if (dw) {
+            assert(clipTaskBytes==408);
+            assert((word(clip.taskStream,20)&0xffff)==2);
+            bool packed=false;
+            for(std::size_t at=48;at<16+clipTaskBytes;) {
+                const auto h=word(clip.taskStream,at);
+                if(h==0x000f0657u) packed=true;
+                unsigned n=1;
+                if(h&0x80000000u) for(unsigned b=0;b<16;++b) n+=(h>>(15+b))&1;
+                else n=((h>>15)&63)+1;
+                at+=(n+1)*4;
+            }
+            assert(packed);
+        } else {
+            assert(clipTaskBytes==oldTaskBytes);
+        }
+        for(unsigned lane=0;lane<16;++lane) {
+            const auto at=reg(clip,16,0x1908)+reg(clip,16,0x1958+4*lane);
+            assert(reg(clip,16,0x1958+4*lane)==offsets[lane]+128*lane);
+            assert(reg(clip,16,0x1998+4*lane)==sizes[lane]+128);
+            assert(half(clip.constants,at)==0x0000);
+            assert(half(clip.constants,at+2)==0x4600);
+            assert(half(clip.constants,at+4)==0x0000);
+            assert(half(clip.constants,at+6)==0x4600);
+            assert(half(clip.constants,at+74)==0x3c00);
+            assert(half(clip.constants,at+78)==0x3c00);
+            assert(half(clip.constants,at+82)==0x0040);
+            assert(half(clip.constants,at+84)==0x0001);
+            assert(std::equal(oldConstants.begin()+offsets[lane],
+                              oldConstants.begin()+offsets[lane]+sizes[lane],
+                              clip.constants.begin()+at+128));
+        }
+    }
+    {
+        std::vector<Program> clipped{conv(64,64,16),conv(64,64,16)};
+        for(auto &q:clipped) fuseConvClip(q,0x0000,0x4600);
+        const auto linkedClip=linkConvChain(clipped);
+        assert(linkedClip.taskCount==2);
+        assert(linkedClip.constants.size()==
+               clipped[0].constants.size()+clipped[1].constants.size());
+        assert(reg(linkedClip,16,0xd04)==0x00121c10);
+    }
     std::vector<LinkedLayer> layout;
     const auto p=linkConvChain(layers,&layout);
     assert(p.taskCount==5 && layout.size()==4);

@@ -1218,6 +1218,34 @@ static BOOL constantValue(ANEGraphValue *value) {
     return [value.producer.operationName isEqualToString:@"const"];
 }
 
+static double decodedFP16(uint16_t bits) {
+    const uint16_t exponent = (bits >> 10) & 0x1fu;
+    const uint16_t fraction = bits & 0x03ffu;
+    const double magnitude = exponent
+        ? std::ldexp(1024.0 + fraction, exponent - 25)
+        : std::ldexp(static_cast<double>(fraction), -24);
+    return (bits & 0x8000u) ? -magnitude : magnitude;
+}
+
+/// The clean fused-clip dialect uses scalar fp16 const values.  Retain the
+/// older exactly-representable inline fp32 spelling for standalone clip.
+static BOOL exactClipBound(ANEGraphArgument *argument, uint16_t *bits,
+                           double *valueOut) {
+    if (argument.kind == ANEGraphArgumentKindValue) {
+        ANEGraphValue *value = argument.value;
+        if (!value || !constantValue(value) ||
+            value.type.kind != ANEValueTypeKindScalar ||
+            value.type.elementType != ANEElementTypeFP16 ||
+            !fp16Scalar(value.producer.attributes[@"val"], bits)) return NO;
+        *valueOut = decodedFP16(*bits);
+        return YES;
+    }
+    if (exactFP16Attribute(argument, bits, valueOut)) return YES;
+    if (!fp16Scalar(argument, bits)) return NO;
+    *valueOut = decodedFP16(*bits);
+    return YES;
+}
+
 static NSString *stringArgument(ANEGraphArgument *argument) {
     if (argument.kind == ANEGraphArgumentKindCall &&
         [argument.calleeName isEqualToString:@"string"] &&
@@ -2012,30 +2040,48 @@ static ANEGraphOperation *ffnChainOperation(
         attributes:@{} range:range];
 }
 
-/// Matches a convolution whose only consumer is a relu, where the
-/// convolution result is not itself a function result, and returns the
-/// convolution re-spelled to produce the relu's result. The caller encodes
-/// it with the relu folded into the NE epilogue
-/// (`ane::h13::fuseConvPostOperation`) and drops the relu, so the pair is one
-/// program instead of a whole-tensor convolution plus a sliced relu.
-static ANEGraphOperation *convReluOperation(
+struct ConvPostFusion {
+    ANEGraphOperation *consumer = nil;
+    BOOL clip = NO;
+    uint16_t lower = 0;
+    uint16_t upper = 0;
+};
+
+/// Matches a convolution whose only consumer is relu or a finite fp16 clip,
+/// re-spelling the convolution to own the consumer's result.
+static ANEGraphOperation *convPostOperation(
     NSArray<ANEGraphOperation *> *operations, ANEGraphOperation *conv,
     NSArray<ANEGraphValue *> *returnValues,
-    ANEGraphOperation *__autoreleasing *reluOut) {
+    ConvPostFusion *fusion) {
     if (![conv.operationName isEqualToString:@"conv"] ||
         conv.results.count != 1) return nil;
     ANEGraphValue *product = conv.results[0];
     if ([returnValues containsObject:product]) return nil;
-    ANEGraphOperation *relu = singleConsumerOf(operations, product);
-    if (!relu || ![relu.operationName isEqualToString:@"relu"] ||
-        relu.results.count != 1 || relu.operands[@"x"].value != product ||
-        ![relu.results[0].type isEqualToValueType:product.type])
+    ANEGraphOperation *consumer = singleConsumerOf(operations, product);
+    if (!consumer || consumer.results.count != 1 ||
+        consumer.operands[@"x"].value != product ||
+        ![consumer.results[0].type isEqualToValueType:product.type])
         return nil;
+    ConvPostFusion candidate{};
+    candidate.consumer = consumer;
+    if ([consumer.operationName isEqualToString:@"relu"]) {
+        if (consumer.arguments.count != 1) return nil;
+    } else if ([consumer.operationName isEqualToString:@"clip"]) {
+        double lower = 0.0, upper = 0.0;
+        if (consumer.arguments.count != 3 ||
+            !exactClipBound(consumer.arguments[@"alpha"], &candidate.lower,
+                            &lower) ||
+            !exactClipBound(consumer.arguments[@"beta"], &candidate.upper,
+                            &upper) || lower > upper) return nil;
+        candidate.clip = YES;
+    } else {
+        return nil;
+    }
     H13ConvPlan plan{};
     if (!convParityPlan(conv, &plan)) return nil;
     ANEGraphValue *result = [[ANEGraphValue alloc]
-        initWithName:relu.results[0].name type:relu.results[0].type];
-    *reluOut = relu;
+        initWithName:consumer.results[0].name type:consumer.results[0].type];
+    *fusion = candidate;
     return [[ANEGraphOperation alloc] initWithOperationName:@"conv"
         results:@[result] arguments:conv.arguments
         attributes:conv.attributes range:conv.range];
@@ -3116,8 +3162,10 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 const auto refusal=ane::h16::executableRefusal(plan.shape);
                 if (!refusal.empty())
                     return reject(diagnostics, [NSString stringWithUTF8String:refusal.c_str()], candidate, convDiagnostic());
-                ANEGraphOperation *relu=nil;
-                if (convReluOperation(sourceOperations,candidate,function.returnValues,&relu)) [fused addObject:relu];
+                ConvPostFusion fusion{};
+                if (convPostOperation(sourceOperations, candidate,
+                        function.returnValues, &fusion) && !fusion.clip)
+                    [fused addObject:fusion.consumer];
             } else if (![fused containsObject:candidate]) {
                 return reject(diagnostics, @"H16G/H17 formula backend accepts only conv and a single-consumer fused ReLU", candidate, convDiagnostic());
             }
@@ -3171,10 +3219,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
         for (ANEGraphOperation *candidate in sourceOperations) {
             NSString *kind = candidate.operationName;
             BOOL conv = [kind isEqualToString:@"conv"];
-            if ((!conv && ![kind isEqualToString:@"relu"]) ||
+            if ((!conv && ![kind isEqualToString:@"relu"] &&
+                    ![kind isEqualToString:@"clip"]) ||
                 candidate.operands[@"x"].value != current)
                 return reject(diagnostics,
-                    @"H13 linked scheduling needs a straight-line chain of conv and relu operations",
+                    @"H13 linked scheduling needs a straight-line chain of conv and relu/clip operations",
                     candidate, @"h13.linked-outside-envelope");
             if (conv) ++convolutions;
             if (![current isEqual:function.inputs[0]] &&
@@ -3254,24 +3303,30 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     NSMutableDictionary<NSString *, NSDictionary *> *compositeFolds =
         [NSMutableDictionary dictionary];
     NSUInteger ffnChainSkip = 0;
-    NSHashTable<ANEGraphOperation *> *fusedReluConsumers =
+    NSHashTable<ANEGraphOperation *> *fusedPostConsumers =
         [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
     NSHashTable<ANEGraphOperation *> *reluFusedConvs =
         [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    NSMapTable<ANEGraphOperation *, NSArray<NSNumber *> *> *clipFusedConvs =
+        [NSMapTable strongToStrongObjectsMapTable];
     for (ANEGraphOperation *candidate in sourceOperations) {
         if (ffnChainSkip) {
             --ffnChainSkip;
             continue;
         }
-        if ([fusedReluConsumers containsObject:candidate]) continue;
+        if ([fusedPostConsumers containsObject:candidate]) continue;
         if (!chainSchedule && [candidate.operationName isEqualToString:@"conv"]) {
-            ANEGraphOperation *relu = nil;
-            if (ANEGraphOperation *fused = convReluOperation(sourceOperations,
-                    candidate, function.returnValues, &relu)) {
+            ConvPostFusion fusion{};
+            if (ANEGraphOperation *fused = convPostOperation(sourceOperations,
+                    candidate, function.returnValues, &fusion)) {
                 [operations addObject:fused];
                 [manifestValues addObject:fused.results[0]];
-                [fusedReluConsumers addObject:relu];
-                [reluFusedConvs addObject:fused];
+                [fusedPostConsumers addObject:fusion.consumer];
+                if (fusion.clip)
+                    [clipFusedConvs setObject:@[@(fusion.lower), @(fusion.upper)]
+                                       forKey:fused];
+                else
+                    [reluFusedConvs addObject:fused];
                 continue;
             }
         }
@@ -4387,6 +4442,8 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                                     &manifestOperation))
                     return NO;
                 const BOOL reluFused = [reluFusedConvs containsObject:operation];
+                NSArray<NSNumber *> *clipBounds =
+                    [clipFusedConvs objectForKey:operation];
                 if (reluFused) {
                     if (gConvGeneration) {
                         ane::h16::fuseRelu(program);
@@ -4395,6 +4452,11 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                     else ane::h13::fuseConvPostOperation(program,
                         ane::h13::PostOperation::Relu);
                     manifestOperation = @"conv+relu";
+                } else if (clipBounds) {
+                    ane::h13::fuseConvClip(program,
+                        clipBounds[0].unsignedShortValue,
+                        clipBounds[1].unsignedShortValue);
+                    manifestOperation = @"conv+clip";
                 }
                 std::vector<std::uint8_t> anec = gConvGeneration ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(program);
                 NSMutableArray *inputRecords =

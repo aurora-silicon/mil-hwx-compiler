@@ -178,6 +178,7 @@ Program encodeConvGeneric(ConvShape s, const std::uint8_t *weights,
     const auto base = familyBase(s);
     Program result;
     result.formulaBuilt = true;
+    result.depthwiseConv = dw;
     result.inputs = {convTensor(5, s.input)};
     result.output = convTensor(4, s.output);
     if (result.inputs[0].allocationBytes > UINT32_MAX || result.output.allocationBytes > UINT32_MAX)
@@ -296,6 +297,181 @@ void fuseConvRelu(Program &p) {
         const auto at = h14RegisterOffset(p.taskStream, span.first, span.second, 0xd04);
         storeLE32(p.taskStream, at, loadLE32(p.taskStream, at) | 0x10000u);
     }
+}
+
+namespace {
+
+std::array<std::uint8_t, 128> clipBoundsDescriptor(std::uint16_t lower,
+                                                   std::uint16_t upper) {
+    std::array<std::uint8_t, 128> descriptor{};
+    const auto slot = [&](std::size_t index, std::uint16_t value) {
+        descriptor[index * 2] = static_cast<std::uint8_t>(value);
+        descriptor[index * 2 + 1] = static_cast<std::uint8_t>(value >> 8);
+    };
+    slot(0, lower); slot(1, upper); slot(2, lower); slot(3, upper);
+    slot(37, 0x3c00); slot(39, 0x3c00);
+    slot(41, 0x0040); slot(42, 0x0001);
+    return descriptor;
+}
+
+std::vector<std::uint8_t> h14ClipDepthwiseTask(
+        const std::vector<std::uint8_t> &task,
+        const std::array<std::uint32_t, 31> &values) {
+    if (task.size() < 32 || task.size() % 4)
+        throw std::invalid_argument(
+            "h14.conv-clip-outside-envelope: malformed depthwise task");
+    std::vector<std::uint8_t> out(task.begin(), task.begin() + 32);
+    bool inserted = false;
+    for (std::size_t cursor = 32; cursor < task.size();) {
+        const auto header = loadLE32(task, cursor);
+        const auto base = (header & 0x7fffu) * 4;
+        std::vector<std::uint32_t> addresses{base};
+        if (header & 0x80000000u) {
+            for (unsigned bit = 0; bit != 16; ++bit)
+                if ((header >> (15 + bit)) & 1)
+                    addresses.push_back(base + (bit + 1) * 4);
+        } else {
+            for (std::uint32_t count = (header >> 15) & 0x3fu;
+                 count; --count)
+                addresses.push_back(addresses.back() + 4);
+        }
+        const auto end = cursor + (addresses.size() + 1) * 4;
+        if (end > task.size())
+            throw std::invalid_argument(
+                "h14.conv-clip-outside-envelope: truncated packed record");
+        const bool touches = std::any_of(addresses.begin(), addresses.end(),
+            [](std::uint32_t address) {
+                return address >= 0x195c && address <= 0x19d4;
+            });
+        if (touches) {
+            if (std::any_of(addresses.begin(), addresses.end(),
+                    [](std::uint32_t address) {
+                        return address < 0x195c || address > 0x19d4;
+                    }))
+                throw std::invalid_argument(
+                    "h14.conv-clip-outside-envelope: kernel-DMA record "
+                    "straddles the clip table");
+            if (!inserted) {
+                appendLE(out, 0x000f0657u, 4);
+                for (const auto value : values) appendLE(out, value, 4);
+                inserted = true;
+            }
+        } else {
+            out.insert(out.end(),
+                       task.begin() + static_cast<std::ptrdiff_t>(cursor),
+                       task.begin() + static_cast<std::ptrdiff_t>(end));
+        }
+        cursor = end;
+    }
+    if (!inserted)
+        throw std::invalid_argument(
+            "h14.conv-clip-outside-envelope: depthwise task has no "
+            "kernel-DMA lane record");
+    storeLE32(out, 0, (static_cast<std::uint32_t>(out.size() / 4) << 16) |
+                      (loadLE32(out, 0) & 0xffffu));
+    storeLE32(out, 4, (loadLE32(out, 4) & 0xffff0000u) | 2u);
+    return out;
+}
+
+} // namespace
+
+void fuseConvClip(Program &p, std::uint16_t lower, std::uint16_t upper) {
+    if (!p.formulaBuilt)
+        throw std::invalid_argument(
+            "h14.conv-clip-outside-envelope: clip fusion requires a "
+            "formula-built convolution");
+    const auto descriptor = clipBoundsDescriptor(lower, upper);
+    std::vector<std::vector<std::uint8_t>> tasks;
+    tasks.reserve(p.taskCount);
+    for (std::uint32_t index = 0; index != p.taskCount; ++index) {
+        const auto span = h14TaskSpan(p.taskStream, index);
+        tasks.emplace_back(
+            p.taskStream.begin() + static_cast<std::ptrdiff_t>(span.first),
+            p.taskStream.begin() +
+                static_cast<std::ptrdiff_t>(span.first + span.second));
+    }
+
+    std::vector<std::uint8_t> constants;
+    constants.reserve(p.constants.size() +
+                      static_cast<std::size_t>(p.taskCount) * 16 *
+                          descriptor.size());
+    for (auto &bytes : tasks) {
+        Program task;
+        task.taskStream.assign(16, 0);
+        task.taskStream.insert(task.taskStream.end(), bytes.begin(), bytes.end());
+        const std::size_t off = 16;
+        const std::size_t size = bytes.size();
+        const auto selectorAt = h14RegisterOffset(task.taskStream, off, size,
+                                                  0x0d04);
+        const auto selector = loadLE32(task.taskStream, selectorAt);
+        if (selector != 0x00101c00 && selector != 0x00101c10)
+            throw std::invalid_argument(
+                "h14.conv-clip-outside-envelope: convolution NE word is not "
+                "a decoded no-post-operation form");
+        storeLE32(task.taskStream, selectorAt,
+                  (selector & ~0x00010000u) | 0x00020000u);
+
+        const auto oldBase = get(task, off, size, 0x1908);
+        if (constants.size() > UINT32_MAX)
+            throw std::invalid_argument(
+                "h14.conv-clip-outside-envelope: kernel base overflows");
+        const auto newBase = static_cast<std::uint32_t>(constants.size());
+        storeLE32(task.taskStream,
+                  lastRegister(task, off, size, 0x1908), newBase);
+        std::array<std::uint32_t, 16> newOffsets{}, newSizes{};
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            const std::size_t oldOffset = get(task, off, size,
+                                              0x1958 + 4 * lane);
+            const std::size_t oldSize = get(task, off, size,
+                                            0x1998 + 4 * lane);
+            const std::size_t oldGlobal = oldBase + oldOffset;
+            if (oldGlobal + oldSize > p.constants.size())
+                throw std::invalid_argument(
+                    "h14.conv-clip-outside-envelope: kernel lane exceeds the "
+                    "constant section");
+            if (oldOffset > UINT32_MAX - 128 * lane ||
+                oldSize > UINT32_MAX - 128)
+                throw std::invalid_argument(
+                    "h14.conv-clip-outside-envelope: kernel lane offset or "
+                    "size overflows");
+            newOffsets[lane] = static_cast<std::uint32_t>(oldOffset +
+                                                           128 * lane);
+            newSizes[lane] = static_cast<std::uint32_t>(oldSize + 128);
+            constants.insert(constants.end(), descriptor.begin(),
+                             descriptor.end());
+            constants.insert(constants.end(),
+                p.constants.begin() + static_cast<std::ptrdiff_t>(oldGlobal),
+                p.constants.begin() +
+                    static_cast<std::ptrdiff_t>(oldGlobal + oldSize));
+        }
+        if (p.depthwiseConv) {
+            std::array<std::uint32_t, 31> values{};
+            std::copy(newOffsets.begin() + 1, newOffsets.end(),
+                      values.begin());
+            std::copy(newSizes.begin(), newSizes.end(), values.begin() + 15);
+            bytes.assign(task.taskStream.begin() + 16, task.taskStream.end());
+            bytes = h14ClipDepthwiseTask(bytes, values);
+        } else {
+            for (std::uint32_t lane = 1; lane != 16; ++lane)
+                storeLE32(task.taskStream,
+                    lastRegister(task, off, size, 0x1958 + 4 * lane),
+                    newOffsets[lane]);
+            for (std::uint32_t lane = 0; lane != 16; ++lane)
+                storeLE32(task.taskStream,
+                    lastRegister(task, off, size, 0x1998 + 4 * lane),
+                    newSizes[lane]);
+            bytes.assign(task.taskStream.begin() + 16, task.taskStream.end());
+        }
+    }
+
+    p.taskStream.assign(16, 0);
+    for (const auto &task : tasks) {
+        p.taskStream.resize(alignUp(p.taskStream.size(), 16), 0);
+        p.taskStream.insert(p.taskStream.end(), task.begin(), task.end());
+    }
+    p.constants = std::move(constants);
+    p.firstTaskBytes = tasks.empty() ? 0 : tasks.front().size();
+    p.constantOffsetBytes = alignUp(p.taskStream.size(), 64);
 }
 
 // Later output slices of a multi-task layer reuse the input the layer's

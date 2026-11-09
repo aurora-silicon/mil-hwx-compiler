@@ -266,6 +266,7 @@ test-h13: $(BUILD)/test_h13_encoding $(BUILD)/test_h13_anec $(BUILD)/mil-hwxc
 	python3 tests/test_h13_norm_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_conv_envelope_cli.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_generic_conv_cli.py $(BUILD)/mil-hwxc
+	python3 tests/test_conv_clip_fusion.py $(BUILD)/mil-hwxc
 	python3 tests/test_h13_linked_cli.py $(BUILD)/mil-hwxc
 	python3 research/h13_l2_edge_parity.py $(BUILD)/mil-hwxc research/oracles/h13-l2-edges/*.json
 	python3 tests/test_h13_select_envelope_cli.py $(BUILD)/mil-hwxc

@@ -12,6 +12,7 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
         return reject(diagnostics, @"H14 convolution needs one input and one result",
                       nil, @"h14.linked-outside-envelope");
     std::vector<ane::h14::Program> layers;
+    NSMutableArray<NSString *> *layerOperations = [NSMutableArray array];
     NSMutableArray<ANEGraphValue *> *results = [NSMutableArray array];
     NSMutableArray<ANEGraphValue *> *inputs = [NSMutableArray array];
     ANEGraphValue *current = function.inputs[0];
@@ -26,6 +27,25 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                     return reject(diagnostics, @"H14 relu must immediately follow its convolution",
                                   operation, @"h14.conv-outside-envelope");
                 ane::h14::fuseConvRelu(layers.back());
+                layerOperations[layerOperations.count - 1] = @"conv+relu";
+                current = operation.results[0];
+                results[results.count - 1] = current;
+                continue;
+            }
+            if ([operation.operationName isEqualToString:@"clip"]) {
+                uint16_t lowerBits = 0, upperBits = 0;
+                double lower = 0.0, upper = 0.0;
+                if (layers.empty() || operation.arguments.count != 3 ||
+                    ![current.type isEqualToValueType:operation.results[0].type] ||
+                    !exactClipBound(operation.arguments[@"alpha"], &lowerBits,
+                                    &lower) ||
+                    !exactClipBound(operation.arguments[@"beta"], &upperBits,
+                                    &upper) || lower > upper)
+                    return reject(diagnostics,
+                        @"H14 clip must immediately follow its convolution with ordered finite fp16 bounds",
+                        operation, @"h14.conv-clip-outside-envelope");
+                ane::h14::fuseConvClip(layers.back(), lowerBits, upperBits);
+                layerOperations[layerOperations.count - 1] = @"conv+clip";
                 current = operation.results[0];
                 results[results.count - 1] = current;
                 continue;
@@ -50,6 +70,7 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
             layers.push_back(ane::h14::encodeConvGeneric(plan.shape,
                 static_cast<const std::uint8_t *>(weights.bytes), weights.length,
                 static_cast<const std::uint8_t *>(bias.bytes), bias.length));
+            [layerOperations addObject:@"conv"];
             [inputs addObject:current];
             current = operation.results[0];
             [results addObject:current];
@@ -77,7 +98,7 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                 @"file": [NSString stringWithFormat:@"program-%lu.%@", (unsigned long)i, format],
                 @"bytes": @(payload.length), @"taskDescriptors": @(p.taskCount),
                 @"encoder": linked ? @"h14-linked-conv-chain" : @"h14-generic-conv",
-                @"operation": linked ? @"conv_chain" : @"conv",
+                @"operation": linked ? @"conv_chain" : layerOperations[i],
                 @"inputs": @[binding(linked ? function.inputs[0] : inputs[i], p.inputs[0])],
                 @"outputs": @[binding(linked ? current : results[i], p.output)],
                 @"constantInputs": @{}, @"constantOffset": @(p.constantOffsetBytes),
@@ -88,7 +109,7 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
             const auto &l = layout[i];
             for (unsigned j = 0; j < l.taskCount; ++j)
                 [tasks addObject:@{@"index": @(l.firstTask + j), @"layer": @(i),
-                    @"operation": @"conv", @"result": results[i].name}];
+                    @"operation": layerOperations[i], @"result": results[i].name}];
             if (i + 1 < layout.size()) regions[results[i].name] = @{
                 @"offset": @(l.outputOffset), @"bytes": @(layers[i].output.allocationBytes)};
         }

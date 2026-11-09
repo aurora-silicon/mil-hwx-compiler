@@ -14,7 +14,7 @@ def parse_layers(text):
         layers.append(dict(cout=co, k=k, s=s, g=g, bias=bool(b), relu=bool(r)))
     return layers
 
-def conv_ref(x, w, b, s, g, pad, relu):
+def conv_ref(x, w, b, s, g, pad, relu, relu6=False):
     """float64 convolution of one CHW image (groups 1 or depthwise)."""
     C, H, W = x.shape
     Co, cig, k, _ = w.shape
@@ -32,6 +32,8 @@ def conv_ref(x, w, b, s, g, pad, relu):
                 out += wd[:, 0, dy, dx][:, None, None] * patch
     if b is not None:
         out += b.astype(np.float64)[:, None, None]
+    if relu6:
+        return np.clip(out, 0, 6)
     return np.maximum(out, 0) if relu else out
 
 def chain_ref(x, layers, params, per_layer_round=True):
@@ -40,7 +42,9 @@ def chain_ref(x, layers, params, per_layer_round=True):
     outs = []
     cur = x
     for L, P in zip(layers, params):
-        y = conv_ref(cur, P['w'], P['b'], L['s'], L['g'], (L['k'] - 1) // 2, L['relu'])
+        y = conv_ref(cur, P['w'], P['b'], L['s'], L['g'],
+                     (L['k'] - 1) // 2, L.get('relu', False),
+                     L.get('relu6', False))
         cur = f16_ties_away(y) if per_layer_round else y
         outs.append(cur)
     return outs

@@ -30,6 +30,28 @@ std::uint16_t le16(const std::vector<std::uint8_t> &bytes, std::size_t offset) {
            static_cast<std::uint16_t>(bytes.at(offset + 1)) << 8;
 }
 
+std::uint32_t le32(const std::vector<std::uint8_t> &bytes, std::size_t offset) {
+    return static_cast<std::uint32_t>(bytes.at(offset)) |
+           static_cast<std::uint32_t>(bytes.at(offset + 1)) << 8 |
+           static_cast<std::uint32_t>(bytes.at(offset + 2)) << 16 |
+           static_cast<std::uint32_t>(bytes.at(offset + 3)) << 24;
+}
+
+std::uint32_t h13Register(const ane::h13::Program &program,
+                          std::uint32_t address) {
+    std::size_t cursor = 10 + ((le32(program.task, 36) & 3) == 3 ? 1 : 0);
+    while (cursor * 4 < program.firstTaskBytes) {
+        const auto header = le32(program.task, cursor * 4);
+        const auto count = (header >> 26) + 1;
+        const auto base = header & 0x03ffffffu;
+        if (base <= address && address < base + 4 * count)
+            return le32(program.task,
+                        (cursor + 1 + (address - base) / 4) * 4);
+        cursor += count + 1;
+    }
+    throw std::logic_error("H13 register absent");
+}
+
 constexpr std::uint32_t streamHeader(std::uint32_t address,
                                      std::uint32_t words) {
     return ((words - 1) << 26) | address;
@@ -390,6 +412,70 @@ void checkEncoderSelectEnvelope() {
     assert(!supportsBooleanOp({H13BooleanKind::Select, false, 8, 128, 128}));
 }
 
+ane::h13::Program genericConv(bool depthwise) {
+    const std::uint32_t channels = depthwise ? 32 : 64;
+    ane::h13::ConvShape shape{depthwise ? 3u : 1u, depthwise ? 3u : 1u,
+        1, depthwise ? channels : 1u, true,
+        {channels, 16, 16}, {channels, 16, 16}};
+    const std::size_t values = static_cast<std::size_t>(channels) *
+        (depthwise ? 1 : channels) * shape.kernel * shape.kernelWidth;
+    std::vector<std::uint8_t> weights(values * 2), bias(channels * 2);
+    for (std::size_t i = 0; i != weights.size(); ++i)
+        weights[i] = static_cast<std::uint8_t>(i * 37 + 11);
+    return ane::h13::encodeConvGeneric(shape, weights.data(), weights.size(),
+                                       bias.data(), bias.size());
+}
+
+void checkFusedConvClip() {
+    for (const bool depthwise : {false, true}) {
+        auto base = genericConv(depthwise);
+        const auto oldConstants = base.constants;
+        std::array<std::uint32_t, 16> oldOffsets{}, oldSizes{};
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            oldOffsets[lane] = h13Register(base, 0x1f848 + 4 * lane);
+            oldSizes[lane] = h13Register(base, 0x1f888 + 4 * lane);
+        }
+        auto relu = base;
+        ane::h13::fuseConvPostOperation(relu,
+                                        ane::h13::PostOperation::Relu);
+        assert(h13Register(relu, 0x0c804) == 0x00111c10);
+
+        auto clip = base;
+        ane::h13::fuseConvClip(clip, 0x0000, 0x4600);
+        assert(h13Register(clip, 0x0c804) == 0x00121c10);
+        assert(clip.constants.size() == oldConstants.size() + 16 * 128);
+        if (depthwise) assert((le32(clip.task, 4) & 0xffffu) == 2);
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            const auto offset = h13Register(clip, 0x1f848 + 4 * lane);
+            const auto size = h13Register(clip, 0x1f888 + 4 * lane);
+            assert(offset == oldOffsets[lane] + lane * 128);
+            assert(size == oldSizes[lane] + 128);
+            assert(le16(clip.constants, offset + 0) == 0x0000);
+            assert(le16(clip.constants, offset + 2) == 0x4600);
+            assert(le16(clip.constants, offset + 4) == 0x0000);
+            assert(le16(clip.constants, offset + 6) == 0x4600);
+            assert(le16(clip.constants, offset + 74) == 0x3c00);
+            assert(le16(clip.constants, offset + 78) == 0x3c00);
+            assert(le16(clip.constants, offset + 82) == 0x0040);
+            assert(le16(clip.constants, offset + 84) == 0x0001);
+            assert(std::equal(oldConstants.begin() + oldOffsets[lane],
+                              oldConstants.begin() + oldOffsets[lane] +
+                                  oldSizes[lane],
+                              clip.constants.begin() + offset + 128));
+        }
+    }
+    std::vector<ane::h13::Program> layers{genericConv(false),
+                                          genericConv(false)};
+    for (auto &layer : layers)
+        ane::h13::fuseConvClip(layer, 0x0000, 0x4600);
+    const auto linked = ane::h13::linkConvChain(layers);
+    const auto linkedL2 = ane::h13::linkConvChain(layers, nullptr, true);
+    assert(linked.taskCount == 2 && linkedL2.taskCount == 2);
+    assert(linked.constants.size() ==
+           layers[0].constants.size() + layers[1].constants.size());
+    assert(linkedL2.constants == linked.constants);
+}
+
 
 
 } // namespace
@@ -405,5 +491,6 @@ int main() {
     checkEncoderNormEnvelope();
     checkEncoderConvEnvelope();
     checkEncoderSelectEnvelope();
+    checkFusedConvClip();
     std::cout << "H13_ENCODING_OK\n";
 }

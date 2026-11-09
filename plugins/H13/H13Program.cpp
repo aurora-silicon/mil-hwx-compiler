@@ -3440,6 +3440,100 @@ void fuseConvPostOperation(Program &program, PostOperation operation) {
     }
 }
 
+namespace {
+
+std::array<std::uint8_t, 128> clipBoundsDescriptor(std::uint16_t lower,
+                                                   std::uint16_t upper) {
+    std::array<std::uint8_t, 128> descriptor{};
+    const auto slot = [&](std::size_t index, std::uint16_t value) {
+        descriptor[index * 2] = static_cast<std::uint8_t>(value);
+        descriptor[index * 2 + 1] = static_cast<std::uint8_t>(value >> 8);
+    };
+    slot(0, lower);
+    slot(1, upper);
+    slot(2, lower);
+    slot(3, upper);
+    slot(37, 0x3c00);
+    slot(39, 0x3c00);
+    slot(41, 0x0040);
+    slot(42, 0x0001);
+    return descriptor;
+}
+
+} // namespace
+
+void fuseConvClip(Program &program, std::uint16_t lower,
+                  std::uint16_t upper) {
+    if (!program.formulaBuilt)
+        throw std::invalid_argument(
+            "h13.conv-clip-outside-envelope: clip fusion requires a "
+            "formula-built convolution");
+    const auto descriptor = clipBoundsDescriptor(lower, upper);
+    std::vector<std::uint8_t> constants;
+    constants.reserve(program.constants.size() +
+                      static_cast<std::size_t>(program.taskCount) * 16 *
+                          descriptor.size());
+    std::size_t offset = 0;
+    std::size_t bytes = program.firstTaskBytes;
+    for (std::uint32_t index = 0; index != program.taskCount; ++index) {
+        if (!bytes || offset + bytes > program.task.size())
+            throw std::invalid_argument(
+                "h13.conv-clip-outside-envelope: convolution task stream is "
+                "truncated");
+        const auto selector = h13RegisterOffset(program.task, offset, bytes,
+                                                0x0c804);
+        const auto value = loadLE32(program.task, selector);
+        if (value != 0x00101c00 && value != 0x00101c10)
+            throw std::invalid_argument(
+                "h13.conv-clip-outside-envelope: convolution NE word is not "
+                "a decoded no-post-operation form");
+        storeLE32(program.task, selector,
+                  (value & ~0x00010000u) | 0x00020000u);
+
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            const auto offsetWord = h13RegisterOffset(
+                program.task, offset, bytes, 0x1f848 + 4 * lane);
+            const auto sizeWord = h13RegisterOffset(
+                program.task, offset, bytes, 0x1f888 + 4 * lane);
+            const std::size_t oldOffset = loadLE32(program.task, offsetWord);
+            const std::size_t oldSize = loadLE32(program.task, sizeWord);
+            if (oldOffset + oldSize > program.constants.size())
+                throw std::invalid_argument(
+                    "h13.conv-clip-outside-envelope: kernel lane exceeds the "
+                    "constant section");
+            if (constants.size() > UINT32_MAX || oldSize > UINT32_MAX - 128)
+                throw std::invalid_argument(
+                    "h13.conv-clip-outside-envelope: kernel lane offset or "
+                    "size overflows");
+            storeLE32(program.task, offsetWord,
+                      static_cast<std::uint32_t>(constants.size()));
+            storeLE32(program.task, sizeWord,
+                      static_cast<std::uint32_t>(oldSize + 128));
+            constants.insert(constants.end(), descriptor.begin(),
+                             descriptor.end());
+            constants.insert(constants.end(),
+                program.constants.begin() + static_cast<std::ptrdiff_t>(oldOffset),
+                program.constants.begin() +
+                    static_cast<std::ptrdiff_t>(oldOffset + oldSize));
+        }
+        if (program.depthwiseConv) {
+            const auto header1 = loadLE32(program.task, offset + 4);
+            storeLE32(program.task, offset + 4,
+                      (header1 & 0xffff0000u) | 2u);
+        }
+        const auto header1 = loadLE32(program.task, offset + 4);
+        const auto next = loadLE32(program.task, offset + 28);
+        if (index + 1 == program.taskCount) break;
+        if (!next)
+            throw std::invalid_argument(
+                "h13.conv-clip-outside-envelope: convolution task link is "
+                "missing");
+        offset = next;
+        bytes = (((header1 >> 16) & 0x1ff) + 1) * sizeof(std::uint32_t);
+    }
+    program.constants = std::move(constants);
+}
+
 void fuseElementwisePostOperation(Program &program, PostOperation operation) {
     if (operation != PostOperation::Relu)
         throw std::invalid_argument(

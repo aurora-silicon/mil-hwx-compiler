@@ -277,6 +277,41 @@ static BOOL constantValue(ANEGraphValue *value) {
     return [value.producer.operationName isEqualToString:@"const"];
 }
 
+static double decodedFP16(uint16_t bits) {
+    const uint16_t exponent = (bits >> 10) & 0x1fu;
+    const uint16_t fraction = bits & 0x03ffu;
+    const double magnitude = exponent
+        ? std::ldexp(1024.0 + fraction, exponent - 25)
+        : std::ldexp(static_cast<double>(fraction), -24);
+    return (bits & 0x8000u) ? -magnitude : magnitude;
+}
+
+static BOOL exactClipBound(ANEGraphArgument *argument, uint16_t *bits,
+                           double *valueOut) {
+    if (argument.kind == ANEGraphArgumentKindValue) {
+        ANEGraphValue *value = argument.value;
+        if (!value || !constantValue(value) ||
+            value.type.kind != ANEValueTypeKindScalar ||
+            value.type.elementType != ANEElementTypeFP16 ||
+            !fp16Scalar(value.producer.attributes[@"val"], bits)) return NO;
+        *valueOut = decodedFP16(*bits);
+        return YES;
+    }
+    ANEGraphArgument *literal = argument;
+    if (argument.kind == ANEGraphArgumentKindCall &&
+        ([argument.calleeName isEqualToString:@"fp16"] ||
+         [argument.calleeName isEqualToString:@"fp32"]) &&
+        argument.callArguments.count == 1)
+        literal = argument.callArguments[0].value;
+    double parsed = 0.0;
+    if (!floatingText(literal, &parsed)) return NO;
+    *bits = fp16Bits(parsed);
+    if ((*bits & 0x7c00u) == 0x7c00u || decodedFP16(*bits) != parsed)
+        return NO;
+    *valueOut = parsed;
+    return YES;
+}
+
 static NSUInteger logicalBytes(ANEGraphValue *value) {
     NSUInteger elements = 1;
     for (NSNumber *dimension in value.type.shape)
@@ -874,18 +909,20 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     if (!sourceOperations.count)
         return reject(diagnostics, [NSString stringWithFormat:
             @"%@ requires at least one operation", target.name], nil, unsupported);
-    BOOL allConv = h14, hasConv = NO, hasRelu = NO, unknownConv = NO;
+    BOOL allConv = h14, hasConv = NO, hasPostOperation = NO, unknownConv = NO;
     for (ANEGraphOperation *op in sourceOperations) {
         const BOOL conv = [op.operationName isEqualToString:@"conv"];
         const BOOL relu = [op.operationName isEqualToString:@"relu"];
-        allConv = allConv && (conv || relu);
-        hasConv = hasConv || conv; hasRelu = hasRelu || relu;
+        const BOOL clip = [op.operationName isEqualToString:@"clip"];
+        allConv = allConv && (conv || relu || clip);
+        hasConv = hasConv || conv;
+        hasPostOperation = hasPostOperation || relu || clip;
         H14ConvPlan plan{};
         if (conv && !convParityPlan(op, &plan)) unknownConv = YES;
     }
     const BOOL linkedConv = [schedule isEqualToString:@"linked"];
     const char *forceGeneric = std::getenv("MILHWXC_H14_CONV_GENERIC");
-    if (allConv && hasConv && (linkedConv || hasRelu || unknownConv ||
+    if (allConv && hasConv && (linkedConv || hasPostOperation || unknownConv ||
         (forceGeneric && std::string(forceGeneric) != "0")))
         return emitConvGraph(function, sourceOperations, modelRoot, directory,
                              format, linkedConv, diagnostics, error);
