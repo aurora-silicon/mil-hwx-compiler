@@ -290,18 +290,30 @@ struct ColumnWrite {
     std::uint32_t destination;
 };
 
-static std::vector<ColumnWrite> modelColumnSchedule(
-    std::uint32_t width, std::uint32_t schedule) {
+static std::uint32_t ceilLog2(std::uint32_t value) {
+    std::uint32_t result = 0;
+    for (std::uint32_t covered = 1; covered < value; covered <<= 1)
+        ++result;
+    return result;
+}
+
+static std::vector<ColumnWrite> modelPEColumnTiles(
+    std::uint32_t width, std::uint32_t tileConfig) {
     constexpr std::uint32_t pieceColumns = 16;
     const auto pieces = (width + pieceColumns - 1) / pieceColumns;
-    // The broken encoder put its PE stage selector in Common +0x34 bits
-    // 5:3.  On the measured pool those bits acted as both the first column
-    // piece and the piece-to-piece destination advance.  A real width
-    // schedule leaves that field clear, starts at piece zero, and advances
-    // by one piece.
-    const auto oldStageField = (schedule >> 3) & 7u;
-    const auto firstPiece = std::min(oldStageField, pieces);
-    const auto advance = oldStageField ? oldStageField : 1u;
+    constexpr std::uint32_t columnClassShift = 4;
+    constexpr std::uint32_t columnClassMask = 15;
+    const auto encodedClass =
+        (tileConfig >> columnClassShift) & columnClassMask;
+    const auto requiredClass = ceilLog2(width);
+    // Device observation pins the under-classed PE behavior: class 4 on a
+    // class-6 surface starts two pieces late and advances destinations two
+    // pieces per source piece.  A complete class starts at zero and advances
+    // once.  This model is deliberately limited to that measured rule.
+    const auto shortfall = requiredClass > encodedClass
+        ? requiredClass - encodedClass : 0;
+    const auto firstPiece = std::min(shortfall, pieces);
+    const auto advance = shortfall ? shortfall : 1u;
     std::vector<ColumnWrite> writes;
     for (std::uint32_t sourcePiece = firstPiece;
          sourcePiece < pieces; ++sourcePiece) {
@@ -317,8 +329,10 @@ static std::vector<ColumnWrite> modelColumnSchedule(
 }
 
 static void validateMeasuredPoolColumnModel() {
-    const auto oldSchedule = 1u | (2u << 3);
-    const auto oldWrites = modelColumnSchedule(56, oldSchedule);
+    constexpr std::uint32_t fourLaneIssue = 4;
+    constexpr std::uint32_t columnClassShift = 4;
+    const auto oldTileConfig = fourLaneIssue | (4u << columnClassShift);
+    const auto oldWrites = modelPEColumnTiles(56, oldTileConfig);
     std::vector<int> oldDestination(72, -1);
     for (const auto write : oldWrites)
         oldDestination[write.destination] = static_cast<int>(write.source);
@@ -335,8 +349,8 @@ static void validateMeasuredPoolColumnModel() {
         expect(oldDestination[64 + column] == static_cast<int>(48 + column),
                "old pool model does not wrap the last piece one physical row");
 
-    const auto fixedSchedule = (0x20u << 16) | (1u << 16) | 1u;
-    const auto fixedWrites = modelColumnSchedule(56, fixedSchedule);
+    const auto fixedTileConfig = fourLaneIssue | (6u << columnClassShift);
+    const auto fixedWrites = modelPEColumnTiles(56, fixedTileConfig);
     std::vector<int> fixedDestination(56, -1);
     for (const auto write : fixedWrites)
         if (write.destination < fixedDestination.size())
@@ -370,15 +384,71 @@ static void validatePoolTilingFields(const ane::h13::Program &program) {
     expect((reg(program, pool, 0x00024) & groupMask) ==
                (reg(proven, provenTask, 0x00024) & groupMask),
            "pool input/output group counts differ from proven geometry");
-    const auto poolTileClass = reg(program, pool, 0x0002c);
-    const auto provenTileClass = reg(proven, provenTask, 0x0002c);
-    const auto poolOperationTileClass = 4u | (4u << 4);
-    expect(poolTileClass == poolOperationTileClass && provenTileClass == 0,
-           "pool/depthwise operation-specific tile classes changed");
-    expect(reg(program, pool, 0x00034) == reg(proven, provenTask, 0x00034),
-           "pool column schedule differs from proven output-width rule");
-    expect(!hasReg(program, pool, 0x1f800),
-           "PE-only pool unexpectedly carries a KernelDMA record");
+    constexpr std::uint32_t fourLaneIssue = 4;
+    constexpr std::uint32_t columnClassShift = 4;
+    const auto expectedTileConfig = fourLaneIssue |
+        (ceilLog2(output.width) << columnClassShift);
+    expect(reg(program, pool, 0x0002c) == expectedTileConfig &&
+               reg(proven, provenTask, 0x0002c) == 0,
+           "pool PE column class differs from the output-width rule");
+    const auto poolPipeline = 1u | (2u << 3);
+    expect(reg(program, pool, 0x00034) == poolPipeline,
+           "pool Common Cfg is not the executing PE pipeline form");
+    expect(reg(program, pool, 0x04818) == reg(program, pool, 0x04814) &&
+               reg(program, pool, 0x04818) ==
+                   reg(proven, provenTask, 0x04818),
+           "pool L2 source group advance differs from proven 112-to-56 geometry");
+    expect(pool.bytes == 504 && hasReg(program, pool, 0x1f800) &&
+               hasReg(program, pool, 0x1f8c8),
+           "pool does not retain the required KernelDMA descriptor grammar");
+}
+
+static void validateResidualPETasks(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() == program.taskRecords.size(),
+           "residual task metadata count differs from task stream");
+    constexpr std::uint32_t fourLaneIssue = 4;
+    constexpr std::uint32_t columnClassShift = 4;
+    const auto disabledCoefficientPath = 2u << 6;
+    const auto disabledPalettePath = 1u << 6;
+    for (std::size_t index = 0; index != spans.size(); ++index) {
+        const auto &role = program.taskRecords[index].role;
+        if (role != "pool" && role != "add+relu" && role != "mean")
+            continue;
+        const auto span = spans[index];
+        const auto inputWidth = reg(program, span, 0x00000) & 0xffffu;
+        const auto outputWidth = reg(program, span, 0x00014) & 0xffffu;
+        const auto activeWidth = role == "mean" ? inputWidth : outputWidth;
+        expect(span.bytes == 504 && hasReg(program, span, 0x1f800) &&
+                   hasReg(program, span, 0x1f8c8),
+               "residual PE task lost its 504-byte KernelDMA grammar");
+        expect(reg(program, span, 0x0002c) ==
+                   (fourLaneIssue |
+                    (ceilLog2(activeWidth) << columnClassShift)),
+               "residual PE task has the wrong active-column class");
+        const auto stage = role == "pool" ? 2u : role == "add+relu" ? 6u : 10u;
+        expect(reg(program, span, 0x00034) == (1u | (stage << 3)),
+               "residual PE task lost the executing pipeline config");
+        expect(reg(program, span, 0x04818) == reg(program, span, 0x04814),
+               "residual PE source group advance is not its depth advance");
+        expect(reg(program, span, 0x1f800) == 0 &&
+                   reg(program, span, 0x1f804) == 0,
+               "residual PE coefficient record leading words changed");
+        for (std::uint32_t channel = 0; channel != 16; ++channel)
+            expect(reg(program, span, 0x1f808 + 4 * channel) ==
+                       disabledCoefficientPath,
+                   "residual PE coefficient path is not disabled");
+        for (std::uint32_t wordIndex = 0; wordIndex != 4; ++wordIndex) {
+            expect(reg(program, span, 0x1f8c8 + 4 * wordIndex) ==
+                       disabledCoefficientPath,
+                   "residual PE bias path policy changed");
+            expect(reg(program, span, 0x1f8d8 + 4 * wordIndex) == 0,
+                   "residual PE post-scale path is not neutral");
+            expect(reg(program, span, 0x1f8e8 + 4 * wordIndex) ==
+                       disabledPalettePath,
+                   "residual PE palette path policy changed");
+        }
+    }
 }
 
 static void validateFullPoolCompletionChain(
@@ -409,7 +479,8 @@ static void validateStemPoolHandoff(const ane::h13::Program &program) {
     expect(reg(program, stem, 0x04834) == reg(program, pool, 0x04808) &&
                reg(program, stem, 0x04838) == reg(program, pool, 0x0480c) &&
                reg(program, stem, 0x0483c) == reg(program, pool, 0x04810) &&
-               reg(program, stem, 0x04840) == reg(program, pool, 0x04814),
+               reg(program, stem, 0x04840) == reg(program, pool, 0x04814) &&
+               reg(program, stem, 0x04844) == reg(program, pool, 0x04818),
            "stem result and pool source L2 layouts differ");
 
     const auto inputWidth = reg(program, stem, 0x00000) & 0xffffu;
@@ -638,6 +709,7 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
     validateStemPoolHandoff(program);
     validateKernelDMASpans(program);
     validatePoolTilingFields(program);
+    validateResidualPETasks(program);
     return {std::move(program), std::move(logits)};
 }
 
@@ -708,6 +780,9 @@ int main(int argc, char **argv) {
     validateTaskHeaders(stem);
     validateTaskHeaders(poolViaDRAM);
     validateTaskHeaders(block);
+    validateResidualPETasks(pool);
+    validateResidualPETasks(poolViaDRAM);
+    validateResidualPETasks(block);
     validateStemPoolHandoff(pool);
     validateStemPoolHandoff(block);
     validatePoolBoundaryLayout(pool);
