@@ -115,6 +115,7 @@ def main():
     }, indent=2) + '\n')
     shutil.copy2(HERE / 'run.c', out / 'run.c')
     shutil.copy2(HERE / 'run.py', out / 'run.py')
+    shutil.copy2(HERE / 'run_kit.py', out / 'run_kit.py')
     print(out)
 
 

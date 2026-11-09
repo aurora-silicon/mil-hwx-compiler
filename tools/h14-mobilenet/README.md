@@ -18,6 +18,14 @@ The directory contains `src/model.mil`, generated weights, `params.npz`,
 `ring_kit.py` for the smallest-first M2 ladder: depthwise stride-2 singles,
 stem, prefixes, full ReLU, and full fused ReLU6.
 
+After building the C runner below, execute a generated kit in its declared
+smallest-first order with:
+
+```sh
+python3 out/h14-ring/run_kit.py out/h14-ring \
+  --runner ./h14-mobilenet-run --device 0 --repeat 1
+```
+
 On the M2, build `run.c` against the existing MIT libane from
 [aurora-silicon/omarchy-ane](https://github.com/aurora-silicon/omarchy-ane).
 It needs the ABI-v2 `ane_m2_init_ports`, `ane_m2_send/read`, `ane_query_caps`

@@ -28,7 +28,8 @@ def main():
                        timeout=scaled_timeout(1200))
         manifest = json.loads((out / 'kit.json').read_text())
         assert manifest['libaneBindOverrunProgramsChecked'] == 35
-        assert (out / 'run.c').exists() and (out / 'run.py').exists()
+        assert all((out / name).exists()
+                   for name in ('run.c', 'run.py', 'run_kit.py'))
     print('PASS H14 linked-ring kit: 35 ANEC programs are bind-safe')
 
 
