@@ -355,6 +355,13 @@ void fuseMatmulPostOperation(Program &program, PostOperation operation);
 /// (`0x00101c00`, or `0x00101c10` with a per-channel bias).
 void fuseConvPostOperation(Program &program, PostOperation operation);
 
+/// Fuses a bounded clip into a formula-built convolution.  The NE selects
+/// the lookup-table post-operation and each of the 16 kernel-DMA lanes is
+/// prefixed with the independently described 128-byte bounds table.  Bounds
+/// are raw finite fp16 encodings; the caller validates their ordering.
+void fuseConvClip(Program &program, std::uint16_t lower,
+                  std::uint16_t upper);
+
 /// Fuses a relu into a one-task Apple elementwise program. Verified byte-exact
 /// against `chain_add_relu_c512` on both targets: the PE word `0x08800`
 /// (H14 `0x900`) carries the clamp bit `0x20` and no other word moves.

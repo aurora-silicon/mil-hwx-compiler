@@ -8,11 +8,13 @@ On the host:
 ```sh
 # any conv chain: C,H,W then cout,k,stride,groups,bias,relu per layer
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mkchain.py cases/c2 64,16,16 '64,1,1,1,1,1;64,1,1,1,1,1'
-# MobileNetV1 224 (random weights, or --weights mobilenet_v1_1_224_quant.tflite)
+# MobileNetV1 224 with fused ReLU6 (random weights, or --weights mobilenet_v1_1_224_quant.tflite)
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn
 python3 tools/h13-mobilenet/mn_refs.py cases/mn 16     # test images + float64 references
 python3 tools/h13-mobilenet/prefixes.py cases/mn cases/mn-prefix   # per-layer profile
 ```
+
+Pass `--relu` only for the legacy unbounded-ReLU comparison network.
 
 On the M1 (user in the `accel` group):
 

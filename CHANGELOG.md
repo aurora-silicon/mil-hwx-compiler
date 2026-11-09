@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H13/H14: fuse a single-consumer finite fp16 `clip` into formula-built
+  convolutions with the lookup-table NE selector, duplicated per-lane bounds
+  descriptor and generation-specific kernel-DMA framing. MobileNetV1 now
+  emits fused ReLU6 and compiles as a 45-task linked-L2 program.
 - H16G: fail closed on the three transformer forms that did not pass J616s
   qualification. Standalone softmax now admits only the measured S=1500,
   H=8 form; H=6 is refused after its prefixes failed LOAD or hung and its

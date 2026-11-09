@@ -4,7 +4,7 @@ MobileNet package from mobilenet.py.
 usage: mn_refs.py NETDIR COUNT
 
 Writes NETDIR/refs.npz: images [N,3,224,224] in [-1, 1], the ANE-frame inputs
-[N,16,112,112] fp16, `logits_relu` from the float64 reference of the network
+[N,16,112,112] fp16, `logits_relu6` from the float64 reference of the network
 the ANE runs (ReLU, fp16 weights, fp16 between layers) and, when the TF
 weights are present, `logits_tf_relu6` from the original TF network (ReLU6,
 float32 weights) for information.
@@ -60,4 +60,5 @@ for i in range(count):
     ltf.append(M.tf_reference(img, tfw, relu6=True))
     print(i, 'ref top1', int(np.argmax(logits)), 'tf relu6 top1', int(np.argmax(ltf[-1])), flush=True)
 np.savez(os.path.join(net, 'refs.npz'), images=np.array(imgs), inputs=np.array(inputs),
-         logits_relu=np.array(lr), logits_tf_relu6=np.array(ltf))
+         logits_relu6=np.array(lr), logits_relu=np.array(lr),
+         logits_tf_relu6=np.array(ltf))

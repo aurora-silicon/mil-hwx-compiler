@@ -1,7 +1,7 @@
 # H14 formula-built convolution and linked DRAM schedules
 
 `--target H14 --schedule linked` accepts a straight chain of dense and
-depthwise convolutions, with optional ReLU after each convolution. The
+depthwise convolutions, with optional ReLU or finite fp16 clip after each convolution. The
 MobileNetV1 graph and preprocessing are the same as
 [the H13 package](../../tools/h13-mobilenet/README.md). Device execution and
 accuracy on the base M2 remain a lead-side qualification step.
@@ -45,6 +45,7 @@ corpus. No implementation code or binary payload is copied from that map.
 | 16 coefficient bases | `0x1f848..` | `0x1958..` | offsets within the task's packed section |
 | 16 coefficient sizes | `0x1f888..` | `0x1998..` | actual packed plane lengths, each 64-byte aligned |
 | ReLU | `0xc804` bit 16 | `0xd04` bit 16 | fused on every output-channel task |
+| Clip | `0xc804` bit 17 | `0xd04` bit 17 | 128-byte duplicated-bound LUT descriptor prepended to every kernel lane |
 
 The public map's L2 labels around `0x530` are shifted relative to the corpus:
 `0x530` carries ResultCfg (`0x50017a` in ordinary DRAM output tasks), and

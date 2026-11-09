@@ -39,15 +39,17 @@ def tf_layers():
     out.append(('fc', 1024, 1001, 1))
     return out
 
-def ane_layers(head='ane'):
-    layers = [dict(cout=32, k=3, s=1, g=1, bias=True, relu=True)]
+def ane_layers(head='ane', relu6=True):
+    activation = dict(relu=not relu6, relu6=relu6)
+    layers = [dict(cout=32, k=3, s=1, g=1, bias=True, **activation)]
     c = 32
     for co, s in CFG:
-        layers.append(dict(cout=c, k=3, s=1, g=c, bias=True, relu=True))
-        layers.append(dict(cout=co, k=1, s=s, g=1, bias=True, relu=True))
+        layers.append(dict(cout=c, k=3, s=1, g=c, bias=True, **activation))
+        layers.append(dict(cout=co, k=1, s=s, g=1, bias=True, **activation))
         c = co
     if head == 'ane':
-        layers.append(dict(cout=1024, k=1, s=1, g=1, bias=True, relu=False))
+        layers.append(dict(cout=1024, k=1, s=1, g=1, bias=True,
+                           relu=False, relu6=False))
     return layers
 
 def random_tf_weights(seed=0):
@@ -131,6 +133,8 @@ if __name__ == '__main__':
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--head', choices=['ane', 'cpu'], default='ane')
     ap.add_argument('--no-perop', action='store_true')
+    ap.add_argument('--relu', action='store_true',
+                    help='emit unbounded ReLU instead of the default fused ReLU6')
     a = ap.parse_args()
     os.environ['MILHWXC_TARGET'] = a.target
     if a.weights:
@@ -138,7 +142,7 @@ if __name__ == '__main__':
         tfw = mobilenet_v1_weights(a.weights)
     else:
         tfw = random_tf_weights(a.seed)
-    layers = ane_layers(a.head)
+    layers = ane_layers(a.head, relu6=not a.relu)
     params = to_ane_params(tfw, a.head)
     milc = os.environ.get('MILC', 'build/mil-hwxc')
     shutil.rmtree(a.out, ignore_errors=True)

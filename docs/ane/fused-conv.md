@@ -24,6 +24,11 @@ encoder had no decoded post-operation field.
    `0x00010000`. This is the same bit Apple's decoded `chain_pair_mm_relu`
    matmul epilogue sets. On the M1 Pro the fused output equals relu of the
    unfused device output, bit for bit, on all 262,144 lanes.
+   A single-consumer `clip` with ordered finite fp16 scalar-const bounds also
+   fuses. It selects the LUT epilogue (`0x00020000`) and prefixes each of the
+   16 kernel-DMA lanes with a 128-byte descriptor holding duplicated fp16
+   bounds. The lane offset grows by `128*i` and every lane size by 128. H13
+   and H14 use the same descriptor; ReLU6 is bounds `0x0000,0x4600`.
 2. **A formula-built convolution encoder** (`encodeConvGeneric`). It covers
    shapes no template has. It takes the invariant words from the closest
    decoded single-task template of the same family (same kernel, stride, group
@@ -70,7 +75,9 @@ corpus does not explain. The 9 shapes that differ do so only by choice:
   1.18 MB in one task, and the 1 MiB task budget here splits it.
 
 `tests/test_h13_generic_conv_cli.py` pins 16 of those parity shapes, the
-stride-2 fallback, MobileNet-class coverage, the fusion and the refusals.
+stride-2 fallback, MobileNet-class coverage, the ReLU fusion and the refusals.
+`tests/test_conv_clip_fusion.py` independently constructs the descriptor and
+stream deltas for 24 H13/H14 geometry, bias and bound variants.
 
 ## M1 Pro measurements (31/10/2026, T6000, kernel 7.3.0-aurora-fleet12)
 
@@ -128,4 +135,5 @@ intermediates in L2 inside one program.
 - **L2-resident chaining across layers.** Later tasks would read the previous
   task's L2 result, but the L2 `0x4804`/`0x4830` source and result configs
   that make this work have no formula.
-- **H14** has none of this yet. The register blocks differ.
+- **H14 linked-L2 chaining** is not derived; its formula-built per-op and
+  DRAM-linked convolution paths do support the same fused clip descriptor.

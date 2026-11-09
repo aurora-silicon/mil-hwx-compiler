@@ -14,11 +14,16 @@ def blob_write(path, arrays):
     open(path, 'wb').write(out)
     return offs
 def conv_mil(layers, inshape, outdir, seed=0, relu_all=True, weights=None):
-    """layers: list of dict(cout,k,s,g,bias,pad,relu). Returns (mil_path, weights list)."""
+    """layers: dicts with cout/k/s/g/bias/pad and relu or relu6."""
     rng = np.random.default_rng(seed)
     os.makedirs(os.path.join(outdir, 'weights'), exist_ok=True)
     C, H, W = inshape
     consts = []; body = []; arrays = []; params = []
+    if any(layer.get('relu6') for layer in layers):
+        body += [
+            'fp16 clip_alpha = const()[name = string("clip_alpha"), val = fp16(0.0)];',
+            'fp16 clip_beta = const()[name = string("clip_beta"), val = fp16(6.0)];',
+        ]
     cur = 'x'; c, h, w = C, H, W
     for i, L in enumerate(layers):
         co, k, s, g = L['cout'], L['k'], L.get('s', 1), L.get('g', 1)
@@ -49,7 +54,10 @@ def conv_mil(layers, inshape, outdir, seed=0, relu_all=True, weights=None):
         out = f'c{i}'
         body.append(f'    tensor<fp16, [1, {co}, {ho}, {wo}]> {out} = conv({biasarg}dilations = dl{i}, groups = gp{i}, pad = pd{i}, pad_type = pt{i}, strides = st{i}, weight = W{i}, x = {cur})[name = string("conv{i}")];')
         cur = out
-        if L.get('relu'):
+        if L.get('relu6'):
+            body.append(f'    tensor<fp16, [1, {co}, {ho}, {wo}]> r{i} = clip(x = {cur}, alpha = clip_alpha, beta = clip_beta)[name = string("relu6_{i}")];')
+            cur = f'r{i}'
+        elif L.get('relu'):
             body.append(f'    tensor<fp16, [1, {co}, {ho}, {wo}]> r{i} = relu(x = {cur})[name = string("relu{i}")];')
             cur = f'r{i}'
         c, h, w = co, ho, wo
