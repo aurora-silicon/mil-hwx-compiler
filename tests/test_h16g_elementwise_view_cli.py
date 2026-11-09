@@ -10,10 +10,12 @@ describe the tensor's logical bytes inside the square allocation.
 import json
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 
 COMPILER = str(Path(sys.argv[1]).resolve())
+VALIDATOR = str(Path(sys.argv[2]).resolve()) if len(sys.argv) > 2 else None
 HEADER = 'program(1.3)\n[buildInfo = dict<string, string>({})]\n{\n'
 
 
@@ -55,6 +57,38 @@ def check(failures, cond, message):
         failures.append(message)
 
 
+def section(image, segment_name, section_name):
+    """Return one Mach-O-like HWX section without depending on research code."""
+    _, _, _, _, count, _, _, _ = struct.unpack_from('<8I', image)
+    cursor = 32
+    for _ in range(count):
+        command, size = struct.unpack_from('<2I', image, cursor)
+        if command == 0x19:
+            fields = struct.unpack_from('<2I16s4Q4I', image, cursor)
+            segment = fields[2].split(b'\0', 1)[0].decode()
+            section_cursor = cursor + 72
+            for _ in range(fields[-2]):
+                entry = struct.unpack_from('<16s16s2Q8I', image, section_cursor)
+                name = entry[0].split(b'\0', 1)[0].decode()
+                if segment == segment_name and name == section_name:
+                    return image[entry[4]:entry[4] + entry[3]]
+                section_cursor += 80
+        cursor += size
+    return None
+
+
+def same_program_payload(left, right):
+    """Ignore object metadata while retaining descriptor/table parity.
+
+    The staged assembler and direct contiguous-view route use different public
+    symbol names at the exact 128/256 unary geometries, but the task stream,
+    constant allocation, and kernel table must still be byte-identical.
+    """
+    names = (('__TEXT', '__text'), ('__TEXT', '__const'),
+             ('__KERN_0', '__kern_0'))
+    return all(section(left, *name) == section(right, *name) for name in names)
+
+
 def main():
     failures = []
     cases = 0
@@ -64,11 +98,17 @@ def main():
         (binary, 'mul', [1, 1500, 384], 1024),     # Whisper-tiny width
         (binary, 'max', [64, 64], 128),
         (binary, 'add', [1, 64, 4, 192], 256),
+        (binary, 'add', [1, 64, 1024], 256),       # held-out transformer width
+        (binary, 'add', [1, 256, 1024], 512),      # held-out token count
+        (binary, 'add', [1, 512, 1024], 1024),     # held-out token count
         (binary, 'add', [1, 1, 512, 512], 512),    # already square: unchanged
         (unary, 'gelu', [1, 128, 3072], 1024),     # BERT-base FFN activation
         (unary, 'gelu', [1, 1500, 2048], 2048),    # Whisper-base FFN activation
         (unary, 'exp', [1, 12, 128, 128], 512),
         (unary, 'sigmoid', [100], 128),
+        (unary, 'gelu', [1, 64, 1024], 256),       # held-out transformer width
+        (unary, 'gelu', [1, 256, 1024], 512),      # held-out token count
+        (unary, 'gelu', [1, 512, 1024], 1024),     # held-out token count
         (unary, 'gelu', [1, 1, 256, 256], 256),
     ]
     with tempfile.TemporaryDirectory() as temp:
@@ -80,14 +120,24 @@ def main():
             if result.returncode:
                 failures.append(f'{name}: refused: {result.stderr.strip()}')
                 continue
+            if VALIDATOR:
+                validation = subprocess.run([
+                    sys.executable, VALIDATOR, str(out / 'program-0.hwx'),
+                    '--manifest', str(out / 'manifest.json')],
+                    capture_output=True, text=True, timeout=30)
+                check(failures, validation.returncode == 0,
+                      f'{name}: validation refused: '
+                      f'{(validation.stderr or validation.stdout).strip()}')
             square = [1, 1, size, size]
             ref_result, ref = compile_case(root, f'{name}_square', build(op, square))
             if ref_result.returncode:
                 failures.append(f'{name}: square reference refused: {ref_result.stderr.strip()}')
                 continue
-            check(failures, (out / 'program-0.hwx').read_bytes() ==
-                  (ref / 'program-0.hwx').read_bytes(),
-                  f'{name}: object differs from the square [1,1,{size},{size}] program')
+            check(failures, same_program_payload(
+                  (out / 'program-0.hwx').read_bytes(),
+                  (ref / 'program-0.hwx').read_bytes()),
+                  f'{name}: descriptor/table payload differs from the square '
+                  f'[1,1,{size},{size}] program')
             artifact = json.loads((out / 'manifest.json').read_text())['artifacts']
             check(failures, len(artifact) == 1, f'{name}: expected one program')
             for binding in artifact[0]['bindings']:

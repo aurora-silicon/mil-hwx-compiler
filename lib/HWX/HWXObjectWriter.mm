@@ -606,10 +606,10 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         return nil;
     }
     uint64_t scratchVM=0x30000000;
-    uint64_t nextBindingVM = 0;
-    if (!addWithoutOverflow(scratchVM,
-            (uint64_t)programInfo.scratchAllocationByteLength,
-            &nextBindingVM)) {
+    uint64_t scratchSegmentSize = 0, nextBindingVM = 0;
+    if (!alignUpWithoutOverflow(programInfo.scratchAllocationByteLength,
+                                0x4000, &scratchSegmentSize) ||
+        !addWithoutOverflow(scratchVM, scratchSegmentSize, &nextBindingVM)) {
         if (error) *error=[NSError errorWithDomain:HWXObjectWriterErrorDomain
             code:1 userInfo:@{NSLocalizedDescriptionKey:
                 @"writer VM layout overflows"}];
@@ -676,12 +676,12 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         (uint32_t)alignUp(textFileOffset + taskDescriptor.length, 0x40);
     NSMutableArray<NSData *> *commands = [NSMutableArray array];
     [commands addObject:segmentRecord("__PAGEZERO",0,0x4000,0,0,0,0,4,NULL,0)];
-    BOOL hasScratch = programInfo.scratchAllocationByteLength != 0;
+    BOOL hasScratch = scratchSegmentSize != 0;
     if (hasScratch) {
         struct section_64 scratchSection=sectionRecord("__bss","__DATA",
-            scratchVM,programInfo.scratchAllocationByteLength,0,6,0x25);
+            scratchVM,scratchSegmentSize,0,6,0x25);
         [commands addObject:segmentRecord("__DATA",scratchVM,
-            programInfo.scratchAllocationByteLength,0,0,3,3,4,&scratchSection,1)];
+            scratchSegmentSize,0,0,3,3,4,&scratchSection,1)];
     }
     for (NSUInteger i = 0; i < bindings.count; ++i) {
         HWXObjectBinding *binding = bindings[i];

@@ -6,8 +6,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from h16g_validate import (ValidationError, task_stream, validate, validate_resources,
-                           validate_custom_bars, validate_execute)
+from h16g_validate import (ValidationError, dma_extent, fused_attention_program,
+                           layer_norm_program, linear_program, positional_program,
+                           resnet50_program, task_stream, validate, validate_resources,
+                           validate_custom_bars, validate_execute,
+                           whisper_program)
 
 
 def put(data, offset, value, width=4):
@@ -24,7 +27,7 @@ def segment(label, vm, allocation, protection, fields, fileoff=0, filesize=0):
     return result
 
 
-def fixture(*, mixed=False, kernel=False, batch=1):
+def fixture(*, mixed=False, kernel=False, batch=1, dma=False):
     """A tiny legal-shaped object, deliberately unrelated to an Apple program.
 
     Task is a nine-word header and one write to a valid common register.
@@ -34,9 +37,25 @@ def fixture(*, mixed=False, kernel=False, batch=1):
     vm = base + (0x4000 if mixed else 0)
     textvm = vm + 0x8000
     kernvm = textvm + 0x8000
-    # Prologue plus one eleven-word task, ending exactly at its last word.
-    task = struct.pack('<15I', 1, 0, 0, 0, 11 << 16 | 1,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    # Prologue plus one task, ending exactly at its last word.
+    if dma:
+        records = [
+            (4 // 4 | 2 << 15, (2, 1, 1)),
+            (0x4d18 // 4 | 1 << 15, (4, 8)),
+            (0x4d10 // 4 | 1 << 15 | 0x23000000, (0, 0)),
+            (0x14 // 4 | 2 << 15, (2, 1, 1)),
+            (0x5110 // 4 | 1 << 15, (4, 8)),
+            (0x5108 // 4 | 1 << 15 | 0x23800000, (0, 0)),
+        ]
+        words = 9 + sum(1 + len(values) for _, values in records)
+        task = bytearray(struct.pack('<4I9I', 1, 0, 0, 0, words << 16,
+                                     0, 0, 0, 0, 0, 0, 0, 0))
+        for header, values in records:
+            task.extend(struct.pack(f'<{1 + len(values)}I', header, *values))
+        task = bytes(task)
+    else:
+        task = struct.pack('<15I', 1, 0, 0, 0, 11 << 16 | 1,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     commands = []
     if mixed:
         commands.append(segment(b'__DATA', base, 0x4000, 3,
@@ -68,6 +87,9 @@ def fixture(*, mixed=False, kernel=False, batch=1):
                    0x8ac: 8, 0x8b0: 0xf} if mixed else
                   {0x878: 7, 0x87c: 8, 0x880: 0x461c4000, 0x888: 9,
                    0x88c: 8, 0x890: 0xf})
+    if dma:
+        fields[0x860] = 3
+        fields[0x8b0 if mixed else 0x890] = 33
     for off, value in fields.items():
         put(p, off, value)
     for off, value in {0x10: textvm, 0x20: textvm + len(task),
@@ -151,6 +173,91 @@ class ValidationTests(unittest.TestCase):
                         self.assertEqual(result['scratch'], mixed)
                         self.assertFalse(result['owner_fixture'])
 
+    def test_dma_apertures_directions_and_extents(self):
+        raw, _ = fixture(dma=True)
+        self.assertEqual(validate(raw)['dma_extents'], 2)
+        # Task stream starts at 0x4000.  The synthetic source address record
+        # header/value are +80/+84; the result pair is +120/+124.
+        mutations = {
+            'unbound-source-slot': (0x4000 + 80, -0x00800000, True, 'dma-unbound-slot'),
+            'source-on-output': (0x4000 + 80, 0x00800000, True, 'dma-direction'),
+            'source-overrun': (0x4000 + 84, 10, False, 'dma-extent'),
+            'result-on-input': (0x4000 + 120, -0x00800000, True, 'dma-direction'),
+            'result-overrun': (0x4000 + 124, 10, False, 'dma-extent'),
+        }
+        for label, (offset, value, relative, code) in mutations.items():
+            with self.subTest(label=label), self.assertRaisesRegex(ValidationError, code):
+                changed = bytearray(raw)
+                current = struct.unpack_from('<I', changed, offset)[0]
+                put(changed, offset, current + value if relative else value)
+                validate(changed)
+
+    def test_linear_dma_family_recognition_ignores_bar_slot(self):
+        tasks = [
+            dict(registers={0x4904: 0x103c0c},
+                 dma=[dict(address=0x4d10, slot=5)]),
+            dict(registers={0x4904: 0x123c10},
+                 dma=[dict(address=0x5108, slot=6),
+                      dict(address=0x5510, slot=8)]),
+        ]
+        # The old BAR numbers must not evade strict validation.
+        self.assertTrue(linear_program(tasks, 2, 0x10, 0))
+        self.assertFalse(linear_program(tasks, 2, 0x11, 0))
+        self.assertFalse(linear_program(tasks, 2, 0x10, 1))
+        changed = [dict(task, dma=list(task['dma'])) for task in tasks]
+        changed[1]['dma'] = [dict(address=0x5108, slot=6)]
+        self.assertFalse(linear_program(changed, 2, 0x10, 0))
+
+    def test_resnet50_dma_family_is_exact(self):
+        self.assertTrue(resnet50_program(82, 0xa5, 0x4c))
+        self.assertFalse(resnet50_program(81, 0xa5, 0x4c))
+        self.assertFalse(resnet50_program(82, 0xa4, 0x4c))
+        self.assertFalse(resnet50_program(82, 0xa5, 0x4d))
+
+    def test_whisper_dma_family_recognition_ignores_bar_slot(self):
+        stem = [dict(registers={0x28: 0x5002a043, 0x4904: 0x123c10},
+                     dma=[dict(address=0x4d10, slot=5),
+                          dict(address=0x5108, slot=6),
+                          dict(address=0x5510, slot=8)])]
+        self.assertEqual(whisper_program(stem, 1, 0x10, 0), 'whisper-stem')
+        self.assertIsNone(whisper_program(stem, 1, 0x10, 1))
+        transpose = [dict(
+            registers={4: 1500, 0x14: 1500, 0x30: 0x84000},
+            dma=[dict(address=0x4d10, slot=5),
+                 dict(address=0x5108, slot=6)])]
+        self.assertEqual(whisper_program(transpose, 1, 3, 0),
+                         'whisper-transpose')
+        position = [dict(
+            registers={4: 1024, 8: 1024, 0x14: 1024, 0x18: 1024},
+            dma=[dict(address=0x4d10, slot=6),
+                 dict(address=0x4d28, slot=8),
+                 dict(address=0x5108, slot=7)])]
+        self.assertTrue(positional_program(position, 1, 0x10, 0x5c))
+
+    def test_fused_attention_hidden_ping_pong_extent(self):
+        heads, tokens, dimension, padded_row = 6, 1500, 64, 3008
+        score = heads * tokens * padded_row
+        dma = dict(address=0x5108, offset=score)
+        registers = {4: dimension, 12: tokens, 0x24: heads,
+                     0x511c: padded_row * dimension}
+        old_allocation = score + heads * padded_row * dimension
+        target = dict(kind='scratch', size=old_allocation)
+        self.assertTrue(fused_attention_program(17, 35, 791))
+        self.assertEqual(dma_extent(dma, registers, target,
+                                    'fused-attention'), 2 * score)
+        self.assertGreater(2 * score, old_allocation)
+
+    def test_layer_norm_affine_constants_use_kernel_extent(self):
+        tasks = [dict(registers={0x450c: 0x37280000},
+                      dma=[dict(address=0x4d10)]),
+                 *[dict(registers={}, dma=[]) for _ in range(2)],
+                 dict(registers={}, dma=[dict(address=0x4d28)]),
+                 dict(registers={}, dma=[dict(address=0x4d28),
+                                         dict(address=0x5108)])]
+        self.assertTrue(layer_norm_program(tasks, 5, 0x10, 20))
+        self.assertEqual(dma_extent(
+            dict(address=0x4d28, offset=1536), {4: 768},
+            dict(kind='kernel', size=3072), 'layer_norm'), 3072)
     def test_unpadded_final_task(self):
         raw, _ = fixture()
         task = raw[0x4000:0x403c]
