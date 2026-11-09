@@ -2806,6 +2806,12 @@ std::uint32_t floorLog2(std::uint32_t value) {
     return log;
 }
 
+std::uint32_t ceilLog2(std::uint32_t value) {
+    if (!value) return 0;
+    const auto floor = floorLog2(value);
+    return value == (1u << floor) ? floor : floor + 1;
+}
+
 struct ConvGenericPlan {
     ConvKind kind;
     std::uint32_t inputPerTask;      // Common Cin
@@ -2832,12 +2838,11 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     plan.kind = convKind(shape);
     if (plan.kind == ConvKind::Other)
         return "grouped convolutions other than depthwise have no generic form";
-    const bool resnetStem = linkedRing && plan.kind == ConvKind::Dense &&
+    const bool nativeSevenStem = linkedRing && plan.kind == ConvKind::Dense &&
         shape.kernel == 7 && shape.kernelWidth == 7 && shape.stride == 2 &&
-        shape.input.channels == 3 && shape.output.channels == 64 &&
-        shape.input.height == 224 && shape.input.width == 224;
+        shape.input.channels == 3 && shape.output.channels == 64;
     if (shape.kernel != shape.kernelWidth ||
-        (shape.kernel != 1 && shape.kernel != 3 && !resnetStem))
+        (shape.kernel != 1 && shape.kernel != 3 && !nativeSevenStem))
         return "the generic form covers square 1x1 and 3x3 kernels";
     if (shape.stride != 1 && shape.stride != 2)
         return "the generic form covers stride 1 and 2";
@@ -2853,7 +2858,7 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
         return "convolution surfaces must be nonempty";
     const bool nativeStem = linkedRing && shape.stride == 2 &&
         plan.kind == ConvKind::Dense && in.channels == 3 &&
-        ((shape.kernel == 3 && out.channels == 32) || resnetStem);
+        ((shape.kernel == 3 && out.channels == 32) || nativeSevenStem);
     if ((!nativeStem && in.channels % 16) || out.channels % 16)
         return "the generic form needs channel counts that are multiples of 16";
     if (in.width > 4096 || in.height > 16384)
@@ -4498,6 +4503,14 @@ enum class ResidualRole {
     Linear,
 };
 
+ResidualRole residualMainRole(std::size_t count, std::size_t position) {
+    if (count == 2)
+        return position ? ResidualRole::Basic2 : ResidualRole::Basic1;
+    if (position == 0) return ResidualRole::Main1;
+    if (position == 1) return ResidualRole::Main2;
+    return ResidualRole::Main3;
+}
+
 struct ResidualTask {
     ResidualRole role;
     std::uint32_t slice = 0;
@@ -4507,6 +4520,16 @@ struct ResidualTask {
     ConvShape shape{};
     Program encoded;
 };
+
+constexpr std::uint32_t residualSparseKernelConfig() {
+    // NE KernelCfg: fp16 format 2, kernel engine enable and sparse phases.
+    return 2u | (1u << 7) | (1u << 8);
+}
+
+constexpr std::uint32_t residualSparseKernelDMAConfig() {
+    // KernelDMA Cfg: sparse phase-stream mode in the mode field at bit 5.
+    return 3u << 5;
+}
 
 Program residualConvTask(const ResNet50ConvWeights &conv,
                          std::uint32_t first, std::uint32_t count,
@@ -4576,8 +4599,10 @@ Program residualConvTask(const ResNet50ConvWeights &conv,
                     (shape.output.height << 16) | shape.output.width);
         putRegister(task.task, 0, task.firstTaskBytes, 0x00028,
                     shape.output.height);
-        putRegister(task.task, 0, task.firstTaskBytes, 0x0c800, 0x182);
-        putRegister(task.task, 0, task.firstTaskBytes, 0x1f800, 0x60);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x0c800,
+                    residualSparseKernelConfig());
+        putRegister(task.task, 0, task.firstTaskBytes, 0x1f800,
+                    residualSparseKernelDMAConfig());
     } else if (mixedDense) {
         task.constants = packConvDense(static_cast<std::uint32_t>(reduction),
                                       denseChunks, weights, bias, false);
@@ -4593,7 +4618,9 @@ Program residualConvTask(const ResNet50ConvWeights &conv,
         }
         auto cfg = loadLE32(task.task,
             h13RegisterOffset(task.task, 0, task.firstTaskBytes, 0x0001c));
-        const auto ocg = count == 224 ? 4u : floorLog2(denseChunks.front());
+        // OCG encodes the ceiling log2 of the active output-lane group.  A
+        // non-power-of-two tail therefore selects the next hardware class.
+        const auto ocg = ceilLog2(denseChunks.front());
         cfg = (cfg & ~(7u << 10)) | (ocg << 10);
         putRegister(task.task, 0, task.firstTaskBytes, 0x0001c, cfg);
         putRegister(task.task, 0, task.firstTaskBytes, 0x00010, count);
@@ -4601,6 +4628,188 @@ Program residualConvTask(const ResNet50ConvWeights &conv,
     if (relu) fuseConvPostOperation(task, PostOperation::Relu);
     return task;
 }
+
+constexpr std::uint32_t residualChannelConfig(bool hasSecondSource) {
+    // Common ChannelCfg: fp16 source 0, optional fp16 source 1, fp16 result.
+    return 2u | ((hasSecondSource ? 2u : 0u) << 2) | (2u << 4);
+}
+
+constexpr std::uint32_t residualConvolutionConfig(std::uint32_t kernel,
+                                                  std::uint32_t stride) {
+    // Common ConvCfg: Kw, Kh, X/Y stride, fp16 accumulate and PE traversal.
+    return kernel | (kernel << 5) | (stride << 13) | (stride << 15) |
+           (1u << 28) | (1u << 30);
+}
+
+constexpr std::uint32_t residualCommonTraversal() {
+    // Common traversal: one source group, bias lane enabled, row-major tile.
+    return 1u | (1u << 6) | (1u << 13);
+}
+
+constexpr std::uint32_t residualGroupConfig() {
+    // Common GroupCfg: one input group and one output group.
+    return 1u | (1u << 16);
+}
+
+constexpr std::uint32_t residualTileClass(ResidualRole role) {
+    // Common TileClass: four-lane issue plus the PE operation's tile class.
+    const std::uint32_t operationClass = role == ResidualRole::Mean ? 3u : 4u;
+    return 4u | (operationClass << 4);
+}
+
+constexpr std::uint32_t residualPipelineConfig(ResidualRole role) {
+    // Common PipelineCfg: pipeline enable plus pool/add/reduction stage mask.
+    const std::uint32_t stages = role == ResidualRole::Pool ? 2u
+        : role == ResidualRole::Add ? 6u : 10u;
+    return 1u | (stages << 3);
+}
+
+constexpr std::uint32_t residualPEConfig(ResidualRole role) {
+    // PE Cfg: pool opcode 2, or binary-add enable with fused ReLU bit 5.
+    return role == ResidualRole::Pool ? 2u
+        : role == ResidualRole::Add ? (2u << 18) | (1u << 5) : 0u;
+}
+
+constexpr std::uint32_t residualKernelConfig(ResidualRole role) {
+    // NE KernelCfg: base fp16 kernel format plus spatial-reduction enable.
+    return 1u << 7 | (role == ResidualRole::Mean ? 1u << 14 : 0u);
+}
+
+constexpr std::uint32_t residualMacConfig() {
+    // NE MacCfg: one accumulator group; PE-only tasks do not execute a MAC.
+    return 1u << 20;
+}
+
+constexpr std::uint32_t residualHalfOneScale() {
+    // PE scale register: fp16 1.0 in the high halfword lane.
+    return 0x3c00u << 16;
+}
+
+std::uint32_t fp32Word(float value) {
+    static_assert(sizeof(value) == sizeof(std::uint32_t));
+    std::uint32_t word = 0;
+    std::memcpy(&word, &value, sizeof(word));
+    return word;
+}
+
+std::uint32_t residualFinalScale(ResidualRole role, ElementwiseShape input) {
+    if (role != ResidualRole::Mean) return fp32Word(1.0f);
+    const auto elements = static_cast<std::uint64_t>(input.height) *
+                          input.width;
+    if (!elements)
+        throw std::invalid_argument(
+            "h13.residual-shape: mean input has an empty spatial extent");
+    return fp32Word(1.0f / static_cast<float>(elements));
+}
+
+constexpr std::uint32_t residualDisabledDMAConfig() {
+    // TileDMA Cfg: disabled transfer with cache hint 8 in all three nibbles.
+    return (8u << 4) | (8u << 8) | (8u << 12);
+}
+
+constexpr std::uint32_t residualNeutralFormat() {
+    // TileDMA format: neutral fp16 surface class with no layout transform.
+    return 1u << 24;
+}
+
+constexpr std::uint32_t residualSourceRecordTail() {
+    // TileDMA source tail: source-record valid bit.
+    return 1u << 8;
+}
+
+constexpr std::uint32_t residualDestinationDisabledConfig() {
+    // TileDMA destination Cfg: disabled transfer with cache hint 12.
+    return 12u << 4;
+}
+
+constexpr std::uint32_t residualL2ExternalSourceConfig() {
+    // L2 SourceCfg: fp16, external-source traversal, DMA-fed source class.
+    return 2u | (7u << 4) | (1u << 8) | (5u << 20);
+}
+
+constexpr std::uint32_t residualL2ScratchSourceConfig() {
+    // L2 SourceCfg: fp16, scratch traversal, interleave-8 source class.
+    return 2u | (4u << 4) | (8u << 8);
+}
+
+constexpr std::uint32_t residualL2ExternalResultConfig() {
+    // L2 ResultCfg: fp16 result, external traversal and output-DMA class.
+    return 2u | (1u << 3) | (4u << 4) | (1u << 8);
+}
+
+constexpr std::uint32_t residualL2ScratchResultConfig() {
+    // L2 ResultCfg: fp16 result, scratch traversal and interleave-8 class.
+    return 2u | (1u << 3) | (4u << 4) | (8u << 8);
+}
+
+constexpr std::uint32_t residualSourceDMAConfig(bool external) {
+    // TileDMA source Cfg: enable, cache hints, and dependency class 3 or 5.
+    return 1u | ((external ? 8u : 0u) << 4) |
+           ((external ? 8u : 9u) << 8) |
+           (3u << 12) | ((external ? 3u : 5u) << 16);
+}
+
+constexpr std::uint32_t residualSourceFormat(bool external) {
+    // TileDMA source format: fp16 NCHW, layout class 1 or interleave-8.
+    return 1u | (3u << 4) | (2u << 12) |
+           ((external ? 1u : 8u) << 24);
+}
+
+constexpr std::uint32_t residualDestinationDMAConfig(bool external) {
+    // TileDMA destination Cfg: enable, cache hint 12, scratch data-set 3,
+    // and the external/scratch write-path enable at bit 26.
+    return 1u | (12u << 4) | (external ? 0u : 3u << 8) | (1u << 26);
+}
+
+constexpr std::uint32_t residualDestinationFormat(bool external) {
+    // TileDMA destination format: fp16 NCHW, depth-major result layout,
+    // and external class 1 or scratch interleave class 8.
+    return 1u | (3u << 4) | (2u << 12) | (3u << 20) |
+           ((external ? 1u : 8u) << 24);
+}
+
+constexpr std::uint32_t residualSecondSourceDMAConfig() {
+    // TileDMA second-source Cfg: dependency class 1, scratch hint class 9.
+    return (9u << 8) | (3u << 12) | (1u << 16);
+}
+
+constexpr std::uint32_t residualSecondSourceFormat() {
+    // TileDMA second-source format: fp16 with scratch interleave class 8.
+    return 1u | (8u << 24);
+}
+
+constexpr std::uint32_t residualSecondSourceExtension() {
+    // TileDMA second-source extension: fp16 element and NCHW stride class.
+    return (3u << 4) | (2u << 12);
+}
+
+constexpr std::uint32_t residualDebugEvents(bool first, bool last) {
+    // Header debug events: all engine events plus source endpoint events on
+    // the first task and the completion event on the terminal task.
+    std::uint32_t events = (0xfffu << 12) | (1u << 11);
+    if (first) events |= (1u << 3) | (1u << 5) | (1u << 6);
+    if (last) events |= (1u << 1) | (1u << 3) | (1u << 5) | (1u << 6);
+    return events;
+}
+
+constexpr std::uint32_t residualHeaderEvents(bool first, bool last) {
+    // Header event word: compute event, source-DMA event on the first task,
+    // and both terminal completion events on the final task.
+    std::uint32_t events = 1u << 10;
+    if (first) events |= 1u << 3;
+    if (last) events |= (1u << 1) | (1u << 5);
+    return events;
+}
+
+constexpr std::uint32_t residualStemConvFlags() {
+    // Common ConvCfg stem flags: direct sparse input and native phase mode.
+    return (1u << 18) | (1u << 23);
+}
+
+constexpr std::uint32_t kResidualHeaderSrcLoc = 1u << 28;
+constexpr std::uint32_t kResidualHeaderDstLoc = 1u << 29;
+constexpr std::uint32_t kResidualHeaderSPL = 1u << 11;
+constexpr std::uint32_t kResidualTaskBufferEnable = 1u << 23;
 
 Program residualPETask(ResidualRole role, ElementwiseShape input,
                        ElementwiseShape output) {
@@ -4621,35 +4830,35 @@ Program residualPETask(ResidualRole role, ElementwiseShape input,
     std::vector<std::uint32_t> common(16, 0);
     common[0] = (input.height << 16) | input.width;
     common[1] = 1;
-    common[2] = pool || mean ? 0x22 : 0x2a;
+    common[2] = residualChannelConfig(add);
     common[3] = input.channels;
     common[4] = output.channels;
     common[5] = ((mean ? input.height : output.height) << 16) |
                 (mean ? input.width : output.width);
     common[6] = 1;
-    common[7] = pool ? 0x50014063u : 0x5000a021u;
-    common[8] = 0x2041;
-    common[9] = 0x10001;
+    common[7] = residualConvolutionConfig(pool ? 3u : 1u,
+                                          pool ? 2u : 1u);
+    common[8] = residualCommonTraversal();
+    common[9] = residualGroupConfig();
     common[10] = mean ? input.height : output.height;
-    common[11] = pool ? 0x44u : add ? 0x44u : 0x34u;
-    common[13] = pool ? 0x11u : add ? 0x31u : 0x51u;
+    common[11] = residualTileClass(role);
+    common[13] = residualPipelineConfig(role);
     appendRecord(task.task, 0x00000, common);
     std::vector<std::uint32_t> source(28, 0);
-    source[0] = source[1] = 0x8880;
-    source[14] = 0x01000000;
-    source[16] = 0x100;
+    source[0] = source[1] = residualDisabledDMAConfig();
+    source[14] = residualNeutralFormat();
+    source[16] = residualSourceRecordTail();
     appendRecord(task.task, 0x13800, source);
     std::vector<std::uint32_t> l2(18, 0);
     appendRecord(task.task, 0x04800, l2);
     appendRecord(task.task, 0x08800,
-        {pool ? 2u : add ? 0x80020u : 0u,
-         0x3c000000u, 0x3c000000u,
-         mean ? 0x3ca72f05u : 0x3f800000u});
+        {residualPEConfig(role), residualHalfOneScale(),
+         residualHalfOneScale(), residualFinalScale(role, input)});
     appendRecord(task.task, 0x0c800,
-        {mean ? 0x4080u : 0x80u, 0x100000u, 0, 0, 0});
+        {residualKernelConfig(role), residualMacConfig(), 0, 0, 0});
     std::vector<std::uint32_t> destination(7, 0);
-    destination[0] = 0xc0;
-    destination[6] = 0x01000000;
+    destination[0] = residualDestinationDisabledConfig();
+    destination[6] = residualNeutralFormat();
     appendRecord(task.task, 0x17800, destination);
     if (task.task.size() != 504)
         throw std::logic_error("H13 compact PE task is not 504 bytes");
@@ -4701,7 +4910,7 @@ void residualTileSource(std::vector<std::uint8_t> &stream, std::size_t at,
                         std::uint32_t plane, std::uint32_t depth,
                         std::uint32_t format) {
     putRegister(stream, at, bytes, 0x13800, cfg);
-    putRegister(stream, at, bytes, 0x13804, 0x8880);
+    putRegister(stream, at, bytes, 0x13804, residualDisabledDMAConfig());
     putRegister(stream, at, bytes, 0x13808, base);
     putRegister(stream, at, bytes, 0x1380c, row);
     putRegister(stream, at, bytes, 0x13810, plane);
@@ -4711,7 +4920,7 @@ void residualTileSource(std::vector<std::uint8_t> &stream, std::size_t at,
         putRegister(stream, at, bytes, address, 0);
     putRegister(stream, at, bytes, 0x13838, format);
     putRegister(stream, at, bytes, 0x1383c, 0);
-    putRegister(stream, at, bytes, 0x13840, 0x100);
+    putRegister(stream, at, bytes, 0x13840, residualSourceRecordTail());
 }
 
 [[maybe_unused]] void residualTileSecond(std::vector<std::uint8_t> &stream, std::size_t at,
@@ -5052,15 +5261,16 @@ std::uint32_t residualScheduleWord(const ResidualTask &task) {
 void disableResidualSourceDMA(std::vector<std::uint8_t> &stream,
                               std::size_t at, std::size_t bytes) {
     // TileDMA Disabled and neutral format fields.
-    residualTileSource(stream, at, bytes, 0x8880, 0, 0, 0, 0,
-                       0x01000000);
+    residualTileSource(stream, at, bytes, residualDisabledDMAConfig(),
+                       0, 0, 0, 0, residualNeutralFormat());
 }
 
 void disableResidualDestinationDMA(std::vector<std::uint8_t> &stream,
                                    std::size_t at, std::size_t bytes) {
     // TileDMA Disabled and neutral format fields.
-    residualTileDestination(stream, at, bytes, 0xc0, 0, 0, 0, 0,
-                            0x01000000);
+    residualTileDestination(stream, at, bytes,
+                            residualDestinationDisabledConfig(),
+                            0, 0, 0, 0, residualNeutralFormat());
 }
 
 void configureResidualSource(std::vector<std::uint8_t> &stream,
@@ -5075,7 +5285,8 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
     }
     residualL2Source(stream, at, bytes,
                      value.storage == ResidualStorage::External
-                         ? 0x500172u : 0x842u,
+                         ? residualL2ExternalSourceConfig()
+                         : residualL2ScratchSourceConfig(),
                      stage, value.layout.words);
     const bool external = value.storage == ResidualStorage::External;
     const std::uint32_t row = external
@@ -5086,8 +5297,8 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
         ? plane * value.shape.channels
         : plane * ((value.shape.channels + 7) / 8);
     residualTileSource(stream, at, bytes,
-        external ? 0x33881u : 0x53901u, value.scratchOffset,
-        row, plane, depth, external ? 0x01002031u : 0x08002031u);
+        residualSourceDMAConfig(external), value.scratchOffset,
+        row, plane, depth, residualSourceFormat(external));
 }
 
 void configureResidualResult(std::vector<std::uint8_t> &stream,
@@ -5104,7 +5315,8 @@ void configureResidualResult(std::vector<std::uint8_t> &stream,
     }
     residualL2Result(stream, at, bytes,
                      value.storage == ResidualStorage::External
-                         ? 0x14au : 0x84au,
+                         ? residualL2ExternalResultConfig()
+                         : residualL2ScratchResultConfig(),
                      stage, {0, 0, 0, 0});
     const bool external = value.storage == ResidualStorage::External;
     const std::uint32_t row = external
@@ -5114,9 +5326,9 @@ void configureResidualResult(std::vector<std::uint8_t> &stream,
     const std::uint32_t depth = external ? row
         : plane * ((value.shape.channels + 7) / 8);
     residualTileDestination(stream, at, bytes,
-        external ? 0x040000c1u : 0x040003c1u,
+        residualDestinationDMAConfig(external),
         value.scratchOffset, row, plane, depth,
-        external ? 0x01302031u : 0x08302031u);
+        residualDestinationFormat(external));
 }
 
 void configureResidualSecond(std::vector<std::uint8_t> &stream,
@@ -5131,14 +5343,17 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
         align16(16ull * value.shape.width));
     const std::uint32_t plane = row * value.shape.height;
     const std::uint32_t depth = plane * ((value.shape.channels + 7) / 8);
-    putRegister(stream, at, bytes, 0x13804, 0x13900u); // second-source DMA
+    putRegister(stream, at, bytes, 0x13804,
+                residualSecondSourceDMAConfig());
     putRegister(stream, at, bytes, 0x1381c, value.scratchOffset);
     putRegister(stream, at, bytes, 0x13820, row);
     putRegister(stream, at, bytes, 0x13824, plane);
     putRegister(stream, at, bytes, 0x13828, depth);
     putRegister(stream, at, bytes, 0x1382c, depth);
-    putRegister(stream, at, bytes, 0x13838, 0x08000001u);
-    putRegister(stream, at, bytes, 0x1383c, 0x2030u);
+    putRegister(stream, at, bytes, 0x13838,
+                residualSecondSourceFormat());
+    putRegister(stream, at, bytes, 0x1383c,
+                residualSecondSourceExtension());
 }
 
 void routeResidualTask(Program &program, PlannedResidualTask &planned,
@@ -5157,10 +5372,10 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
     // generation-wide SrcLoc, DstLoc, SPL, TSE and TSR bits.
     std::uint32_t control = 0;
     if (planned.route.source.storage != ResidualStorage::Ring)
-        control |= 0x10000000u | 0x800u;
+        control |= kResidualHeaderSrcLoc | kResidualHeaderSPL;
     if (planned.route.result.storage != ResidualStorage::Ring)
-        control |= 0x20000000u | 0x9000u;
-    std::uint32_t selectors = last ? 0u : 1u << 23; // task-buffer enable
+        control |= kResidualHeaderDstLoc | (1u << 15) | (1u << 12);
+    std::uint32_t selectors = last ? 0u : kResidualTaskBufferEnable;
     const auto sourceChannel = planned.route.source.storage ==
             ResidualStorage::External ? 5u : 3u;
     if (planned.route.source.storage != ResidualStorage::Ring)
@@ -5303,11 +5518,7 @@ Program encodeResidualNetwork(
             auto live = ringRanges({&shortcut, &main});
             auto next = allocateResidualValue(output, ring, scratchCursor,
                                               live);
-            const auto role = block.main.size() == 2
-                ? (position ? ResidualRole::Basic2 : ResidualRole::Basic1)
-                : position == 0 ? ResidualRole::Main1
-                : position == 1 ? ResidualRole::Main2
-                                : ResidualRole::Main3;
+            const auto role = residualMainRole(block.main.size(), position);
             emitConv(index, role, main, next,
                      position + 1 != block.main.size(),
                      ringRanges({&shortcut, &main, &next}));
@@ -5415,6 +5626,7 @@ Program encodeResidualNetwork(
     for (std::size_t index = 0; index != planned.size(); ++index) {
         auto &entry = planned[index];
         const auto at = offsets[index];
+        const bool first = index == 0;
         const bool last = index + 1 == planned.size();
         const auto nextBytes = last ? 0
             : planned[index + 1].task.encoded.firstTaskBytes;
@@ -5425,11 +5637,8 @@ Program encodeResidualNetwork(
         storeLE32(program.task, at + 4, residualCost(entry) |
             (last ? 0u :
              (static_cast<std::uint32_t>(nextBytes / 4 - 1) << 16)));
-        storeLE32(program.task, at + 8,
-                  0x400u | (index == 0 ? 8u : 0u) |
-                  (last ? 0x22u : 0u));
-        storeLE32(program.task, at + 16,
-                  last ? 0x00fff86au : index ? 0x00fff800u : 0x00fff868u);
+        storeLE32(program.task, at + 8, residualHeaderEvents(first, last));
+        storeLE32(program.task, at + 16, residualDebugEvents(first, last));
         storeLE32(program.task, at + 28,
                   last ? 0u : static_cast<std::uint32_t>(offsets[index + 1]));
         if (entry.task.role != ResidualRole::Pool &&
@@ -5442,7 +5651,8 @@ Program encodeResidualNetwork(
                     program.task, at, entry.task.encoded.firstTaskBytes,
                     0x0001c);
                 storeLE32(program.task, word,
-                          loadLE32(program.task, word) | 0x00840000u);
+                          loadLE32(program.task, word) |
+                              residualStemConvFlags());
             }
         }
         routeResidualTask(program, entry, at, last);

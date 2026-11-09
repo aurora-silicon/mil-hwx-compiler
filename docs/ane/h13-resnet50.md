@@ -14,6 +14,8 @@ not fit, the same routing constructors emit a bind-sized DRAM spill. No stage,
 block, or layer index selects an address, stride, size, control, or selector
 word. No per-network task table, HWX payload, or constant payload is stored.
 Kernel constants are rebuilt from the supplied licensed MIL blob.
+The global-mean fp32 scale is calculated as `1 / (H * W)` from its input, so
+the same constructor averages 7x7, 6x6, and other valid final surfaces.
 
 For the reference 224 model the result has 80 descriptors, 53,158,912 bytes
 of rebuilt constants, and a 12,058,624-byte spill arena. Channel 5 is the
@@ -25,7 +27,10 @@ the constant byte-difference count against the compiler output made from the
 same MIL and blob. It is a report, never an encoder input or a public table.
 Allocator-chosen L2 bases are allowed to differ. The public unit test rebuilds
 224 and 192 bottleneck networks and a basic-block network with deterministic
-finite fp16 values; all three generated ANECs pass the libane extent check.
+centre-tap fp16 weights. An independent float64 residual reference is executed
+for all three, and every compiled task's input/output geometry, final spatial
+extent, and mean scale are checked before the generated ANECs reach the libane
+extent gate.
 
 `tools/h13-resnet50/kit.py` builds the full package, runs the same bind-overrun
 rule as libane, and can generate deterministic float64 references with

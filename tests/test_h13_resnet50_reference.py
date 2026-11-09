@@ -28,7 +28,10 @@ def main():
                for x in range(2)] for y in range(2)]]
     assert module.reduce_mean_python(fused) == [15.0]
     model = os.environ.get('MILHWXC_RESNET50_MODEL')
-    if model and module.np is not None:
+    if model:
+        if module.np is None:
+            raise RuntimeError(
+                'MILHWXC_RESNET50_MODEL is set, but NumPy is unavailable')
         sample = module.np.zeros((3, 224, 224), dtype=module.np.float16)
         logits, prefixes = module.evaluate(Path(model), sample)
         assert logits.shape == (1000,)
@@ -37,6 +40,9 @@ def main():
         assert prefixes[8].shape == (1024, 14, 14)
         assert prefixes[14].shape == (2048, 7, 7)
         assert module.np.isfinite(logits).all()
+        print('real MIL prefixes:', prefixes[1].shape, prefixes[4].shape,
+              prefixes[8].shape, prefixes[14].shape,
+              'finite logits:', bool(module.np.isfinite(logits).all()))
     print('H13 ResNet-50 float64 reference: TF-SAME stride-2 padding PASS')
 
 
