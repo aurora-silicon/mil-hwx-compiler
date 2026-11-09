@@ -3986,6 +3986,62 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
             layout->push_back(item);
         }
     }
+
+    // `encodeConvGeneric` sizes the boundary layouts from their logical
+    // NCHW strides.  The native MobileNet task forms can advertise a larger
+    // source/destination transfer window in TileDMA: the stride-2 stem, for
+    // example, keeps the external [3,224,224] descriptor but programs a
+    // 917504-byte source extent.  libane deliberately treats 0x13814/18 and
+    // 0x17810/14 as conservative BO bounds and refuses an ANEC whose tiles[]
+    // allocation is smaller.  Grow only the header allocations to cover the
+    // live boundary selectors; the NCHW layout and every device-visible task
+    // word remain unchanged.
+    const auto growChannel = [&](std::uint32_t channel,
+                                 std::uint64_t extent) {
+        if (program.output.index == channel)
+            program.output.allocationBytes = std::max(
+                program.output.allocationBytes, extent);
+        for (auto &input : program.inputs)
+            if (input.index == channel)
+                input.allocationBytes = std::max(input.allocationBytes,
+                                                 extent);
+    };
+    const auto boundChannel = [&](std::uint32_t channel) {
+        if (channel < 4) return channel;
+        const auto role = std::find(program.taskSurfaceChannels.begin(),
+                                    program.taskSurfaceChannels.end(),
+                                    channel);
+        if (role == program.taskSurfaceChannels.end())
+            throw std::logic_error(
+                "h13.linked-ring: task selects an undeclared surface");
+        return static_cast<std::uint32_t>(
+            4 + (role - program.taskSurfaceChannels.begin()));
+    };
+    for (const auto &span : spans) {
+        const auto selectors = loadLE32(program.task, span.offset + 32);
+        const auto sourceChannel = boundChannel(selectors & 31u);
+        const auto resultChannel = boundChannel((selectors >> 12) & 31u);
+        if (sourceChannel >= 4 &&
+            loadLE32(program.task, h13RegisterOffset(
+                program.task, span.offset, span.bytes, 0x13800)) != 0x8880u) {
+            const auto sourceExtent = std::max(
+                loadLE32(program.task, h13RegisterOffset(
+                    program.task, span.offset, span.bytes, 0x13814)),
+                loadLE32(program.task, h13RegisterOffset(
+                    program.task, span.offset, span.bytes, 0x13818)));
+            growChannel(sourceChannel, sourceExtent);
+        }
+        if (resultChannel >= 4 &&
+            loadLE32(program.task, h13RegisterOffset(
+                program.task, span.offset, span.bytes, 0x17800)) != 0x8880u) {
+            const auto resultExtent = std::max(
+                loadLE32(program.task, h13RegisterOffset(
+                    program.task, span.offset, span.bytes, 0x17810)),
+                loadLE32(program.task, h13RegisterOffset(
+                    program.task, span.offset, span.bytes, 0x17814)));
+            growChannel(resultChannel, resultExtent);
+        }
+    }
     return program;
 }
 

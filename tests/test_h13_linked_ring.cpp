@@ -69,6 +69,12 @@ int main() {
     const auto ring = linkMobileNetRing(layers, &layout);
     assert(ring.taskCount == 28 && layout.size() == 28);
     assert(ring.scratchAllocationBytes == 0x284000);
+    // Native task DMA extents are conservative hardware windows, larger
+    // than the external NCHW physical spans.  The ANEC tiles[] allocations
+    // must satisfy libane's bind-overrun check without changing those task
+    // words or the NCHW strides.
+    assert(ring.inputs[0].allocationBytes == 458752);
+    assert(ring.output.allocationBytes == 458752);
     assert(layout[0].l2ResultBytes == 808192);
     assert(layout[1].writesScratch && layout[2].readsScratch);
     assert(layout[2].l2Result == 0 && layout[2].l2ResultBytes == 1609216);

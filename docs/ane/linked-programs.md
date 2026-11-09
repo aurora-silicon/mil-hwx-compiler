@@ -364,6 +364,17 @@ All later edges stay resident.  SourceCfg, ResultCfg, DMA dependency/cache
 hints, row-bank skews and placements are selected from geometry and edge
 role; no captured task stream is embedded in the implementation.
 
+The native tasks' TileDMA size words describe conservative hardware transfer
+windows, not just the logical external NCHW span.  For example, the stem keeps
+Apple's `[1,3,224,224]` plane/row strides (`100352`/`448`) while its source
+size words advertise `917504` bytes.  The private converted Apple container
+allocates only the NCHW span and therefore also trips libane's generic
+`ane_bind_overrun` rule.  `linked-ring` preserves the decoded task words and
+NCHW strides, but rounds the ANEC channel allocation up to the largest live
+source/destination size word.  This is intentionally a harmless larger BO;
+the 34-program kit generator runs the host port of `ane_bind_overrun` before
+declaring the kit complete.
+
 Build the standard unmirrored network and its ANECOMP device ladder with:
 
 ```sh

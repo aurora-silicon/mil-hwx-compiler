@@ -18,8 +18,10 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent.parent / 'tests'))
 import mobilenet as M  # noqa: E402
 from chain import chain_ref, compile_chain, conv_mil, save_params  # noqa: E402
+import libane_overrun  # noqa: E402
 
 
 def refs(case, layers, params, inshape, count):
@@ -55,6 +57,22 @@ def single(root, name, layer, param, inshape, count, milc):
     refs(case, [layer], [param], inshape, count)
 
 
+def verify_bind_allocations(root):
+    """Apply libane's ane_bind_overrun rule to every program in the kit."""
+    programs = sorted(root.rglob('*.anec'))
+    if len(programs) != 34:
+        raise RuntimeError(f'expected 34 linked-ring ANEC programs, found {len(programs)}')
+    failures = []
+    for program in programs:
+        for channel, need, have in libane_overrun.overruns(program.read_bytes()):
+            failures.append(
+                f'{program.relative_to(root)}: channel {channel} needs '
+                f'{need} bytes but is allocated {have}')
+    if failures:
+        raise RuntimeError('libane bind overrun:\n' + '\n'.join(failures))
+    return len(programs)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out')
@@ -87,6 +105,8 @@ def main():
         single(out, f'dw-k3-s2-{spatial}', layers[index], params[index],
                (layers[index]['g'], spatial, spatial), args.refs, milc)
 
+    checked = verify_bind_allocations(out)
+
     manifest = {
         'schedule': 'linked-ring', 'target': 'H13', 'tasks': 28,
         'cases': ['singles/dw-k3-s2-14', 'singles/dw-k3-s2-28',
@@ -94,6 +114,7 @@ def main():
                   'singles/stem-k3-s2-224',
                   'prefixes/p01..p28', 'full'],
         'reference': 'float64 convolution with fp16 ties-away at every edge',
+        'libaneBindOverrunProgramsChecked': checked,
     }
     (out / 'kit.json').write_text(json.dumps(manifest, indent=2) + '\n')
     shutil.copy2(HERE / 'device-kit-ring' / 'run.sh', out / 'run.sh')

@@ -8,6 +8,8 @@ MILC=build/mil-hwxc python3 tools/h13-mobilenet/ring_kit.py out/h13-ring
 
 The output contains five native stride-2 single-task cases, all 28 prefixes,
 the full native-frame MobileNet program, and deterministic float64 references.
+Generation fails unless all 34 ANEC files pass the same TileDMA extent versus
+channel-allocation check used by libane's `ane_bind_overrun`.
 The runner starts with the smallest depthwise case and grows through the stem
 before attempting prefixes and the full network.
 Copy it with `tools/h13-mobilenet` and a libane-built `anechain` to the M1 Pro,
