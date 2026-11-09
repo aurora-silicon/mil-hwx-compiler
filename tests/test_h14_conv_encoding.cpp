@@ -77,6 +77,30 @@ static Program conv(unsigned ci, unsigned co, unsigned h, unsigned k=1,
     for (std::size_t i=0;i<w.size();i+=2) { w[i]=i%251;w[i+1]=0x34; }
     return encodeConvGeneric(s,w.data(),w.size(),b.data(),b.size());
 }
+static Program ringConv(unsigned ci, unsigned co, unsigned h, unsigned k,
+                        unsigned stride, bool dw) {
+    ConvShape s{k,k,stride,dw?ci:1,true,{ci,h,h},
+                {co,(h+stride-1)/stride,(h+stride-1)/stride}};
+    std::vector<std::uint8_t> w(co*(dw?1:ci)*k*k*2), b(co*2);
+    for (std::size_t i=0;i<w.size();i+=2) { w[i]=1+(i/2)%251;w[i+1]=0x34; }
+    return encodeConvLinkedRing(s,w.data(),w.size(),b.data(),b.size());
+}
+static std::vector<Program> mobile(unsigned input) {
+    static const unsigned co[] = {32,32,64,64,128,128,128,128,256,256,256,256,
+        512,512,512,512,512,512,512,512,512,512,512,512,1024,1024,1024,1024};
+    static const unsigned stride[] = {2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,
+        1,1,1,1,2,1,1,1,1};
+    std::vector<Program> layers;
+    unsigned ci=3,h=input;
+    for(unsigned i=0;i<28;++i) {
+        const bool dw=i&&i!=27&&(i&1);
+        const auto k=(i==0||dw)?3u:1u;
+        layers.push_back(ringConv(ci,co[i],h,k,stride[i],dw));
+        if(i!=27) fuseConvRelu(layers.back());
+        ci=co[i]; h=(h+stride[i]-1)/stride[i];
+    }
+    return layers;
+}
 int main() {
     std::vector<Program> layers{conv(64,128,16),conv(128,128,16,3,1,true),
                                 conv(128,256,16,1,2),conv(256,512,8)};
@@ -215,5 +239,57 @@ int main() {
     assert(!convGenericRefusal(invalid).empty());
     invalid={1,1,2,1,false,{64,16,16},{144,8,8}};
     assert(!convGenericRefusal(invalid).empty());
+    {
+        const auto native=mobile(224);
+        std::vector<LinkedLayer> ringLayout;
+        const auto ring=linkMobileNetRing(native,&ringLayout);
+        assert(ring.taskCount==28 && ringLayout.size()==28);
+        assert(ring.scratchAllocationBytes==0x284000);
+        assert(ringLayout[1].writesScratch && ringLayout[2].readsScratch);
+        assert(ringLayout[2].l2Result==0);
+        assert(ringLayout[2].l2ResultBytes==1609216);
+        assert(ringLayout[2].l2ResultBytes+467712==2076928);
+        assert(ring.constants.size()==8506368);
+        const auto sizes=taskSizes(ring.taskStream);
+        assert(*std::min_element(sizes.begin(),sizes.end())>=312);
+        assert(*std::max_element(sizes.begin(),sizes.end())<=384);
+        std::size_t at=16, constant=0;
+        for(unsigned i=0;i<28;++i) {
+            assert(reg(ring,at,0x2c)==native[i].mobileRingShape.output.height);
+            assert(reg(ring,at,0x1908)==constant);
+            assert(bar(ring,at,0x1908)==1);
+            assert(((reg(ring,at,0x1900)>>16)&255)==i+1);
+            assert(((reg(ring,at,0x1918)>>16)&255)==i);
+            const auto expectedSource=i==0?0x500172u:i==2?0x842u:
+                (i>=10||i==7)?0x104u:0x120u;
+            if(reg(ring,at,0x504)!=expectedSource)
+                std::cerr << "native ring source role mismatch at " << i
+                          << ": 0x" << std::hex << reg(ring,at,0x504)
+                          << " != 0x" << expectedSource << std::dec << "\n";
+            assert(reg(ring,at,0x504)==expectedSource);
+            if(i>2 && i<27) {
+                for(unsigned a=0x1100;a<0x1500;a+=4) assert(!hasReg(ring,at,a));
+                assert(!hasReg(ring,at,0x1500));
+            }
+            constant+=native[i].constants.size();
+            at=(at+sizes[i]+15)&~std::size_t(15);
+        }
+        assert(constant==ring.constants.size());
+        const auto bytes=encodeANEC(ring);
+        assert(word(bytes,0x28+3*4)*tileBytes==ring.scratchAllocationBytes);
+        assert(word(bytes,0x28+4*4)*tileBytes>=ring.output.allocationBytes);
+        assert(word(bytes,0x28+5*4)*tileBytes>=ring.inputs[0].allocationBytes);
+
+        // Same rules, allocator and record builder must cover another frame.
+        const auto smallerLayers=mobile(192);
+        const auto smaller=linkMobileNetRing(smallerLayers);
+        assert(smaller.taskCount==28);
+        assert(reg(smaller,16,0x2c)==96);
+        std::size_t bridge=16;
+        const auto smallerSizes=taskSizes(smaller.taskStream);
+        bridge=(bridge+smallerSizes[0]+15)&~std::size_t(15);
+        bridge=(bridge+smallerSizes[1]+15)&~std::size_t(15);
+        assert(reg(smaller,bridge,0x50c)==192); // no 224-only 64px narrowing
+    }
     std::cout << "H14 formula/linked encoding: PASS\n";
 }

@@ -28,8 +28,9 @@ def main():
     args = ap.parse_args()
     package = args.package.resolve()
     manifest = json.loads((package / 'linked/manifest.json').read_text())
-    if manifest['target'] != 'H14' or manifest['schedule'] != 'linked' or len(manifest['programs']) != 1:
-        raise SystemExit('requires one linked H14 program')
+    if (manifest['target'] != 'H14' or manifest['schedule'] != 'linked-ring' or
+            len(manifest['programs']) != 1):
+        raise SystemExit('requires one H14 linked-ring program')
     if len({t['layer'] for t in manifest.get('tasks', [])}) != 28:
         raise SystemExit('runner requires the 28-layer ANE-head package')
     p = manifest['programs'][0]
@@ -48,6 +49,8 @@ def main():
         y = linked.astype(np.float64)
         agreement = None
         if args.compare_perop:
+            if not (package / 'perop/manifest.json').exists():
+                raise SystemExit('--compare-perop needs an explicitly built per-op package')
             perop = json.loads((package / 'perop/manifest.json').read_text())
             data = inp.read_bytes()
             last = None

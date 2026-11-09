@@ -365,6 +365,8 @@ $(BUILD)/test_h14_conv_encoding: tests/test_h14_conv_encoding.cpp plugins/H14/H1
 test-h14-conv: $(BUILD)/test_h14_conv_encoding $(BUILD)/mil-hwxc
 	$(BUILD)/test_h14_conv_encoding
 	python3 tests/test_h14_conv_cli.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_linked_ring.py $(BUILD)/mil-hwxc
+	python3 tests/test_h14_ring_kit_bind.py $(BUILD)/mil-hwxc
 
 # Every H14 parity run also exercises the formula encoder and linked emitter.
 test-h14-parity: test-h14-conv

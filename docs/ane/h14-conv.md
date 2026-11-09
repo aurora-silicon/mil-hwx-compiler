@@ -1,8 +1,10 @@
-# H14 formula-built convolution and linked DRAM schedules
+# H14 formula-built convolution, DRAM chains, and native ring
 
-`--target H14 --schedule linked` accepts a straight chain of dense and
-depthwise convolutions, with optional ReLU or finite fp16 clip after each convolution. The
-MobileNetV1 graph and preprocessing are the same as
+`--target H14 --schedule linked` accepts a straight DRAM chain of dense and
+depthwise convolutions. `--schedule linked-ring` accepts the native-frame
+MobileNetV1 chain and applies the 2 MiB circular L2 policy. Both accept an
+optional ReLU or finite fp16 clip after each convolution. The MobileNetV1
+graph and preprocessing are the same as
 [the H13 package](../../tools/h13-mobilenet/README.md). Device execution and
 accuracy on the base M2 remain a lead-side qualification step.
 
@@ -99,6 +101,30 @@ binds an explicit port table: BAR 4 → input buffer 5, BAR 5 → output buffer
 scratch-size inference, which uses the final output size and is insufficient
 for a MobileNet arena containing much larger early intermediates.
 
+## Rule-built native ring
+
+The native ring path is separate from the decoded-template parity and generic
+paths. A layer retains geometry, its 16 coefficient-lane extents, and its
+fused activation until the whole chain is known. The allocator then derives
+source/result roles, L2 bases, 64 KiB live-bank masks, TileDMA presence, BAR
+routing, task tags, and per-task coefficient addends. It emits packed records
+directly; it does not read `H14ConvTemplates.inc` or embed a captured prefix.
+
+At 224 pixels, the first depthwise result is the sole interleave-8 scratch
+spill. The following pointwise layer narrows its staged source to the widest
+16-byte-aligned channel stride that fits beside the whole resident result:
+467,712 + 1,609,216 = 2,076,928 bytes. Later placements advance around the
+2 MiB ring and preserve the live input. The same fit loop compiles a synthetic
+192-pixel network without another geometry case; its bridge input fits at full
+width.
+
+Resident tasks omit source and destination TileDMA records. Program input,
+scratch read, scratch write and final output are emitted from their roles;
+coefficient BAR addends are the accumulated packed-section sizes. The public
+tests compare these semantic fields and run a BAR-based port of libane's
+bind-overrun walk. A private, uncommitted gate compares all decoded role words
+and constant bytes with the retained H14 MobileNet artifact.
+
 ## Envelope and verification limits
 
 Formula-built convolutions emit ANEC. HWX remains available for the existing
@@ -133,6 +159,7 @@ make test-h13 test-h13-parity test-h14-parity
 # Portable encoding checks on Linux, without Foundation/GNUstep:
 make CXX=clang++ test-h14-conv-portable
 PYTHON=python3 tools/h14-mobilenet/package.sh build/mobilenet-h14
+PYTHON=python3 tools/h14-mobilenet/ring_kit.py build/mobilenet-h14-kit
 ```
 
 See [the lead-side runner instructions](../../tools/h14-mobilenet/README.md).

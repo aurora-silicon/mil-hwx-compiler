@@ -292,6 +292,12 @@ Program encodeConvGeneric(ConvShape s, const std::uint8_t *weights,
 
 void fuseConvRelu(Program &p) {
     if (!p.formulaBuilt) throw std::invalid_argument("H14 relu fusion requires formula-built conv");
+    if (p.mobileRingRuleBuilt) {
+        if (p.mobileRingActivation)
+            throw std::invalid_argument("H14 native ring convolution already has a post-operation");
+        p.mobileRingActivation = 1;
+        return;
+    }
     for (std::uint32_t i = 0; i < p.taskCount; ++i) {
         const auto span = h14TaskSpan(p.taskStream, i);
         const auto at = h14RegisterOffset(p.taskStream, span.first, span.second, 0xd04);
@@ -381,6 +387,34 @@ void fuseConvClip(Program &p, std::uint16_t lower, std::uint16_t upper) {
             "h14.conv-clip-outside-envelope: clip fusion requires a "
             "formula-built convolution");
     const auto descriptor = clipBoundsDescriptor(lower, upper);
+    if (p.mobileRingRuleBuilt) {
+        if (p.mobileRingActivation)
+            throw std::invalid_argument(
+                "h14.conv-clip-outside-envelope: native ring convolution "
+                "already has a post-operation");
+        std::vector<std::uint8_t> constants;
+        for (std::size_t lane = 0; lane != 16; ++lane) {
+            const std::size_t offset = p.mobileRingKernelOffsets[lane];
+            const std::size_t size = p.mobileRingKernelSizes[lane];
+            if (offset + size > p.constants.size())
+                throw std::logic_error(
+                    "H14 native ring coefficient lane exceeds its section");
+            p.mobileRingKernelOffsets[lane] =
+                static_cast<std::uint32_t>(constants.size());
+            constants.insert(constants.end(), descriptor.begin(),
+                             descriptor.end());
+            constants.insert(constants.end(),
+                p.constants.begin() + static_cast<std::ptrdiff_t>(offset),
+                p.constants.begin() + static_cast<std::ptrdiff_t>(offset + size));
+            p.mobileRingKernelSizes[lane] =
+                static_cast<std::uint32_t>(size + descriptor.size());
+        }
+        p.constants = std::move(constants);
+        p.mobileRingActivation = 2;
+        p.mobileRingClipLower = lower;
+        p.mobileRingClipUpper = upper;
+        return;
+    }
     std::vector<std::vector<std::uint8_t>> tasks;
     tasks.reserve(p.taskCount);
     for (std::uint32_t index = 0; index != p.taskCount; ++index) {
@@ -648,5 +682,637 @@ Program linkConvChain(const std::vector<Program> &layers,
     if (result.taskCount > 0xffff || result.constants.size() > UINT32_MAX)
         throw std::invalid_argument("h14.linked-outside-envelope: task or constant limit exceeded");
     result.constantOffsetBytes = alignUp(result.taskStream.size(), 64);
+    return result;
+}
+
+namespace {
+
+constexpr std::uint64_t kMobileL2Bytes = 2ull * 1024 * 1024;
+constexpr std::uint64_t kMobileL2BankBytes = 64ull * 1024;
+
+std::uint64_t align16(std::uint64_t value) {
+    return (value + 15) & ~std::uint64_t(15);
+}
+
+bool mobileOverlap(std::uint64_t left, std::uint64_t leftBytes,
+                   std::uint64_t right, std::uint64_t rightBytes) {
+    if (leftBytes + rightBytes > kMobileL2Bytes) return true;
+    for (const auto l : {left % kMobileL2Bytes,
+                         left % kMobileL2Bytes + kMobileL2Bytes})
+        for (const auto r : {right % kMobileL2Bytes,
+                             right % kMobileL2Bytes + kMobileL2Bytes})
+            if (l < r + rightBytes && r < l + leftBytes) return true;
+    return false;
+}
+
+std::uint32_t mobileSkew(const ConvShape &shape) {
+    const auto width = shape.input.width;
+    if (width >= 64) return shape.stride == 2 ? 0x20u : 0x30u;
+    if (width >= 32)
+        return shape.input.channels <= 64 ? 0x80u : 0x30u;
+    if (width >= 16) return shape.stride == 2 ? 0x40u : 0x50u;
+    if (width >= 8) return shape.stride == 2 ? 0x20u : 0x30u;
+    return 0x30u;
+}
+
+struct MobileGeometry {
+    ConvShape shape{};
+    bool depthwise = false;
+    std::uint32_t sourceChannel = 0;
+    std::uint32_t sourceRow = 0;
+    std::uint64_t sourceSpan = 0;
+};
+
+std::uint32_t mobileCommonClass(const MobileGeometry &g) {
+    const auto width = g.shape.output.width;
+    std::uint32_t ceilLog = 0;
+    for (auto value = width - 1; value; value >>= 1) ++ceilLog;
+    const auto stage = ceilLog >= 7 ? 0u : 7u - ceilLog;
+    if (!stage)
+        return 0x00230001u |
+            ((!g.depthwise && g.shape.kernel == 1) ? 0x00001100u : 0u);
+    if (stage == 1)
+        return g.shape.stride == 2 ? 0x00211101u : 0x00243301u;
+    const auto repeated = std::min(stage, 4u);
+    return 0x00200001u | (repeated << 16) | (repeated << 12) |
+        (repeated << 8) | (repeated == 4 ? 4u : 0u);
+}
+
+std::uint32_t mobileCost(const MobileGeometry &g, bool terminal) {
+    const auto width = g.shape.input.width;
+    if (g.shape.input.channels == 3 && g.shape.output.channels == 32)
+        return 8;
+    if (g.depthwise) {
+        if (g.shape.stride == 2) return std::max(1u, width / 8);
+        if (width >= 64) return 0x17;
+        if (width >= 32) return 9;
+        if (width >= 16) return 3;
+        if (width >= 8) return 1;
+        return 2;
+    }
+    const bool expands = g.shape.output.channels > g.shape.input.channels;
+    if (expands) {
+        if (width >= 64) return 0x17;
+        if (width >= 32) return 3;
+        if (width >= 16) return 3;
+        if (width >= 8) return 7;
+        return 0x1e;
+    }
+    if (width >= 32) return 6;
+    if (width >= 16) return 7;
+    if (width >= 8) return 0xf;
+    return terminal ? 0x4a : 0x3d;
+}
+
+void appendHalf(std::vector<std::uint8_t> &out, const std::uint8_t *value) {
+    out.push_back(value[0]);
+    out.push_back(value[1]);
+}
+
+bool nonzeroHalf(const std::uint8_t *value) {
+    return value[0] || (value[1] & 0x7f);
+}
+
+using MobilePick = std::pair<unsigned, unsigned>;
+
+std::vector<MobilePick> mobilePicks(bool wide, unsigned row,
+                                    unsigned mask) {
+    if (!wide) {
+        if (row == 0 && mask == 0)
+            return {{0, 0}, {2, 2}, {4, 6}, {6, 8}};
+        if (row == 0) return {{0, 1}, {4, 7}};
+        if (mask == 0) return {{0, 3}, {2, 5}};
+        return {{0, 4}};
+    }
+    if (row == 0 && mask == 0) return {{0, 0}, {4, 2}};
+    if (row == 0) return {{0, 6}, {4, 8}};
+    if (row == 1 && mask == 0) return {{0, 1}};
+    if (row == 1) return {{0, 7}};
+    if (row == 2 && mask == 0) return {{0, 3}, {4, 5}};
+    if (row == 3 && mask == 0) return {{0, 4}};
+    return {};
+}
+
+template <class Weight>
+void appendMobileSparsePlane(std::vector<std::uint8_t> &out, bool wide,
+                             unsigned repeats, unsigned lanes,
+                             Weight weight) {
+    const auto start = out.size();
+    out.insert(out.end(), 3, 0); // u16 body length and structural zero
+    const unsigned rows = wide ? 4 : 2;
+    for (unsigned repeat = 0; repeat != repeats; ++repeat) {
+        for (unsigned row = 0; row != rows; ++row) {
+            std::array<std::uint8_t, 2> masks{};
+            std::array<std::vector<std::uint8_t>, 2> values;
+            for (unsigned which = 0; which != 2; ++which) {
+                for (const auto &[bit, tap] : mobilePicks(wide, row, which)) {
+                    for (unsigned lane = 0; lane != lanes; ++lane) {
+                        const auto *value = weight(repeat, lane, tap);
+                        if (!nonzeroHalf(value)) continue;
+                        masks[which] |= static_cast<std::uint8_t>(1u << (bit + lane));
+                        appendHalf(values[which], value);
+                    }
+                }
+            }
+            // H14's phase grammar places both masks before either payload.
+            out.push_back(masks[0]);
+            out.push_back(masks[1]);
+            out.insert(out.end(), values[0].begin(), values[0].end());
+            out.insert(out.end(), values[1].begin(), values[1].end());
+        }
+    }
+    const auto body = out.size() - start - 3;
+    if (body > 0xffff)
+        throw std::invalid_argument(
+            "H14 native stride-2 sparse plane exceeds its 16-bit length");
+    out[start] = static_cast<std::uint8_t>(body);
+    out[start + 1] = static_cast<std::uint8_t>(body >> 8);
+}
+
+std::vector<std::uint8_t> packMobileSparse(
+        const ConvShape &shape, const std::uint8_t *weights,
+        const std::uint8_t *bias, std::array<std::uint32_t, 16> &offsets,
+        std::array<std::uint32_t, 16> &sizes) {
+    const bool dw = depthwise(shape);
+    const bool stem = shape.groups == 1 && shape.input.channels == 3 &&
+        shape.output.channels == 32;
+    if (shape.kernel != 3 || shape.kernelWidth != 3 || shape.stride != 2 ||
+        (!dw && !stem))
+        throw std::invalid_argument(
+            "H14 native sparse packing covers a MobileNet stem or depthwise s2");
+    std::vector<std::uint8_t> packed;
+    for (unsigned chunk = 0; chunk != 16; ++chunk) {
+        const auto start = packed.size();
+        offsets[chunk] = static_cast<std::uint32_t>(start);
+        if (dw) {
+            const auto perChunk = shape.input.channels / 16;
+            for (unsigned channel = chunk; channel < shape.input.channels;
+                 channel += 16) {
+                if (bias) appendHalf(packed, bias + 2 * channel);
+                appendMobileSparsePlane(packed, perChunk >= 32, 1, 1,
+                    [&](unsigned, unsigned, unsigned tap) {
+                        return weights + 2 *
+                            (static_cast<std::size_t>(channel) * 9 + tap);
+                    });
+            }
+        } else {
+            const auto output = 2 * chunk;
+            if (bias) {
+                appendHalf(packed, bias + 2 * output);
+                appendHalf(packed, bias + 2 * (output + 1));
+            }
+            appendMobileSparsePlane(packed, false, shape.input.channels, 2,
+                [&](unsigned input, unsigned lane, unsigned tap) {
+                    return weights + 2 *
+                        ((static_cast<std::size_t>(output + lane) *
+                          shape.input.channels + input) * 9 + tap);
+                });
+        }
+        packed.resize(static_cast<std::size_t>(alignUp(packed.size(), 64)), 0);
+        sizes[chunk] = static_cast<std::uint32_t>(packed.size() - start);
+    }
+    return packed;
+}
+
+void ringScatter(std::vector<std::uint8_t> &task,
+                 const std::vector<std::pair<std::uint32_t,
+                                             std::uint32_t>> &words) {
+    if (words.empty()) return;
+    const auto base = words.front().first;
+    if (base % 4) throw std::logic_error("H14 ring register is not aligned");
+    std::uint32_t mask = 0;
+    for (std::size_t i = 1; i != words.size(); ++i) {
+        const auto bit = words[i].first / 4 - base / 4 - 1;
+        if (bit >= 16) throw std::logic_error("H14 ring scatter span is too wide");
+        mask |= 1u << bit;
+    }
+    appendLE(task, 0x80000000u | (mask << 15) | (base / 4), 4);
+    for (const auto &word : words) appendLE(task, word.second, 4);
+}
+
+void ringDense(std::vector<std::uint8_t> &task, std::uint32_t address,
+               const std::vector<std::uint32_t> &words,
+               int barSlot = -1) {
+    if (words.empty() || words.size() > 64 || address % 4)
+        throw std::logic_error("invalid H14 ring dense record");
+    auto header = static_cast<std::uint32_t>(address / 4) |
+        (static_cast<std::uint32_t>(words.size() - 1) << 15);
+    if (barSlot >= 0)
+        header |= 1u << 29 | static_cast<std::uint32_t>(barSlot) << 23;
+    appendLE(task, header, 4);
+    for (const auto word : words) appendLE(task, word, 4);
+}
+
+std::uint32_t liveBanks(std::uint64_t base, std::uint64_t bytes) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t bank = 0; bank != 32; ++bank)
+        if (mobileOverlap(base, bytes,
+                          static_cast<std::uint64_t>(bank) * kMobileL2BankBytes,
+                          kMobileL2BankBytes))
+            mask |= 1u << bank;
+    return mask;
+}
+
+std::uint32_t denseLanes(const ConvShape &shape) {
+    auto cap = std::max(shape.input.height, shape.input.width) <= 8 ? 32u : 16u;
+    auto lanes = cap;
+    while (lanes > shape.output.channels / 16) lanes /= 2;
+    return std::max(1u, lanes);
+}
+
+std::vector<std::uint8_t> mobileTask(
+        const Program &layer, const MobileGeometry &g, std::uint32_t index,
+        bool first, bool last, bool readsScratch, bool writesScratch,
+        bool inputResident, bool outputResident, std::uint32_t sourceCfg,
+        std::uint64_t sourceBase, std::uint64_t sourceSpan,
+        std::uint32_t resultCfg, std::uint64_t resultBase,
+        std::uint64_t resultSpan, std::uint32_t resultChannel,
+        std::uint32_t resultRow, std::uint64_t spillBytes,
+        std::uint64_t coefficientBase) {
+    std::vector<std::uint8_t> task(32, 0);
+    const bool sparse = g.shape.kernel == 3 && g.shape.stride == 2;
+    const auto mac = 0x00101c10u |
+        (layer.mobileRingActivation == 1 ? 0x00010000u : 0u) |
+        (layer.mobileRingActivation == 2 ? 0x00020000u : 0u);
+
+    storeLE32(task, 4, mobileCost(g, last));
+    storeLE32(task, 8, (first ? 8u : 0u) | (last ? 0x22u : 0u));
+    storeLE32(task, 16, (first || last) ? 0x00fff868u : 0x00fff800u);
+    std::uint32_t banks = 0;
+    if (inputResident && !last) banks |= liveBanks(sourceBase, sourceSpan);
+    if (outputResident) banks |= liveBanks(resultBase, resultSpan);
+    storeLE32(task, 24, banks);
+    storeLE32(task, 28, 0x00050001u);
+
+    // Coefficient DMA is emitted first so the BAR relocation is a later,
+    // last-write-wins record.  Its tag and addend come solely from stream
+    // position and the concatenated coefficient allocator.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> kernel = {
+        {0x1900, ((index + 1) << 16) | 0x240u |
+                  (sparse ? 0x20u : 0u) | (last ? 0x80u : 0u)},
+    };
+    for (unsigned lane = 0; lane != 11; ++lane)
+        kernel.emplace_back(0x1918 + 4 * lane, (index << 16) | 0x21u);
+    ringScatter(task, kernel);
+    std::vector<std::uint32_t> tailTags(5, (index << 16) | 0x21u);
+    ringDense(task, 0x1944, tailTags);
+    std::vector<std::uint32_t> laneWords;
+    for (unsigned lane = 1; lane != 16; ++lane)
+        laneWords.push_back(layer.mobileRingKernelOffsets[lane]);
+    if (!writesScratch)
+        for (const auto size : layer.mobileRingKernelSizes)
+            laneWords.push_back(size);
+    ringDense(task, 0x195c, laneWords);
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> common = {
+        {0x0000, (g.shape.input.height << 16) | g.shape.input.width},
+        {0x000c, g.shape.input.channels},
+        {0x0010, g.shape.output.channels},
+        {0x0014, (g.shape.output.height << 16) | g.shape.output.width},
+    };
+    const auto lanes = g.depthwise ? 1u : denseLanes(g.shape);
+    const auto ocg = g.depthwise ? 0u : (lanes == 8 ? 0u : log2Floor(lanes));
+    if (g.depthwise || ocg || sparse) common.emplace_back(0x001c, ocg);
+    if (g.shape.kernel != 1) {
+        const auto pad = sparse ? 0u : static_cast<std::uint32_t>(padding(g.shape));
+        common.emplace_back(0x0020, 0x50000000u | g.shape.kernelWidth |
+            (g.shape.kernel << 6) | (g.shape.stride << 13) |
+            (g.shape.stride << 15) | (pad << 17) | (pad << 22));
+    }
+    if (g.depthwise) common.emplace_back(0x0028, 0x00014001u);
+    common.emplace_back(0x002c, g.shape.output.height);
+    common.emplace_back(0x0038, mobileCommonClass(g));
+    common.emplace_back(0x003c, 1u << 20);
+    ringScatter(task, common);
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> l2 = {
+        {0x0504, sourceCfg},
+    };
+    if (sourceBase) l2.emplace_back(0x0508, static_cast<std::uint32_t>(sourceBase));
+    l2.emplace_back(0x050c, g.sourceChannel);
+    l2.emplace_back(0x0510, g.sourceRow);
+    if (!inputResident) {
+        const auto depth = g.shape.input.channels * g.sourceChannel;
+        l2.emplace_back(0x0514, depth);
+        l2.emplace_back(0x0518, depth);
+    }
+    l2.emplace_back(0x0530, resultCfg);
+    if (resultBase) l2.emplace_back(0x0534, static_cast<std::uint32_t>(resultBase));
+    if (outputResident) {
+        l2.emplace_back(0x0538, resultChannel);
+        l2.emplace_back(0x053c, resultRow);
+    }
+    ringScatter(task, l2);
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> ne;
+    if (sparse) ne.emplace_back(0x0d00, 0x182u);
+    ne.emplace_back(0x0d04, mac);
+    ne.emplace_back(0x0d10, 0x3c00u);
+    ringScatter(task, ne);
+
+    if (first || readsScratch) {
+        const auto row = first ? layer.inputs[0].nchw[5]
+                               : 16ull * g.shape.input.width;
+        const auto plane = first ? layer.inputs[0].nchw[4]
+                                 : row * g.shape.input.height;
+        ringScatter(task, {
+            {0x1100, first ? 0x00000e21u
+                           : 0x10000e41u | (index << 16)},
+            {0x1108, first ? 0xceu : 0x4eu},
+            {0x1118, static_cast<std::uint32_t>(row)},
+            {0x111c, static_cast<std::uint32_t>(plane)},
+        });
+        ringDense(task, 0x1150, {first ? 0x01002031u : 0x08002031u});
+    }
+
+    if (writesScratch || last) {
+        const auto row = writesScratch ? 16ull * g.shape.output.width
+                                       : layer.output.nchw[5];
+        const auto plane = writesScratch ? row * g.shape.output.height
+                                         : layer.output.nchw[4];
+        ringScatter(task, {
+            {0x1500, writesScratch ? 0x01000ef1u | (index << 16)
+                                   : 0x01000e31u | (index << 16)},
+            {0x1510, static_cast<std::uint32_t>(row)},
+            {0x1514, static_cast<std::uint32_t>(plane)},
+            {0x1520, writesScratch ? 0x08302031u : 0x01302031u},
+        });
+        // A symbolic dead destination extension pads the compact role to the
+        // minimum task size accepted by firmware; it is never BAR-routed.
+        ringDense(task, 0x1524, {0xdead});
+        ringDense(task, 0x1524, {0xdead});
+    }
+    ringDense(task, 0x1908,
+              {static_cast<std::uint32_t>(coefficientBase), 0}, 1);
+    if (first || readsScratch)
+        ringDense(task, 0x1110, {0, 0}, first ? 5 : 3);
+    if (writesScratch || last)
+        ringDense(task, 0x1508, {0, 0}, writesScratch ? 3 : 4);
+
+    // Firmware's compact-task envelope starts at 312 bytes.  Padding is a
+    // harmless write to the documented dead destination extension, derived
+    // from the encoded length rather than from a captured per-task size list.
+    while (task.size() < 312) ringDense(task, 0x1524, {0xdead});
+
+    storeLE32(task, 0,
+              (static_cast<std::uint32_t>(task.size() / 4) << 16) | index);
+    (void)spillBytes;
+    return task;
+}
+
+} // namespace
+
+std::string convLinkedRingRefusal(ConvShape shape) {
+    const bool dw = depthwise(shape);
+    const bool stem = shape.groups == 1 && shape.input.channels == 3 &&
+        shape.output.channels == 32 && shape.kernel == 3 && shape.stride == 2;
+    if (!shape.bias) return "native MobileNet ring convolutions require bias";
+    if (!stem && !dw && !(shape.groups == 1 && shape.kernel == 1 &&
+                          shape.kernelWidth == 1 && shape.stride == 1))
+        return "native ring covers the stem, depthwise k3, and dense k1 forms";
+    if (dw && (shape.kernel != 3 || shape.kernelWidth != 3 ||
+               (shape.stride != 1 && shape.stride != 2)))
+        return "native depthwise ring layers require k3 stride 1 or 2";
+    if (!stem && (shape.input.channels % 16 || shape.output.channels % 16))
+        return "native ring channels must be multiples of 16";
+    if (padding(shape) < 0)
+        return "native ring geometry must imply symmetric SAME or VALID padding";
+    return {};
+}
+
+Program encodeConvLinkedRing(ConvShape shape, const std::uint8_t *weights,
+                             std::size_t weightBytes,
+                             const std::uint8_t *bias,
+                             std::size_t biasBytes) {
+    const auto refusal = convLinkedRingRefusal(shape);
+    if (!refusal.empty())
+        throw std::invalid_argument("h14.linked-ring-outside-envelope: " + refusal);
+    const bool dw = depthwise(shape);
+    const auto reduction = (dw ? 1u : shape.input.channels) * shape.kernel *
+        shape.kernelWidth;
+    if (!weights || weightBytes !=
+            static_cast<std::size_t>(shape.output.channels) * reduction * 2 ||
+        !bias || biasBytes != static_cast<std::size_t>(shape.output.channels) * 2)
+        throw std::invalid_argument(
+            "h14.linked-ring-outside-envelope: invalid coefficient payload");
+
+    Program program;
+    program.formulaBuilt = true;
+    program.depthwiseConv = dw;
+    program.mobileRingRuleBuilt = true;
+    program.mobileRingShape = shape;
+    program.inputs = {convTensor(5, shape.input)};
+    program.output = convTensor(4, shape.output);
+    program.taskStream.assign(16, 0); // no captured prefix; linker replaces it
+    program.taskCount = 1;
+    if (shape.kernel == 3 && shape.stride == 2) {
+        program.constants = packMobileSparse(shape, weights, bias,
+            program.mobileRingKernelOffsets, program.mobileRingKernelSizes);
+    } else {
+        program.constants = dw
+            ? packConvDepthwise(shape.kernel * shape.kernelWidth,
+                                shape.output.channels, weights, bias)
+            : packConvDense(reduction,
+                            laneChunks(shape.output.channels,
+                                       laneCap(shape.input)),
+                            weights, bias, false);
+        if (program.constants.size() % 16)
+            throw std::logic_error("H14 native coefficient section has unequal lanes");
+        const auto laneBytes = static_cast<std::uint32_t>(
+            program.constants.size() / 16);
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            program.mobileRingKernelOffsets[lane] = lane * laneBytes;
+            program.mobileRingKernelSizes[lane] = laneBytes;
+        }
+    }
+    program.constantOffsetBytes = 64;
+    return program;
+}
+
+Program linkMobileNetRing(const std::vector<Program> &layers,
+                          std::vector<LinkedLayer> *layout) {
+    if (layers.empty() || layers.size() > 28)
+        throw std::invalid_argument(
+            "h14.linked-ring-outside-envelope: expected a prefix of 1..28 layers");
+    std::vector<MobileGeometry> geometry;
+    geometry.reserve(layers.size());
+    for (std::size_t index = 0; index != layers.size(); ++index) {
+        const auto &layer = layers[index];
+        if (!layer.mobileRingRuleBuilt || !layer.formulaBuilt ||
+            layer.taskCount != 1 || layer.inputs.size() != 1)
+            throw std::invalid_argument(
+                "h14.linked-ring-outside-envelope: every layer must be a "
+                "rule-built native convolution");
+        if (index && layers[index - 1].mobileRingShape.output.channels !=
+                         layer.mobileRingShape.input.channels)
+            throw std::invalid_argument(
+                "h14.linked-ring-outside-envelope: channel chain is discontinuous");
+        if (index && (layers[index - 1].mobileRingShape.output.height !=
+                          layer.mobileRingShape.input.height ||
+                      layers[index - 1].mobileRingShape.output.width !=
+                          layer.mobileRingShape.input.width))
+            throw std::invalid_argument(
+                "h14.linked-ring-outside-envelope: spatial chain is discontinuous");
+        MobileGeometry g;
+        g.shape = layer.mobileRingShape;
+        g.depthwise = layer.depthwiseConv;
+        g.sourceChannel = static_cast<std::uint32_t>(align16(
+            2ull * g.shape.input.width));
+        g.sourceRow = g.shape.input.channels * g.sourceChannel +
+            (index ? mobileSkew(g.shape) : 0u);
+        g.sourceSpan = static_cast<std::uint64_t>(g.shape.input.height) *
+            g.sourceRow;
+        geometry.push_back(g);
+    }
+    const auto n = layers.size();
+    if (n >= 4) {
+        // The bridge width is allocator-selected.  224 narrows to 64 pixels;
+        // a 192 input fits at full width, proving this is not a layer table.
+        auto &bridge = geometry[2];
+        const auto result = geometry[3].sourceSpan;
+        auto channel = bridge.sourceChannel;
+        while (channel > 16 && result +
+                static_cast<std::uint64_t>(bridge.shape.input.height) *
+                    (bridge.shape.input.channels * channel +
+                     (channel == bridge.sourceChannel
+                          ? mobileSkew(bridge.shape) : 0x50u)) > kMobileL2Bytes)
+            channel -= 16;
+        bridge.sourceChannel = channel;
+        bridge.sourceRow = bridge.shape.input.channels * channel +
+            (channel == static_cast<std::uint32_t>(align16(
+                 2ull * bridge.shape.input.width))
+                ? mobileSkew(bridge.shape) : 0x50u);
+        bridge.sourceSpan = static_cast<std::uint64_t>(bridge.shape.input.height) *
+            bridge.sourceRow;
+        if (result + bridge.sourceSpan > kMobileL2Bytes)
+            throw std::invalid_argument(
+                "h14.linked-ring-outside-envelope: spill bridge exceeds L2");
+    }
+
+    std::vector<std::uint32_t> sourceCfg(n, 0x00500172u);
+    std::vector<std::uint32_t> resultCfg(n, 0x14au);
+    std::vector<std::uint64_t> sourceBase(n), resultBase(n), resultSpan(n);
+    std::vector<bool> readsScratch(n), writesScratch(n), outputResident(n);
+    const auto standaloneResultSpan = [&](std::size_t i) {
+        const auto channel = align16(2ull * geometry[i].shape.output.width);
+        const auto row = geometry[i].shape.output.channels * channel + 0x30u;
+        return static_cast<std::uint64_t>(geometry[i].shape.output.height) * row;
+    };
+    if (n == 1) sourceBase[0] = align16(standaloneResultSpan(0));
+    if (n >= 2) {
+        outputResident[0] = true;
+        resultCfg[0] = 0x00500170u;
+        resultSpan[0] = geometry[1].sourceSpan;
+        sourceBase[0] = resultSpan[0];
+        sourceCfg[1] = 0x120u;
+    }
+    if (n == 2) {
+        resultBase[1] = align16(geometry[1].sourceSpan) % kMobileL2Bytes;
+    } else if (n == 3) {
+        outputResident[1] = true;
+        resultCfg[1] = 0x140u;
+        resultSpan[1] = geometry[2].sourceSpan;
+        resultBase[1] = align16(geometry[1].sourceSpan) % kMobileL2Bytes;
+        sourceBase[2] = resultBase[1];
+        sourceCfg[2] = 0x120u;
+        resultBase[2] = align16(sourceBase[2] + geometry[2].sourceSpan) %
+            kMobileL2Bytes;
+    } else if (n >= 4) {
+        writesScratch[1] = true;
+        readsScratch[2] = true;
+        resultCfg[1] = 0x84au;
+        resultBase[1] = geometry[1].sourceSpan;
+        sourceCfg[2] = 0x842u;
+        outputResident[2] = true;
+        resultCfg[2] = 0x140u;
+        resultSpan[2] = geometry[3].sourceSpan;
+        sourceBase[2] = resultSpan[2];
+        sourceCfg[3] = 0x120u;
+        for (std::size_t i = 3; i + 1 < n; ++i) {
+            const auto &consumer = geometry[i + 1];
+            const auto quarter = geometry.front().shape.input.width / 4;
+            const auto eighth = geometry.front().shape.input.width / 8;
+            const bool wide = consumer.shape.input.width > quarter ||
+                (consumer.shape.input.width == quarter &&
+                 consumer.shape.stride == 1) ||
+                (consumer.shape.input.width >= eighth &&
+                 consumer.shape.output.channels > consumer.shape.input.channels) ||
+                (consumer.depthwise && geometry[i].shape.output.channels >
+                                           geometry[i].shape.input.channels &&
+                 consumer.shape.input.width >= eighth);
+            sourceCfg[i + 1] = wide ? 0x120u : 0x104u;
+            outputResident[i] = true;
+            resultCfg[i] = 0x140u;
+            resultSpan[i] = consumer.sourceSpan;
+            auto candidate = align16(sourceBase[i] + geometry[i].sourceSpan) %
+                kMobileL2Bytes;
+            if (!geometry[i].depthwise &&
+                geometry[i].shape.output.channels >
+                    geometry[i].shape.input.channels) {
+                candidate = 0;
+            } else if (geometry[i].depthwise && i + 2 < n &&
+                       geometry[i + 1].shape.output.channels >
+                           geometry[i + 1].shape.input.channels) {
+                const auto future = geometry[i + 2].sourceSpan;
+                if (mobileOverlap(candidate, resultSpan[i], 0, future))
+                    candidate = align16(future);
+            }
+            resultBase[i] = candidate;
+            sourceBase[i + 1] = candidate;
+        }
+        const auto last = n - 1;
+        outputResident[last] = false;
+        resultCfg[last] = 0x14au;
+        resultBase[last] = align16(sourceBase[last] +
+                                   geometry[last].sourceSpan) % kMobileL2Bytes;
+    }
+
+    std::uint64_t spillBytes = 0;
+    Program result;
+    result.formulaBuilt = true;
+    result.mobileRingRuleBuilt = true;
+    result.inputs = layers.front().inputs;
+    result.output = layers.back().output;
+    if (n >= 4) {
+        const auto row = 16ull * geometry[1].shape.output.width;
+        const auto plane = row * geometry[1].shape.output.height;
+        spillBytes = plane * (geometry[1].shape.output.channels / 8);
+        result.scratchAllocationBytes =
+            2 * layers[1].output.allocationBytes + spillBytes;
+    }
+    result.taskStream.assign(16, 0);
+    if (layout) layout->clear();
+    for (std::size_t i = 0; i != n; ++i) {
+        const bool inputResident = i && !readsScratch[i];
+        const auto task = mobileTask(layers[i], geometry[i],
+            static_cast<std::uint32_t>(i), i == 0, i + 1 == n,
+            readsScratch[i], writesScratch[i], inputResident,
+            outputResident[i], sourceCfg[i], sourceBase[i],
+            geometry[i].sourceSpan, resultCfg[i], resultBase[i],
+            resultSpan[i], outputResident[i] ? geometry[i + 1].sourceChannel : 0,
+            outputResident[i] ? geometry[i + 1].sourceRow : 0,
+            spillBytes, result.constants.size());
+        result.taskStream.resize(static_cast<std::size_t>(alignUp(
+            result.taskStream.size(), taskAlignment)), 0);
+        if (!i) result.firstTaskBytes = task.size();
+        result.taskStream.insert(result.taskStream.end(), task.begin(), task.end());
+        result.constants.insert(result.constants.end(), layers[i].constants.begin(),
+                                layers[i].constants.end());
+        if (layout) {
+            LinkedLayer item{static_cast<std::uint32_t>(i), 1, 0, 0};
+            item.readsScratch = readsScratch[i];
+            item.writesScratch = writesScratch[i];
+            item.inputEdge = inputResident ? (sourceCfg[i] == 0x104u ? 3 : 4) : 0;
+            item.outputEdge = outputResident[i] && i + 1 < n
+                ? (sourceCfg[i + 1] == 0x104u ? 3 : 4) : 0;
+            item.l2Source = inputResident ? sourceBase[i] : 0;
+            item.l2Result = outputResident[i] ? resultBase[i] : 0;
+            item.l2ResultBytes = outputResident[i] ? resultSpan[i] : 0;
+            layout->push_back(item);
+        }
+    }
+    result.taskCount = static_cast<std::uint32_t>(n);
+    result.constantOffsetBytes = static_cast<std::size_t>(alignUp(
+        result.taskStream.size(), 64));
     return result;
 }
