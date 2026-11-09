@@ -242,7 +242,7 @@ class ValidationTests(unittest.TestCase):
                      0x511c: padded_row * dimension}
         old_allocation = score + heads * padded_row * dimension
         target = dict(kind='scratch', size=old_allocation)
-        self.assertTrue(fused_attention_program(17, 35, 791))
+        self.assertTrue(fused_attention_program(18, 38, 791))
         self.assertEqual(dma_extent(dma, registers, target,
                                     'fused-attention'), 2 * score)
         self.assertGreater(2 * score, old_allocation)

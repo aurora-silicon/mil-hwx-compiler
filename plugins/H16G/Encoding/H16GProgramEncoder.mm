@@ -514,7 +514,7 @@ static ANEHWXArtifact *encodeTransformerLayerNormProgram(
     if(!standaloneLayerNormHardwareQualified()) {
         emitError(diagnostics,
             @"h16g.encode.transformer-layer-norm-hardware-unproved",
-            @"standalone H16G layer_norm is disabled: BERT produced a constant output and the S=1500 form wedged EXECUTE on J616s",
+            @"standalone H16G layer_norm remains disabled: the corrected L2 dataflow and serialized schedule have not completed numerical J616s qualification",
             normalization);
         return nil;
     }
@@ -2028,7 +2028,7 @@ static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
     if(!fusedAttentionHardwareQualified()) {
         emitError(diagnostics,
             @"h16g.encode.fused-attention-accuracy-unproved",
-            @"fused H16G attention is disabled: the resident PV path failed numerical device qualification",
+            @"fused H16G attention remains disabled: the corrected resident P*128 PV stage has not completed numerical J616s qualification",
             output);
         return nil;
     }

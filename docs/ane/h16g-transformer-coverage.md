@@ -77,7 +77,7 @@ runtime matmuls for the Whisper S=1500 geometries:
 | transpose-y QK | same | same | 4 |
 | PV | same | same | heads + 1 |
 | last-axis softmax | eight-plane program, two zero planes | measured and enabled | 5 |
-| fused scaled QK + softmax + PV | refused after accuracy failure | refused pending qualification | heads + 11 |
+| fused scaled QK + softmax + PV | refused after accuracy failure | refused pending qualification | heads + 12 candidate |
 
 The compiler keeps public held-out movement and matmul axes as unrevealed
 predictions. They pass the structural validator but do not claim descriptor
@@ -93,9 +93,12 @@ tail, any periodic 128-element tile lane, or shifting rows made the result
 worse.  The standalone encoder therefore stages normalized probabilities at
 the exact fp16 scale 128 and folds the exact 1/128 reciprocal into the head
 result.  This changes only the two decoded scale words; structural parity is
-retained after normalizing that intentional numeric pair.  The fused path
-does not cross the external fp16 probability boundary and keeps its captured
-unit-scale tasks.
+retained after normalizing that intentional numeric pair.  The first fused
+path kept its resident probability plane at unit scale and showed the same
+relative-L2 signature.  Its corrected research form preserves the captured
+QK/softmax prefix, adds one resident-to-resident P*128 staging task into the
+second score plane, and folds 1/128 into each PV head.  This heads+12 form is
+structurally validated but remains refused pending a numerical device run.
 
 The first run found that the unrevealed H=6 softmax loaded but never completed.
 Its exponential task retained the captured H=8 dependency mask `0x3ff`; the
@@ -123,6 +126,16 @@ refused with `h16g.encode.transformer-softmax-hardware-unproved`.
 On a J616s with Linux the H=6 object, run on a padded `[1,6,1500,1500]`
 input of N(0,3) scores, matches a float64 reference with relative L2
 `5.5e-4` (max abs error `9.9e-4`).
+
+There is no captured H=6 standalone program to close that gap: Core ML placed
+the isolated Whisper-tiny softmax on the CPU.  The H=6 forms inside fused and
+full Whisper programs use four tiled staging tasks plus contextual
+max/exp/sum/normalize tasks, while the working H=8 standalone object is a
+different five-task external-surface program.  Head-count scaling agrees for
+the fields shared by those contextual forms, but it does not prove the
+standalone loop, record-hint, or scratch law that failed LOAD/EXECUTE.  The
+compiler therefore keeps H=6 refused instead of presenting another derived
+task stream as measured.
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
@@ -155,16 +168,24 @@ It encodes the fp16 value of `1e-5`, promoted to fp32 in the task, and fp32
 normalization unit; there is no external reciprocal or rsqrt lookup table.
 The standalone boundary consumes the packaged identity gamma and zero beta
 vectors, then writes the external result.  These vectors are constants; they
-are not a scratch materialization.
+are not a scratch materialization.  Comparing the failed standalone object
+with the normalization-to-projection and full-encoder forms found a lost L2
+edge: the affine/output tail read base zero, while its producer writes
+`0x33000`, `0x127380`, or `0xbb80` for BERT, Whisper-tiny, or Whisper-base.
+The research constructor now preserves that producer base through both tail
+tasks and uses the serialized `0x00fff868` / `0x00fff820` /
+`0x00fff860` standalone schedule.
 
 Research objects use BAR 6 for the external input, BAR 8 for the gamma/beta
 constant table, and BAR 7 for the external output.  The fail-closed validator
 recognizes the family, checks direction and aperture binding, and bounds four
 BERT or twelve Whisper DMA extents.  It rejects the earlier scratch-rebased
-objects. Corrected BERT removed the translation faults but returned all ones
-(relative L2 `306`), while the corrected S=1500 object timed out at EXECUTE
-and quarantined the session. Host structural success is therefore not treated
-as device qualification. The compiler refuses the family with
+objects. The earlier BERT build removed the translation faults but returned
+all ones (relative L2 `306`), while the earlier S=1500 object timed out at
+EXECUTE and quarantined the session. The disconnected L2 edge explains the
+identity-gamma output; the corrected candidate passes the offline validator
+and simulator, but host structural success is not treated as device
+qualification. The compiler refuses the family with
 `h16g.encode.transformer-layer-norm-hardware-unproved`.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
