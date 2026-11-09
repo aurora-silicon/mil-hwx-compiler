@@ -9,8 +9,8 @@ On the host:
 # any conv chain: C,H,W then cout,k,stride,groups,bias,relu per layer
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mkchain.py cases/c2 64,16,16 '64,1,1,1,1,1;64,1,1,1,1,1'
 # MobileNetV1 224 with fused ReLU6 (random weights, or --weights mobilenet_v1_1_224_quant.tflite)
-MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn
-MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn-native --frame native --no-perop
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn --frame mirrored
+MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py cases/mn-native --frame native
 python3 tools/h13-mobilenet/mn_refs.py cases/mn 16     # test images + float64 references
 python3 tools/h13-mobilenet/prefixes.py cases/mn cases/mn-prefix   # per-layer profile
 ```

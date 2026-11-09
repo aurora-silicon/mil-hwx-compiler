@@ -151,7 +151,7 @@ if __name__ == '__main__':
     ap.add_argument('--target', choices=['H13', 'H14'], default='H13')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--head', choices=['ane', 'cpu'], default='ane')
-    ap.add_argument('--frame', choices=['mirrored', 'native'], default='mirrored')
+    ap.add_argument('--frame', choices=['mirrored', 'native'], default='native')
     ap.add_argument('--no-perop', action='store_true')
     ap.add_argument('--relu', action='store_true',
                     help='emit unbounded ReLU instead of the default fused ReLU6')
@@ -175,7 +175,9 @@ if __name__ == '__main__':
     m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), os.environ.get('LINKED_SCHEDULE', default_schedule))
     msg = (f"{a.out}: {len(layers)} layers, linked {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
-    if not a.no_perop:
+    if a.frame != 'native' and not a.no_perop:
         p = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'perop'), None)
         msg += f"; per-op {len(p['programs'])} programs"
+    elif not a.no_perop:
+        msg += "; per-op skipped (mirrored-only)"
     print(msg + f'; output {outshape}')
