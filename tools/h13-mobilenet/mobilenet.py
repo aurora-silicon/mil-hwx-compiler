@@ -172,13 +172,12 @@ if __name__ == '__main__':
     np.savez(os.path.join(a.out, 'tfweights.npz'), **{f'w{i}': P['w'] for i, P in enumerate(tfw)},
              **{f'b{i}': P['b'] for i, P in enumerate(tfw)})
     default_schedule = 'linked-ring' if a.frame == 'native' else 'linked'
-    if a.frame == 'native' and not a.no_perop:
-        ap.error('--frame native builds the linked-ring kit only; per-op is '
-                 'mirrored-only (native per-op fails h13.inexact-constant). Pass --no-perop.')
     m = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'linked'), os.environ.get('LINKED_SCHEDULE', default_schedule))
     msg = (f"{a.out}: {len(layers)} layers, linked {m['programs'][0]['taskDescriptors']} tasks, "
            f"{m['programs'][0]['bytes']} bytes, scratch {m['scratch']['bytes']}")
-    if not a.no_perop:
+    if a.frame != 'native' and not a.no_perop:
         p = compile_chain(milc, mil, os.path.join(a.out, 'src'), os.path.join(a.out, 'perop'), None)
         msg += f"; per-op {len(p['programs'])} programs"
+    elif not a.no_perop:
+        msg += "; per-op skipped (mirrored-only)"
     print(msg + f'; output {outshape}')
