@@ -132,6 +132,7 @@ def evaluate_boundaries(model: Path, x: np.ndarray) -> dict[str, np.ndarray]:
                       c[f'conv_{index}_bias_0'], stride)
 
     y = np.maximum(conv(0, x.astype(np.float64), 2), 0)
+    result['stem'] = y.copy()
     y = maxpool(y)
     result['pool'] = y.copy()
     stages = [
@@ -148,7 +149,8 @@ def evaluate_boundaries(model: Path, x: np.ndarray) -> dict[str, np.ndarray]:
         z = np.maximum(conv(first[1], z, stride), 0)
         z = conv(first[2], z)
         y = np.maximum(z + shortcut, 0)
-        result[f'block{len(result):02d}'] = y.copy()
+        block = sum(key.startswith('block') for key in result) + 1
+        result[f'block{block:02d}'] = y.copy()
         for block in rest:
             shortcut = y
             z = np.maximum(conv(block[0], y), 0)

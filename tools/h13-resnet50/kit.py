@@ -16,13 +16,16 @@ sys.path.insert(0, str(ROOT / 'tests'))
 import libane_overrun  # noqa: E402
 
 
-def compile_package(args, package: Path, terminate_after: str | None = None):
+def compile_package(args, package: Path, terminate_after: str | None = None,
+                    pool_via_dram: bool = False):
     command = [
         args.compiler, '--target', 'H13', '--format', 'anec',
         '--schedule', 'linked-ring', '--mil', str(args.model / 'model.mil'),
         '--model-root', str(args.model), '--output', str(package),
     ]
-    if terminate_after:
+    if pool_via_dram:
+        command += ['--terminate-after', 'pool-via-dram']
+    elif terminate_after:
         command += ['--terminate-after', terminate_after]
     subprocess.run(command, check=True)
     manifest = json.loads((package / 'manifest.json').read_text())
@@ -54,25 +57,30 @@ def main():
     full_dir.mkdir()
     full_manifest, _ = compile_package(args, full_dir / 'package')
     boundaries = {item['name']: item for item in full_manifest['boundaries']}
-    expected = ['pool'] + [f'block{index:02d}' for index in range(1, 17)] + \
+    expected = ['stem', 'pool'] + \
+        [f'block{index:02d}' for index in range(1, 17)] + \
         ['mean', 'logits']
     if list(references) != expected or set(boundaries) != set(expected):
         raise RuntimeError('compiler manifest and reference boundary keys differ')
 
-    specifications = [('maxpool', 'pool'),
-                      ('one-bottleneck-block', 'block01')]
-    specifications += [(f'block-prefix-{index:02d}', f'block{index:02d}')
+    specifications = [('stem', 'stem', False),
+                      ('stem-pool-via-dram', 'pool', True),
+                      ('maxpool', 'pool', False),
+                      ('one-bottleneck-block', 'block01', False)]
+    specifications += [(f'block-prefix-{index:02d}', f'block{index:02d}', False)
                        for index in range(2, 17)]
-    specifications += [('reduce_mean', 'mean'), ('full', 'logits')]
+    specifications += [('reduce_mean', 'mean', False),
+                       ('full', 'logits', False)]
     rungs = []
-    for name, key in specifications:
+    for name, key, pool_via_dram in specifications:
         directory = args.output / name
         if name == 'full':
             manifest = full_manifest
         else:
             directory.mkdir()
             manifest, _ = compile_package(
-                args, directory / 'package', boundaries[key]['tensor'])
+                args, directory / 'package', boundaries[key]['tensor'],
+                pool_via_dram)
         shutil.copy2(input_path, directory / 'input.npy')
         np.savez(directory / 'reference.npz', **{key: references[key]})
         logical = manifest['logicalResults'][0]

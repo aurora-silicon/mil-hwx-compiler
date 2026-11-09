@@ -273,6 +273,26 @@ static void validateStemPoolHandoff(const ane::h13::Program &program) {
                reg(program, stem, 0x04840) == reg(program, pool, 0x04814),
            "stem result and pool source L2 layouts differ");
 
+    const auto inputWidth = reg(program, stem, 0x00000) & 0xffffu;
+    const auto inputChannels = reg(program, stem, 0x0000c);
+    const auto inputChannelStride = (2 * inputWidth + 15) & ~15u;
+    const auto inputSpan = inputChannelStride * inputChannels;
+    expect(reg(program, stem, 0x0480c) == inputChannelStride &&
+               reg(program, stem, 0x04810) == inputSpan &&
+               reg(program, stem, 0x04814) == inputSpan &&
+               reg(program, stem, 0x04818) == inputSpan,
+           "stem external-source L2 extents differ from NCHW staging");
+
+    const auto stemWidth = reg(program, stem, 0x00014) & 0xffffu;
+    const auto stemChannels = reg(program, stem, 0x00010);
+    const auto stemChannelStride = (2 * stemWidth + 15) & ~15u;
+    const auto stemPlane = stemChannelStride * stemChannels;
+    const auto stemBankSkew = stemWidth >= 64 ? 3u * 16u : 2u * 16u;
+    expect(reg(program, stem, 0x04838) == stemChannelStride &&
+               reg(program, stem, 0x0483c) == stemPlane + stemBankSkew &&
+               reg(program, stem, 0x04840) == stemPlane,
+           "stem resident result does not use the stride-2 bank-skew rule");
+
     const auto linked = linkedRingStemReference();
     const auto linkedStem = taskSpans(linked).front();
     expect(word(program.task, stem.offset + 32) ==
@@ -283,13 +303,89 @@ static void validateStemPoolHandoff(const ane::h13::Program &program) {
     expect(reg(program, stem, 0x04830) ==
                reg(linked, linkedStem, 0x04830),
            "residual stem ResultCfg differs from linked-ring initial alias");
+    if (inputWidth == (reg(linked, linkedStem, 0x00000) & 0xffffu)) {
+        for (const auto address : {0x04804u, 0x0480cu, 0x04810u,
+                                   0x04814u, 0x04818u})
+            expect(reg(program, stem, address) ==
+                       reg(linked, linkedStem, address),
+                   "residual stem source layout differs from proven ring stem");
+    }
+    expect(reg(program, stem, 0x0c800) ==
+               reg(linked, linkedStem, 0x0c800) &&
+               reg(program, stem, 0x1f800) ==
+                   reg(linked, linkedStem, 0x1f800),
+           "residual stem sparse kernel grammar differs from ring stem");
+    const auto conv = reg(program, stem, 0x0001c);
+    const auto linkedConv = reg(linked, linkedStem, 0x0001c);
+    expect((conv & (3u << 13 | 3u << 15 | 15u << 28)) ==
+               (linkedConv & (3u << 13 | 3u << 15 | 15u << 28)) &&
+               (conv & 31u) == 7u && ((conv >> 5) & 31u) == 7u &&
+               ((conv >> 17) & 31u) == 2u &&
+               ((conv >> 22) & 31u) == 2u,
+           "residual 7x7 stem stride or TF-SAME leading padding is wrong");
+}
+
+static void validateKernelDMASpans(const ane::h13::Program &program) {
+    const auto stem = taskSpans(program).front();
+    std::uint64_t end = 0;
+    for (std::uint32_t lane = 0; lane != 16; ++lane) {
+        const auto offset = reg(program, stem, 0x1f848 + 4 * lane);
+        const auto bytes = reg(program, stem, 0x1f888 + 4 * lane);
+        expect(offset == end && bytes && bytes % 64 == 0,
+               "stem kernel-DMA spans are not contiguous 64-byte regions");
+        end = static_cast<std::uint64_t>(offset) + bytes;
+    }
+    expect(end <= program.constants.size(),
+           "stem kernel-DMA spans exceed the rebuilt constants");
+}
+
+static void validatePoolResidentLayout(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() >= 3, "full stream has no pool consumer");
+    const auto pool = spans[1];
+    const auto consumer = spans[2];
+    const auto width = reg(program, pool, 0x00014) & 0xffffu;
+    const auto channels = reg(program, pool, 0x00010);
+    const auto channel = (2 * width + 15) & ~15u;
+    const auto plane = channel * channels;
+    const auto skew = width > 16 ? 5u * 16u
+        : channels >= 32 ? 3u * 16u : 2u * 16u;
+    expect(reg(program, pool, 0x04838) == channel &&
+               reg(program, pool, 0x0483c) == plane + skew &&
+               reg(program, pool, 0x04840) == plane &&
+               reg(program, pool, 0x04834) ==
+                   reg(program, consumer, 0x04808) &&
+               reg(program, pool, 0x0483c) ==
+                   reg(program, consumer, 0x04810),
+           "nonterminal pool result disagrees with its convolution consumer");
+}
+
+static void validatePoolViaDRAM(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() == 2 && program.scratchAllocationBytes,
+           "pool-via-DRAM rung does not contain one real spill");
+    const auto scratchResult = 2u | (1u << 3) | (4u << 4) | (8u << 8);
+    const auto scratchSource = 2u | (4u << 4) | (8u << 8);
+    expect(reg(program, spans[0], 0x04830) == scratchResult &&
+               reg(program, spans[1], 0x04804) == scratchSource,
+           "pool-via-DRAM rung does not route stem through scratch");
+    expect(((word(program.task, spans[0].offset + 32) >> 12) & 31u) == 3u &&
+               (word(program.task, spans[1].offset + 32) & 31u) == 3u,
+           "pool-via-DRAM header selectors do not bind the scratch channel");
 }
 
 static void validatePoolBoundaryLayout(const ane::h13::Program &program) {
     const auto terminal = taskSpans(program).back();
+    const auto depth = program.output.nchw[4] * program.output.nchw[1];
+    const auto externalNCHW = 1u | (3u << 4) | (2u << 12) |
+                              (3u << 20) | (1u << 24);
     expect(program.output.nchw[5] == reg(program, terminal, 0x17808) &&
-               program.output.nchw[4] == reg(program, terminal, 0x1780c),
-           "pool terminal DMA row/plane strides differ from the manifest layout");
+               program.output.nchw[4] == reg(program, terminal, 0x1780c) &&
+               depth == reg(program, terminal, 0x17810) &&
+               depth == reg(program, terminal, 0x17814) &&
+               externalNCHW == reg(program, terminal, 0x17818) &&
+               program.output.allocationBytes >= depth,
+           "pool terminal DMA row/channel/depth/format differs from manifest NCHW");
 }
 
 static std::uint32_t floatWord(float value) {
@@ -401,6 +497,7 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
     validateGeometry(program, network, blocks, 1000);
     validateTaskHeaders(program);
     validateStemPoolHandoff(program);
+    validateKernelDMASpans(program);
     return {std::move(program), std::move(logits)};
 }
 
@@ -442,6 +539,18 @@ int main(int argc, char **argv) {
         boundaryNetwork.convs, boundaryHead.first.data(),
         boundaryHead.first.size(), boundaryHead.second.data(),
         boundaryHead.second.size(), "mean");
+    auto stem = ane::h13::encodeResidualNetwork(
+        boundaryNetwork.convs, boundaryHead.first.data(),
+        boundaryHead.first.size(), boundaryHead.second.data(),
+        boundaryHead.second.size(), "stem");
+    auto poolViaDRAM = ane::h13::encodeResidualNetwork(
+        boundaryNetwork.convs, boundaryHead.first.data(),
+        boundaryHead.first.size(), boundaryHead.second.data(),
+        boundaryHead.second.size(), "pool-via-dram");
+    expect(stem.taskCount == 1 && stem.outputBoundary == "stem" &&
+               stem.output.nchw[1] == 64 && stem.output.nchw[2] == 112 &&
+               stem.output.nchw[3] == 112,
+           "stem boundary metadata differs from the compiler plan");
     expect(pool.taskCount == 2 && pool.outputBoundary == "pool" &&
                pool.output.nchw[1] == 64 && pool.output.nchw[2] == 56 &&
                pool.output.nchw[3] == 56,
@@ -455,10 +564,15 @@ int main(int argc, char **argv) {
                mean.output.nchw[3] == 1,
            "mean boundary metadata differs from the compiler plan");
     validateTaskHeaders(pool);
+    validateTaskHeaders(stem);
+    validateTaskHeaders(poolViaDRAM);
     validateTaskHeaders(block);
     validateStemPoolHandoff(pool);
     validateStemPoolHandoff(block);
     validatePoolBoundaryLayout(pool);
+    validateKernelDMASpans(stem);
+    validatePoolViaDRAM(poolViaDRAM);
+    validatePoolResidentLayout(full);
     const auto fullSpans = taskSpans(full);
     for (const auto *boundary : {&pool, &block, &mean}) {
         const auto spans = taskSpans(*boundary);

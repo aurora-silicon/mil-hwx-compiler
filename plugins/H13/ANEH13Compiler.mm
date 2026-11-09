@@ -3198,6 +3198,14 @@ static BOOL writeH13ResidualNetwork(
     NSMutableDictionary<NSString *, ANEGraphValue *> *boundaryValues =
         [NSMutableDictionary dictionary];
     NSMutableArray<ANEGraphValue *> *blockValues = [NSMutableArray array];
+    ANEGraphValue *stemValue = numeric.front().operation.results[0];
+    for (ANEGraphOperation *consumer in operations)
+        if ([consumer.operationName isEqualToString:@"relu"] &&
+            consumer.operands[@"x"].value == stemValue) {
+            stemValue = consumer.results[0];
+            break;
+        }
+    boundaryValues[@"stem"] = stemValue;
     for (ANEGraphOperation *operation in operations) {
         if ([operation.operationName isEqualToString:@"max_pool"])
             boundaryValues[@"pool"] = operation.results[0];
@@ -3226,15 +3234,18 @@ static BOOL writeH13ResidualNetwork(
             nil, @"h13.residual-boundary");
     NSString *terminateKey = nil;
     if (terminateAfter.length) {
-        for (NSString *key in boundaryValues)
-            if ([boundaryValues[key].name isEqualToString:terminateAfter]) {
-                terminateKey = key;
-                break;
-            }
+        if ([terminateAfter isEqualToString:@"pool-via-dram"])
+            terminateKey = @"pool-via-dram";
+        else
+            for (NSString *key in boundaryValues)
+                if ([boundaryValues[key].name isEqualToString:terminateAfter]) {
+                    terminateKey = key;
+                    break;
+                }
         if (!terminateKey)
             return reject(diagnostics,
                 [NSString stringWithFormat:
-                    @"H13 residual boundary tensor '%@' is not a pool, block, mean, or logits result",
+                    @"H13 residual boundary tensor '%@' is not a stem, pool, block, mean, or logits result",
                     terminateAfter], nil, @"h13.residual-boundary");
     }
 
@@ -3258,7 +3269,8 @@ static BOOL writeH13ResidualNetwork(
     ANEGraphValue *input = function.inputs[0];
     NSString *outputKey = [NSString stringWithUTF8String:
         program.outputBoundary.c_str()];
-    ANEGraphValue *selectedOutput = boundaryValues[outputKey];
+    ANEGraphValue *selectedOutput = [outputKey isEqualToString:@"pool-via-dram"]
+        ? boundaryValues[@"pool"] : boundaryValues[outputKey];
     if (!selectedOutput || program.taskRecords.size() != program.taskCount)
         return reject(diagnostics,
             @"H13 residual encoder boundary metadata disagrees with its task stream",

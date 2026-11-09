@@ -5108,11 +5108,18 @@ struct ResidualTensorLayout {
     std::uint32_t bytes;
 };
 
-ResidualTensorLayout residualTensorLayout(ElementwiseShape shape) {
+ResidualTensorLayout residualTensorLayout(ElementwiseShape shape,
+                                          std::uint32_t consumerStride = 1) {
     const std::uint64_t channel = align16(2ull * shape.width);
     const std::uint64_t plane = channel * shape.channels;
-    // The row guard is a hardware prefetch line, not network data.
-    const std::uint64_t row = align16(plane + std::max<std::uint64_t>(16, channel));
+    // L2 advances one spatial row across all channels, then rotates banks by
+    // the same geometry-derived skew as a formula-built convolution source.
+    // Adding a whole channel row here used to turn the 64x56 pool result's
+    // 0x1c00 plane into a 0x1c70 row.  The consumer expects the stride-class
+    // skew, not another pixel row; the oversized stride made resident PE
+    // results differ from their following convolution's source layout.
+    const std::uint64_t row = plane +
+        l2Skew(consumerStride, shape.width, shape.channels);
     const std::uint64_t bytes = row * shape.height;
     if (!shape.channels || !shape.height || !shape.width ||
         bytes >= kL2Bytes || row > UINT32_MAX || plane > UINT32_MAX)
@@ -5244,10 +5251,11 @@ ResidualValue allocateResidualValue(ElementwiseShape shape,
                                     ResidualRingAllocator &ring,
                                     std::uint32_t &scratchCursor,
                                     const std::vector<ResidualRange> &live,
-                                    bool allowScratch = true) {
+                                    bool allowScratch = true,
+                                    std::uint32_t consumerStride = 1) {
     ResidualValue value;
     value.shape = shape;
-    value.layout = residualTensorLayout(shape);
+    value.layout = residualTensorLayout(shape, consumerStride);
     if (ring.allocate(value.layout.bytes, live, &value.base)) return value;
     if (!allowScratch)
         throw std::invalid_argument(
@@ -5355,12 +5363,23 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
         }
         return;
     }
-    residualL2Source(stream, at, bytes,
-                     value.storage == ResidualStorage::External
-                         ? residualL2ExternalSourceConfig()
-                         : residualL2ScratchSourceConfig(),
-                     stage, value.layout.words);
     const bool external = value.storage == ResidualStorage::External;
+    auto l2 = value.layout.words;
+    if (external) {
+        // An external NCHW source is staged as one complete pixel row across
+        // channels.  The device-proven linked-ring stem repeats that span in
+        // all three extent fields; it does not append the resident bank skew
+        // and it never leaves the final extent zero.
+        l2.channel = static_cast<std::uint32_t>(
+            align16(2ull * value.shape.width));
+        l2.row = l2.channel * value.shape.channels;
+        l2.plane = l2.row;
+        l2.depth = l2.row;
+    }
+    residualL2Source(stream, at, bytes,
+                     external ? residualL2ExternalSourceConfig()
+                              : residualL2ScratchSourceConfig(),
+                     stage, l2);
     const std::uint32_t row = external
         ? static_cast<std::uint32_t>(align16(2ull * value.shape.width))
         : static_cast<std::uint32_t>(align16(16ull * value.shape.width));
@@ -5446,8 +5465,10 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
                        std::size_t at, bool last) {
     auto &task = planned.task;
     const auto bytes = task.encoded.firstTaskBytes;
-    const bool initialAliasProducer = task.role == ResidualRole::Stem;
-    const bool initialAliasConsumer = task.role == ResidualRole::Pool;
+    const bool initialAliasProducer = task.role == ResidualRole::Stem &&
+        planned.route.result.storage == ResidualStorage::Ring;
+    const bool initialAliasConsumer = task.role == ResidualRole::Pool &&
+        planned.route.source.storage == ResidualStorage::Ring;
     configureResidualSource(program.task, at, bytes, planned.route.source,
                             planned.route.sourceStage,
                             initialAliasConsumer);
@@ -5592,12 +5613,22 @@ Program encodeResidualNetwork(
 
     ResidualValue externalInput;
     externalInput.shape = convolutions.front().shape.input;
-    externalInput.layout = residualTensorLayout(externalInput.shape);
+    externalInput.layout = residualTensorLayout(externalInput.shape, 2);
     externalInput.storage = ResidualStorage::External;
-    const auto stem = allocateResidualValue(stemOutput, ring, scratchCursor,
-                                            {});
+    auto stem = allocateResidualValue(stemOutput, ring, scratchCursor, {},
+                                      true, 2);
+    const bool poolViaDRAM = terminateAfter == "pool-via-dram";
+    if (poolViaDRAM) {
+        stem.storage = ResidualStorage::Scratch;
+        stem.scratchOffset = static_cast<std::uint32_t>(
+            alignUp(scratchCursor, 0x4000));
+        const auto bytes = residualScratchBytes(stem.shape);
+        scratchCursor = static_cast<std::uint32_t>(alignUp(
+            static_cast<std::uint64_t>(stem.scratchOffset) + bytes, 0x4000));
+    }
     emitConv(0, ResidualRole::Stem, "stem", "stem", externalInput, stem, true,
              ringRanges({&stem}));
+    planned.back().boundary = "stem";
 
     auto current = allocateResidualValue(pooled, ring, scratchCursor,
                                          ringRanges({&stem}));
@@ -5635,8 +5666,10 @@ Program encodeResidualNetwork(
             const auto index = block.main[position];
             const auto output = convolutions[index].shape.output;
             auto live = ringRanges({&shortcut, &main});
+            const auto consumerStride = position + 1 < block.main.size()
+                ? convolutions[block.main[position + 1]].shape.stride : 1u;
             auto next = allocateResidualValue(output, ring, scratchCursor,
-                                              live);
+                                              live, true, consumerStride);
             const auto role = residualMainRole(block.main.size(), position);
             const std::string roleName = block.main.size() == 2
                 ? (position ? "basic2" : "basic1")
@@ -5740,9 +5773,10 @@ Program encodeResidualNetwork(
     ElementwiseShape boundaryShape{};
     bool boundaryOutput = false;
     if (!terminateAfter.empty() && terminateAfter != "logits") {
+        const std::string boundary = poolViaDRAM ? "pool" : terminateAfter;
         const auto target = std::find_if(planned.begin(), planned.end(),
             [&](const PlannedResidualTask &entry) {
-                return entry.boundary == terminateAfter;
+                return entry.boundary == boundary;
             });
         if (target == planned.end())
             throw std::invalid_argument(
