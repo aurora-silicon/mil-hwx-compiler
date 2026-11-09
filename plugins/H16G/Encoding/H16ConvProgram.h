@@ -220,10 +220,18 @@ struct ResNet50Program {
     std::uint32_t programFormatCode = 0;
     std::size_t scratchBytes = 0;
 };
-// Exact public random-weight ResNet-50 topology: 53 biased convolutions,
-// max-pool, sixteen residual add+ReLUs, global mean, and a 2048->1000 head.
-// Convolution entries are supplied in the measured task-schedule order.
+// Compatibility entry point for the public ResNet-50 topology.  It delegates
+// to the geometry-driven residual-network encoder below.
 ResNet50Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes);
+// Geometry-driven residual-network path used by ResNet-50 and host coverage
+// graphs.  Convolutions are supplied in scheduled graph order; the encoder
+// discovers basic (3x3,3x3) and bottleneck (1x1,3x3,1x1) blocks from tensor
+// compatibility and identifies projection branches independently of names.
+// The classifier dimensions are inferred from the last block and bias size.
+ResNet50Program encodeResidualNetwork(
     const std::vector<ResNet50ConvWeights> &convolutions,
     const std::uint8_t *headWeights, std::size_t headWeightBytes,
     const std::uint8_t *headBias, std::size_t headBiasBytes);
