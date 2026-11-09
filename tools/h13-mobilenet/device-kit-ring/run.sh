@@ -10,7 +10,8 @@ tools=${TOOLS:-$(cd "$kit/../tools/h13-mobilenet" 2>/dev/null && pwd || true)}
 : "${ANECHAIN:=$tools/anechain}"
 export ANECHAIN
 
-for name in stem-k3-s2-224 dw-k3-s2-112 dw-k3-s2-56 dw-k3-s2-28 dw-k3-s2-14; do
+# Smallest-first minimizes recovery cost if a native form fails.
+for name in dw-k3-s2-14 dw-k3-s2-28 dw-k3-s2-56 dw-k3-s2-112 stem-k3-s2-224; do
     case="$kit/singles/$name"
     python3 "$tools/run_chain.py" "$case" "$repeat" --no-perop
 done

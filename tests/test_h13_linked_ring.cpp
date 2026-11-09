@@ -78,6 +78,13 @@ int main() {
     assert(layers[24].constants.size() > 0x100000);
     assert(layers[26].constants.size() >= 2099200);
     assert(layers[27].constants.size() >= 2099200);
+    // Native 3x3/s2 uses 16 phase-sparse chunks, including the C512
+    // depthwise form whose 32 channels/chunk need the four-row grammar.
+    assert(layers[0].constants.size() == 2048);
+    assert(layers[3].constants.size() == 2048);
+    assert(layers[7].constants.size() == 4096);
+    assert(layers[11].constants.size() == 7168);
+    assert(layers[23].constants.size() == 16384);
     // ANECOMP fleet44: the 2.1 MB 7x7 form is safe, while the same kernel
     // attached to a multi-tile 14x14 task wedges.  The policy therefore
     // retains the ordinary 1 MiB split outside the whole-output 7x7 form.
@@ -90,6 +97,8 @@ int main() {
             assert(reg(ring, off, bytes, 0x0c800) == 0x182);
         else
             assert(reg(ring, off, bytes, 0x0c800) == 0x82);
+        if (i == 0 || i == 3 || i == 7 || i == 11 || i == 23)
+            assert(reg(ring, off, bytes, 0x1f800) == 0x60);
         assert(reg(ring, off, bytes, 0x00028) ==
                (reg(ring, off, bytes, 0x00014) >> 16));
         if (i + 1 < 28) {

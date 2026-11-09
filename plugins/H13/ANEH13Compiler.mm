@@ -1150,7 +1150,7 @@ static NSDictionary *h16ExecuteResources(const ane::h13::Program &program) {
 
 static NSData *encodeHWX(const ane::h13::Program &program,
                          const std::vector<std::uint8_t> &anec,
-                         NSError **error) {
+                         NSError **error, bool rawH13Task = false) {
     // The writer walks this array to assign surface addresses. Apple's matmul
     // objects place the output surface below both operands, a broadcast puts
     // it between them, and every other decoded object places the inputs first.
@@ -1165,7 +1165,8 @@ static NSData *encodeHWX(const ane::h13::Program &program,
             HWXObjectBindingRoleInput, index)];
     }
     if (outputIndex >= program.inputs.size()) [bindings addObject:output];
-    NSData *task = [NSData dataWithBytes:gConvGeneration ? program.task.data()
+    NSData *task = [NSData dataWithBytes:(gConvGeneration || rawH13Task)
+                           ? program.task.data()
                            : anec.data() + ane::h13::anecHeaderBytes
                                   length:program.task.size()];
     NSData *constants = [NSData dataWithBytes:program.constants.data()
@@ -4650,7 +4651,7 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
                 ? std::vector<std::uint8_t>{} : ane::h13::encodeANEC(combined);
             NSData *combinedPayload = nil;
             if (hwx) {
-                combinedPayload = encodeHWX(combined, bytes, error);
+                combinedPayload = encodeHWX(combined, bytes, error, linkedRing);
                 if (!combinedPayload) return NO;
             } else {
                 combinedPayload = [NSData dataWithBytes:bytes.data()

@@ -344,6 +344,13 @@ schedule admits the direct 3x3-s2 3-to-32 stem and direct stride-2 depthwise
 tasks, keeps every pointwise convolution in one task through 2,099,200
 coefficient bytes, and links one convolution to one descriptor.
 
+The native-s2 coefficient stream is the H13 phase-sparse grammar selected by
+`KernelCfg 0x182` and kernel-DMA mode `0x60`.  It emits the stride phases in
+tap groups `(0,2,6,8)`, `(1,7)`, `(3,5)`, and `(4)`, serializes each mask
+immediately before its selected fp16 values, drops both signed zero forms,
+and 64-byte-aligns each of the 16 chunks.  The stem pairs adjacent output
+channels; depthwise channels are striped by `channel % 16`.
+
 Coefficient streams above 1 MiB are allowed only for a whole-output tile in
 the decoded 7x7 class (`TileHeight == output height`).  ANECOMP fleet44 ran
 1024-to-1024 at 7x7 in 172 us busy as one task versus 195 us as four tasks;

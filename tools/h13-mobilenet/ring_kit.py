@@ -89,9 +89,9 @@ def main():
 
     manifest = {
         'schedule': 'linked-ring', 'target': 'H13', 'tasks': 28,
-        'cases': ['singles/stem-k3-s2-224',
-                  'singles/dw-k3-s2-112', 'singles/dw-k3-s2-56',
-                  'singles/dw-k3-s2-28', 'singles/dw-k3-s2-14',
+        'cases': ['singles/dw-k3-s2-14', 'singles/dw-k3-s2-28',
+                  'singles/dw-k3-s2-56', 'singles/dw-k3-s2-112',
+                  'singles/stem-k3-s2-224',
                   'prefixes/p01..p28', 'full'],
         'reference': 'float64 convolution with fp16 ties-away at every edge',
     }

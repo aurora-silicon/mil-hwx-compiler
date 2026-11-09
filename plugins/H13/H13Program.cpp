@@ -2222,6 +2222,121 @@ std::vector<std::uint8_t> packConvStrided(std::uint32_t reduction,
     return packed;
 }
 
+// Native MobileNet 3x3/s2 uses the phase-sparse grammar, rather than the
+// linear-reduction sparse grammar above. A mask bit names a (tap, lane) pair;
+// the two phase rows cover the four stride phases in source-tap order.
+using SparseMaskByte = std::vector<std::pair<unsigned, unsigned>>;
+using SparsePhaseRow = std::array<SparseMaskByte, 2>;
+
+const std::vector<SparsePhaseRow> kMobileDepthwisePhaseRows = {
+    {SparseMaskByte{{0,0},{2,2},{4,6},{6,8}},
+     SparseMaskByte{{0,1},{4,7}}},
+    {SparseMaskByte{{0,3},{2,5}}, SparseMaskByte{{0,4}}},
+};
+
+const std::vector<SparsePhaseRow> kMobileDepthwisePhaseRows32 = {
+    {SparseMaskByte{{0,0},{4,2}}, SparseMaskByte{{0,6},{4,8}}},
+    {SparseMaskByte{{0,1}}, SparseMaskByte{{0,7}}},
+    {SparseMaskByte{{0,3},{4,5}}, SparseMaskByte{}},
+    {SparseMaskByte{{0,4}}, SparseMaskByte{}},
+};
+
+bool nonzeroHalfword(const std::uint8_t *value) {
+    return value[0] || (value[1] & 0x7f);
+}
+
+void appendHalfword(std::vector<std::uint8_t> &out,
+                    const std::uint8_t *value) {
+    out.push_back(value[0]);
+    out.push_back(value[1]);
+}
+
+template <class Weight>
+void appendSparsePlane(std::vector<std::uint8_t> &out,
+                       const std::vector<SparsePhaseRow> &rows,
+                       unsigned repeats, unsigned lanes, Weight weight) {
+    const std::size_t start = out.size();
+    // u16 body length followed by the structural zero byte. The body length
+    // covers masks and selected coefficients only.
+    out.insert(out.end(), 3, 0);
+    for (unsigned repeat = 0; repeat != repeats; ++repeat) {
+        for (const auto &row : rows) {
+            for (unsigned mask = 0; mask != 2; ++mask) {
+                std::uint8_t bits = 0;
+                std::vector<std::uint8_t> values;
+                for (const auto &[bit, tap] : row[mask]) {
+                    for (unsigned lane = 0; lane != lanes; ++lane) {
+                        const auto *value = weight(repeat, lane, tap);
+                        if (!nonzeroHalfword(value)) continue;
+                        bits |= static_cast<std::uint8_t>(1u << (bit + lane));
+                        appendHalfword(values, value);
+                    }
+                }
+                // H13 serializes each mask immediately before the values it
+                // selects. (Later generations put both masks first.)
+                out.push_back(bits);
+                out.insert(out.end(), values.begin(), values.end());
+            }
+        }
+    }
+    const std::size_t bodyBytes = out.size() - start - 3;
+    if (bodyBytes > 0xffff)
+        throw std::invalid_argument(
+            "H13 native stride-2 sparse plane exceeds a 16-bit body count");
+    out[start] = static_cast<std::uint8_t>(bodyBytes);
+    out[start + 1] = static_cast<std::uint8_t>(bodyBytes >> 8);
+}
+
+std::vector<std::uint8_t> packMobileSparseStride2(
+    const ConvShape &shape, const std::uint8_t *weights,
+    const std::uint8_t *bias, std::array<std::uint32_t, 16> &offsets,
+    std::array<std::uint32_t, 16> &sizes) {
+    const bool depthwise = shape.groups == shape.input.channels &&
+        shape.groups == shape.output.channels;
+    const bool stem = shape.groups == 1 && shape.input.channels == 3 &&
+        shape.output.channels == 32;
+    if (shape.kernel != 3 || shape.kernelWidth != 3 || shape.stride != 2 ||
+        (!stem && !depthwise))
+        throw std::invalid_argument(
+            "H13 native sparse packing covers the MobileNet stem and depthwise 3x3/s2 forms");
+
+    std::vector<std::uint8_t> packed;
+    for (unsigned chunk = 0; chunk != 16; ++chunk) {
+        const std::size_t start = packed.size();
+        offsets[chunk] = static_cast<std::uint32_t>(start);
+        if (depthwise) {
+            const unsigned perChunk = shape.input.channels / 16;
+            const auto &rows = perChunk >= 32
+                ? kMobileDepthwisePhaseRows32 : kMobileDepthwisePhaseRows;
+            for (unsigned channel = chunk; channel < shape.input.channels;
+                 channel += 16) {
+                if (bias) appendHalfword(packed, bias + 2 * channel);
+                appendSparsePlane(packed, rows, 1, 1,
+                    [&](unsigned, unsigned, unsigned tap) {
+                        return weights + 2 *
+                            (static_cast<std::size_t>(channel) * 9 + tap);
+                    });
+            }
+        } else {
+            const unsigned output = 2 * chunk;
+            if (bias) {
+                appendHalfword(packed, bias + 2 * output);
+                appendHalfword(packed, bias + 2 * (output + 1));
+            }
+            appendSparsePlane(packed, kMobileDepthwisePhaseRows,
+                shape.input.channels, 2,
+                [&](unsigned input, unsigned lane, unsigned tap) {
+                    return weights + 2 *
+                        ((static_cast<std::size_t>(output + lane) *
+                          shape.input.channels + input) * 9 + tap);
+                });
+        }
+        packed.resize(alignUp(packed.size(), 64), 0);
+        sizes[chunk] = static_cast<std::uint32_t>(packed.size() - start);
+    }
+    return packed;
+}
+
 } // namespace
 
 /// Apple's custom-pad depthwise section (k1x1 grouped, asymmetric W pad):
@@ -2787,7 +2902,16 @@ static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
         part.output.channels = slice;
         std::vector<std::uint8_t> packed;
         std::uint32_t lanes = 1;
-        if (plan.kind == ConvKind::Depthwise && shape.stride == 1) {
+        std::array<std::uint32_t, 16> offsets{}, sizes{};
+        const bool nativeSparse = linkedRing && shape.kernel == 3 &&
+            shape.kernelWidth == 3 && shape.stride == 2;
+        if (nativeSparse) {
+            if (plan.kind == ConvKind::Dense) lanes = 2;
+            const std::uint8_t *w = weights +
+                static_cast<std::size_t>(firstChannel) * reduction * 2;
+            const std::uint8_t *b = bias ? bias + firstChannel * 2 : nullptr;
+            packed = packMobileSparseStride2(part, w, b, offsets, sizes);
+        } else if (plan.kind == ConvKind::Depthwise && shape.stride == 1) {
             packed = packConvDepthwise(taps, slice, weights, bias);
         } else {
             const auto chunks = linkedRing && shape.stride == 2
@@ -2810,8 +2934,8 @@ static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
         }
         const std::uint32_t sectionBase =
             static_cast<std::uint32_t>(program.constants.size());
-        std::array<std::uint32_t, 16> offsets{}, sizes{};
-        kernelChunks(part, packed, lanes, offsets, sizes);
+        if (!nativeSparse)
+            kernelChunks(part, packed, lanes, offsets, sizes);
         program.constants.insert(program.constants.end(), packed.begin(),
                                  packed.end());
         program.constants.resize(alignUp(program.constants.size(), 64), 0);
@@ -2859,11 +2983,12 @@ static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
             h13RegisterOffset(task, offset, bytes, 0x0001c));
         const std::uint32_t ocg =
             plan.kind == ConvKind::Depthwise ? 0 : floorLog2(lanes);
+        const std::uint32_t encodedPad = nativeSparse ? 0u :
+            static_cast<std::uint32_t>(pad);
         const std::uint32_t convCfg = (baseCfg & 0xf8000000u) |
             shape.kernelWidth | (shape.kernel << 5) | (ocg << 10) |
             (shape.stride << 13) | (shape.stride << 15) |
-            (static_cast<std::uint32_t>(pad) << 17) |
-            (static_cast<std::uint32_t>(pad) << 22);
+            (encodedPad << 17) | (encodedPad << 22);
         putRegister(task, offset, bytes, 0x0001c, convCfg);
         if (shape.stride == 2)
             putRegister(task, offset, bytes, 0x0c800, 0x182u);
@@ -3427,6 +3552,79 @@ struct MobileRingGeometry {
     std::uint64_t sourceSpan;
 };
 
+std::uint32_t mobileRingCommon34(const MobileRingGeometry &g,
+                                 bool outputResident,
+                                 bool shortPrefixBridge) {
+    // The linked ring's Common class follows the resident result phase.  A
+    // terminal DRAM result instead uses the operation's ordinary shape class.
+    if (shortPrefixBridge) return 0x00233301u;
+    if (outputResident) {
+        if (g.wo == 112)
+            return g.kernel == 1 ? 0x00231101u : 0x00230001u;
+        if (g.wo == 56)
+            return g.stride == 2 ? 0x00211101u : 0x00243301u;
+        if (g.wo == 28) return 0x00222201u;
+        if (g.wo == 14) return 0x00233301u;
+        if (g.wo == 7) return 0x00244405u;
+    }
+    if (g.ci == 3 && g.co == 32) return 0x00230001u;
+    if (g.wo == 112)
+        return g.kernel == 1 ? 0x00231101u : 0x00230001u;
+    if (g.wo == 56) {
+        if (g.stride == 2 || g.depthwise) return 0x00210001u;
+        return 0x00241101u;
+    }
+    if (g.wo == 28)
+        return (g.stride == 2 || (!g.depthwise && g.ci == g.co))
+            ? 0x00222201u : 0x00220001u;
+    if (g.wo == 14)
+        return (g.stride == 2 || (!g.depthwise && g.ci == g.co))
+            ? 0x00233301u : 0x00230001u;
+    if (g.wo == 7) return 0x00244405u;
+    throw std::invalid_argument(
+        "h13.linked-ring-outside-envelope: unsupported Common class");
+}
+
+std::uint32_t mobileRingCostHint(const MobileRingGeometry &g, bool terminal) {
+    // H13's scheduler hint is a shape/edge-role class.  It does not affect
+    // arithmetic, but matching it keeps native forms byte-comparable.
+    if (g.ci == 3 && g.co == 32) return terminal ? 0x23u : 0x08u;
+    if (g.depthwise) {
+        if (g.stride == 2) {
+            if (g.wi == 112) return 0x0fu;
+            if (g.wi == 56) return 0x07u;
+            if (g.wi == 28) return terminal ? 0x06u : 0x03u;
+            if (g.wi == 14) return terminal ? 0x07u : 0x01u;
+        } else {
+            if (g.wi == 112) return terminal ? 0x1au : 0x17u;
+            if (g.wi == 56) return terminal ? 0x1au : 0x09u;
+            if (g.wi == 28) return terminal ? 0x0du : 0x03u;
+            if (g.wi == 14) return terminal ? 0x0du : 0x01u;
+            if (g.wi == 7) return terminal ? 0x0eu : 0x02u;
+        }
+    } else if (g.kernel == 1) {
+        if (g.wi == 112) return terminal ? 0x35u : 0x17u;
+        if (g.wi == 56) {
+            if (terminal) return 0x1bu;
+            return g.ci == g.co ? 0x08u : 0x04u;
+        }
+        if (g.wi == 28) {
+            if (terminal) return g.ci == g.co ? 0x11u : 0x0fu;
+            return g.ci == g.co ? 0x0au : 0x05u;
+        }
+        if (g.wi == 14) {
+            if (terminal) return g.ci == g.co ? 0x1cu : 0x15u;
+            return g.ci == g.co ? 0x0fu : 0x07u;
+        }
+        if (g.wi == 7) {
+            if (terminal) return g.ci == 512 ? 0x2cu : 0x4au;
+            return g.ci == 512 ? 0x1eu : 0x3du;
+        }
+    }
+    throw std::invalid_argument(
+        "h13.linked-ring-outside-envelope: unsupported scheduler hint class");
+}
+
 std::uint32_t mobileRingSkew(const MobileRingGeometry &g) {
     // H13's bank rotation is a function of the native MobileNet surface and
     // consumer role.  These cases are shape classes, not layer numbers: the
@@ -3510,6 +3708,29 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
     auto spans = taskSpans(program);
     if (spans.size() != layers.size())
         throw std::logic_error("h13.linked-ring: task/layer count changed while linking");
+
+    // A 628-byte task may not straddle a 16 KiB text page.  Repack the one
+    // boundary where 0x100 alignment alone would place a task at 0x3f00.
+    if (layers.size() > 21) {
+        std::vector<std::uint8_t> repacked;
+        std::vector<std::size_t> offsets;
+        for (const auto &span : spans) {
+            std::size_t at = static_cast<std::size_t>(alignUp(repacked.size(), 0x100));
+            if ((at & 0x3fffu) + span.bytes > 0x4000u)
+                at = static_cast<std::size_t>(alignUp(at, 0x4000));
+            repacked.resize(at + span.bytes, 0);
+            std::copy(program.task.begin() + static_cast<std::ptrdiff_t>(span.offset),
+                      program.task.begin() + static_cast<std::ptrdiff_t>(span.offset + span.bytes),
+                      repacked.begin() + static_cast<std::ptrdiff_t>(at));
+            offsets.push_back(at);
+        }
+        for (std::size_t i = 0; i + 1 < offsets.size(); ++i)
+            storeLE32(repacked, offsets[i] + 28,
+                      static_cast<std::uint32_t>(offsets[i + 1]));
+        program.task = std::move(repacked);
+        program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
+        spans = taskSpans(program);
+    }
 
     const std::size_t n = layers.size();
     std::vector<std::uint32_t> sourceCfg(n, 0x500172u), resultCfg(n, 0x14au);
@@ -3644,6 +3865,15 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
             : ((inAlias || inDependent || readsScratch[i])
                 ? 0x00fff800u : 0x00fff868u));
         storeLE32(task, off + 24, control);
+        storeLE32(task, off, loadLE32(task, off) & ~(1u << 22));
+        storeLE32(task, off + 4,
+                  (loadLE32(task, off + 4) & 0xffff0000u) |
+                  ((n == 3 && i == 1) ? 0x08u
+                                      : mobileRingCostHint(g[i], last)));
+
+        putRegister(task, off, bytes, 0x00034,
+                    mobileRingCommon34(g[i], outResident[i],
+                                       n == 3 && i == 1));
 
         putRegister(task, off, bytes, 0x04804, sourceCfg[i]);
         putRegister(task, off, bytes, 0x04808, static_cast<std::uint32_t>(sourceBase[i]));
@@ -3699,6 +3929,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
             putRegister(task, off, bytes, 0x13818, static_cast<std::uint32_t>(spillBytes));
             putRegister(task, off, bytes, 0x13838, 0x08002031u);
         } else {
+            selectors = (selectors & ~31u) | 5u;
             putRegister(task, off, bytes, 0x13800, 0x33881u);
         }
 
@@ -3725,6 +3956,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
             putRegister(task, off, bytes, 0x17814, static_cast<std::uint32_t>(spillBytes));
             putRegister(task, off, bytes, 0x17818, 0x08302031u);
         } else {
+            selectors = (selectors & ~(31u << 12)) | (4u << 12);
             putRegister(task, off, bytes, 0x17800,
                         resultCfg[i] == 0x142u || n == 1 ? 0xc1u : 0x040000c1u);
         }
@@ -3738,6 +3970,8 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
         }
         if (g[i].stride == 2)
             putRegister(task, off, bytes, 0x0c800, 0x182u);
+        if (g[i].stride == 2)
+            putRegister(task, off, bytes, 0x1f800, 0x60u);
 
         if (layout) {
             LinkedLayer item{static_cast<std::uint32_t>(i), 1,
