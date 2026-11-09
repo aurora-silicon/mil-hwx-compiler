@@ -323,8 +323,8 @@ int main() {
         assert(!hasReg(ring,fullLast,0x538));
         assert(!hasReg(ring,fullLast,0x53c));
 
-        // Fused finite clips preserve every ordinary scheduler cost, except
-        // that depthwise clip tasks select the linked-clip header mode 2.
+        // Finite clips keep the scheduler cost and enable H14's LUT in NE
+        // config. ReLU keeps the pre-fix bytes and never takes this branch.
         auto clippedLayers=mobile(224,false);
         for(unsigned i=0;i+1<clippedLayers.size();++i)
             fuseConvClip(clippedLayers[i],0x0000,0x4600);
@@ -334,10 +334,13 @@ int main() {
         for(unsigned i=0;i<28;++i) {
             const auto clipCost=word(clipped.taskStream,clippedAt+4);
             const auto reluCost=word(ring.taskStream,reluAt+4);
-            if(clippedLayers[i].depthwiseConv && i+1<28)
-                assert(clipCost==2);
-            else
-                assert(clipCost==reluCost);
+            assert(clipCost==reluCost);
+            if(i+1<28) {
+                const auto &shape=clippedLayers[i].mobileRingShape;
+                const bool sparse=shape.kernel==3&&shape.stride==2;
+                assert(reg(clipped,clippedAt,0xd00)==
+                       (sparse?0x10182u:0x10082u));
+            }
             clippedAt=(clippedAt+clippedSizes[i]+15)&~std::size_t(15);
             reluAt=(reluAt+sizes[i]+15)&~std::size_t(15);
         }

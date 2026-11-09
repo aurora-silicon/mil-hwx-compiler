@@ -135,10 +135,13 @@ prefixes ending at 128x56x56; the adjacent 64x56x56 and 128x28x28 terminals
 remain compact. This avoids a prefix-number table and applies to other frame
 sizes at the same allocation boundary.
 
-Finite-clip rings keep ordinary scheduler costs except on depthwise tasks,
-where header word 1 selects mode 2. That is the same operation/epilogue rule
-used by the existing H13 and H14 linked clip forms. ReLU tasks do not take
-this branch and retain their previous bytes.
+Finite-clip rings enable H14's LUT in both halves of the NE contract: MAC word
+`0xd04` selects the LUT and NE config `0xd00` sets bit 16. Sparse convolution
+keeps its `0x182` class below that bit; other clip tasks use class `0x82`.
+This is the rule shared by H14's decoded LUT tasks. ReLU sets neither LUT bit
+and retains its previous bytes. Header word 1 remains the geometry-derived
+scheduler cost: selecting depthwise mode 2 there alone was device-tested and
+had no arithmetic effect.
 
 ## Envelope and verification limits
 

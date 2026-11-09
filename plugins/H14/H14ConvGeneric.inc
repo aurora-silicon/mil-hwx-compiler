@@ -939,10 +939,7 @@ std::vector<std::uint8_t> mobileTask(
         (layer.mobileRingActivation == 1 ? 0x00010000u : 0u) |
         (layer.mobileRingActivation == 2 ? 0x00020000u : 0u);
 
-    // A depthwise task with the fused clip epilogue takes header mode 2, as
-    // the H13 and H14 linked clip forms do; other tasks keep their cost word.
-    storeLE32(task, 4, g.depthwise && layer.mobileRingActivation == 2
-                           ? 2u : mobileCost(g, last));
+    storeLE32(task, 4, mobileCost(g, last));
     storeLE32(task, 8, (first ? 8u : 0u) | (last ? 0x22u : 0u));
     storeLE32(task, 16, (first || last) ? 0x00fff868u : 0x00fff800u);
     std::uint32_t banks = 0;
@@ -1016,7 +1013,13 @@ std::vector<std::uint8_t> mobileTask(
     }
 
     std::vector<std::pair<std::uint32_t, std::uint32_t>> ne;
-    if (sparse) ne.emplace_back(0x0d00, 0x182u);
+    // H14 LUT tasks set NE config bit 16 as well as selecting the LUT in the
+    // MAC word.  ReLU does neither; sparse convolutions retain their 0x182
+    // geometry class under the LUT-enable bit.
+    if (layer.mobileRingActivation == 2)
+        ne.emplace_back(0x0d00, 0x10000u | (sparse ? 0x182u : 0x82u));
+    else if (sparse)
+        ne.emplace_back(0x0d00, 0x182u);
     ne.emplace_back(0x0d04, mac);
     ne.emplace_back(0x0d10, 0x3c00u);
     ringScatter(task, ne);
