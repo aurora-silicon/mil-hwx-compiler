@@ -338,8 +338,9 @@ int main() {
             if(i+1<28) {
                 const auto &shape=clippedLayers[i].mobileRingShape;
                 const bool sparse=shape.kernel==3&&shape.stride==2;
-                assert(reg(clipped,clippedAt,0xd00)==
-                       (sparse?0x10182u:0x10082u));
+                const auto ne=reg(clipped,clippedAt,0xd00);
+                assert(ne&(1u<<16));
+                assert((ne&~(1u<<16))==(0x82u|(sparse?1u<<8:0u)));
             }
             clippedAt=(clippedAt+clippedSizes[i]+15)&~std::size_t(15);
             reluAt=(reluAt+sizes[i]+15)&~std::size_t(15);

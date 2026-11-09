@@ -1016,8 +1016,13 @@ std::vector<std::uint8_t> mobileTask(
     // H14 LUT tasks set NE config bit 16 as well as selecting the LUT in the
     // MAC word.  ReLU does neither; sparse convolutions retain their 0x182
     // geometry class under the LUT-enable bit.
-    if (layer.mobileRingActivation == 2)
-        ne.emplace_back(0x0d00, 0x10000u | (sparse ? 0x182u : 0x82u));
+    if (layer.mobileRingActivation == 2) {
+        constexpr auto lutEnable = 1u << 16;
+        constexpr auto convolutionClass = 0x82u;
+        const auto sparseClass = sparse ? 1u << 8 : 0u;
+        ne.emplace_back(0x0d00,
+                        lutEnable | convolutionClass | sparseClass);
+    }
     else if (sparse)
         ne.emplace_back(0x0d00, 0x182u);
     ne.emplace_back(0x0d04, mac);
