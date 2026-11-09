@@ -203,6 +203,19 @@ static std::uint32_t reg(const ane::h13::Program &program,
     throw std::runtime_error("residual task register is absent");
 }
 
+static bool hasReg(const ane::h13::Program &program,
+                   TaskSpan span, std::uint32_t address) {
+    std::size_t cursor = span.offset + 40;
+    while (cursor < span.offset + span.bytes) {
+        const auto header = word(program.task, cursor);
+        const auto count = (header >> 26) + 1;
+        const auto base = header & 0x03ffffffu;
+        if (base <= address && address < base + 4 * count) return true;
+        cursor += 4 * (count + 1);
+    }
+    return false;
+}
+
 static void expect(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -260,6 +273,132 @@ static ane::h13::Program linkedRingStemReference() {
     };
     return ane::h13::linkMobileNetRing(
         {encode(stemShape), encode(depthwiseShape)});
+}
+
+static ane::h13::Program linkedRingPoolGeometryReference(
+    ElementwiseShape input, ElementwiseShape output) {
+    const ConvShape shape{3, 3, 2, input.channels, true, input, output};
+    std::vector<std::uint8_t> weights(
+        2 * static_cast<std::size_t>(output.channels) * 3 * 3, 0);
+    std::vector<std::uint8_t> bias(2 * output.channels, 0);
+    return ane::h13::encodeConvLinkedRing(
+        shape, weights.data(), weights.size(), bias.data(), bias.size());
+}
+
+struct ColumnWrite {
+    std::uint32_t source;
+    std::uint32_t destination;
+};
+
+static std::vector<ColumnWrite> modelColumnSchedule(
+    std::uint32_t width, std::uint32_t schedule) {
+    constexpr std::uint32_t pieceColumns = 16;
+    const auto pieces = (width + pieceColumns - 1) / pieceColumns;
+    // The broken encoder put its PE stage selector in Common +0x34 bits
+    // 5:3.  On the measured pool those bits acted as both the first column
+    // piece and the piece-to-piece destination advance.  A real width
+    // schedule leaves that field clear, starts at piece zero, and advances
+    // by one piece.
+    const auto oldStageField = (schedule >> 3) & 7u;
+    const auto firstPiece = std::min(oldStageField, pieces);
+    const auto advance = oldStageField ? oldStageField : 1u;
+    std::vector<ColumnWrite> writes;
+    for (std::uint32_t sourcePiece = firstPiece;
+         sourcePiece < pieces; ++sourcePiece) {
+        const auto destinationPiece = firstPiece +
+            (sourcePiece - firstPiece) * advance;
+        for (std::uint32_t within = 0;
+             within != pieceColumns && sourcePiece * pieceColumns + within < width;
+             ++within)
+            writes.push_back({sourcePiece * pieceColumns + within,
+                              destinationPiece * pieceColumns + within});
+    }
+    return writes;
+}
+
+static void validateMeasuredPoolColumnModel() {
+    const auto oldSchedule = 1u | (2u << 3);
+    const auto oldWrites = modelColumnSchedule(56, oldSchedule);
+    std::vector<int> oldDestination(72, -1);
+    for (const auto write : oldWrites)
+        oldDestination[write.destination] = static_cast<int>(write.source);
+    for (std::uint32_t column = 8; column != 32; ++column)
+        expect(oldDestination[column] < 0,
+               "old pool model does not leave columns 8..31 unwritten");
+    for (std::uint32_t column = 32; column != 48; ++column)
+        expect(oldDestination[column] == static_cast<int>(column),
+               "old pool model does not make columns 32..47 correct");
+    for (std::uint32_t column = 48; column != 56; ++column)
+        expect(oldDestination[column] < 0,
+               "old pool model does not leave columns 48..55 unwritten");
+    for (std::uint32_t column = 0; column != 8; ++column)
+        expect(oldDestination[64 + column] == static_cast<int>(48 + column),
+               "old pool model does not wrap the last piece one physical row");
+
+    const auto fixedSchedule = (0x20u << 16) | (1u << 16) | 1u;
+    const auto fixedWrites = modelColumnSchedule(56, fixedSchedule);
+    std::vector<int> fixedDestination(56, -1);
+    for (const auto write : fixedWrites)
+        if (write.destination < fixedDestination.size())
+            fixedDestination[write.destination] = static_cast<int>(write.source);
+    for (std::uint32_t column = 0; column != 56; ++column)
+        expect(fixedDestination[column] == static_cast<int>(column),
+               "fixed pool model does not cover every logical output column");
+}
+
+static void validatePoolTilingFields(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() >= 2, "residual stream has no pool task");
+    const auto pool = spans[1];
+    const auto inputWord = reg(program, pool, 0x00000);
+    const auto outputWord = reg(program, pool, 0x00014);
+    const ElementwiseShape input{reg(program, pool, 0x0000c),
+                                 inputWord >> 16, inputWord & 0xffffu};
+    const ElementwiseShape output{reg(program, pool, 0x00010),
+                                  outputWord >> 16, outputWord & 0xffffu};
+    const auto proven = linkedRingPoolGeometryReference(input, output);
+    const auto provenTask = taskSpans(proven).front();
+
+    const auto spatialMask = 31u | (31u << 5) | (3u << 13) | (3u << 15);
+    expect((reg(program, pool, 0x0001c) & spatialMask) ==
+               (reg(proven, provenTask, 0x0001c) & spatialMask),
+           "pool kernel/stride fields differ from proven 3x3/s2 traversal");
+    for (const auto address : {0x00020u, 0x00028u})
+        expect(reg(program, pool, address) == reg(proven, provenTask, address),
+               "pool traversal/tile field differs from proven geometry");
+    const auto groupMask = 1u | (1u << 16);
+    expect((reg(program, pool, 0x00024) & groupMask) ==
+               (reg(proven, provenTask, 0x00024) & groupMask),
+           "pool input/output group counts differ from proven geometry");
+    const auto poolTileClass = reg(program, pool, 0x0002c);
+    const auto provenTileClass = reg(proven, provenTask, 0x0002c);
+    const auto poolOperationTileClass = 4u | (4u << 4);
+    expect(poolTileClass == poolOperationTileClass && provenTileClass == 0,
+           "pool/depthwise operation-specific tile classes changed");
+    expect(reg(program, pool, 0x00034) == reg(proven, provenTask, 0x00034),
+           "pool column schedule differs from proven output-width rule");
+    expect(!hasReg(program, pool, 0x1f800),
+           "PE-only pool unexpectedly carries a KernelDMA record");
+}
+
+static void validateFullPoolCompletionChain(
+    const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() > 2 && program.taskRecords[1].role == "pool",
+           "task index 1 is not the first nonterminal pool");
+    const auto pool = spans[1];
+    const auto successor = spans[2];
+    expect(word(program.task, pool.offset + 28) == successor.offset,
+           "pool task-buffer link does not target task index 2");
+    expect((((word(program.task, pool.offset + 4) >> 16) & 0x1ffu) + 1) * 4 ==
+               successor.bytes,
+           "pool task-buffer link does not describe task index 2");
+    expect(word(program.task, pool.offset + 32) & kTaskBufferEnable,
+           "nonterminal pool does not enable the task-buffer chain");
+    expect((word(program.task, pool.offset + 24) &
+               (kTaskSignalEnable | kTaskSignalReset)) ==
+               (kTaskSignalEnable | kTaskSignalReset),
+           "pool does not emit the completion signal consumed by q4");
 }
 
 static void validateStemPoolHandoff(const ane::h13::Program &program) {
@@ -498,6 +637,7 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
     validateTaskHeaders(program);
     validateStemPoolHandoff(program);
     validateKernelDMASpans(program);
+    validatePoolTilingFields(program);
     return {std::move(program), std::move(logits)};
 }
 
@@ -511,6 +651,7 @@ static bool writeANEC(const std::string &path,
 }
 
 int main(int argc, char **argv) {
+    validateMeasuredPoolColumnModel();
     auto fullCase = encodeAndCheck(bottleneckShapes, bottleneckBlocks, 224);
     auto &full = fullCase.program;
     if (full.taskCount != 80 || full.task.empty() || full.constants.empty() ||
@@ -573,6 +714,7 @@ int main(int argc, char **argv) {
     validateKernelDMASpans(stem);
     validatePoolViaDRAM(poolViaDRAM);
     validatePoolResidentLayout(full);
+    validateFullPoolCompletionChain(full);
     const auto fullSpans = taskSpans(full);
     for (const auto *boundary : {&pool, &block, &mean}) {
         const auto spans = taskSpans(*boundary);

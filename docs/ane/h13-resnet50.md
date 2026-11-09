@@ -60,13 +60,39 @@ kernel fields, the leading two-cell TensorFlow-SAME padding of the 7x7 stem,
 and the exact external-source layout shared with the proven 3x3 linked-ring
 stem.
 
-The round-7 two-task program made pool terminal, so the pool wrote external
-DRAM and completed. In the full program task 1 is the first nonterminal pool:
-it wrote a resident result using the oversized residual row rule before task 2
-consumed it. The full-only timeout is therefore localized to task 1's resident
-pool result/dependency class. Replacing that row with the shared bank-skew rule
-is the host-evidenced fix; the prefix rungs remain the device bisect that will
-confirm the first completing add, mean, and linear classes.
+Round 8 showed that both the scratch-fed and resident forms of task 1 produce
+the same wrong pool columns.  A host field decode now compares that PE task
+with the device-proven linked-ring depthwise 3x3/s2 task having the same
+112-to-56 geometry.  Input/output dimensions, kernel and stride, traversal,
+group counts, tile height, and the shape-derived L2 source/result advances all
+agree.  The depthwise marker and PE operation TileClass differ by operation as
+expected.  The material mismatch is Common `0x34`: it is the column schedule,
+but the PE constructor had filled it with an invented pipeline enable and
+pool/add/reduction stage selector.
+
+For the 56-column pool, that old selector starts at 16-column piece two and
+advances destinations by two pieces.  The host model therefore writes source
+piece two to columns 32 through 47 and source piece three at physical column
+64, which wraps into columns zero through seven of the following 64-column
+physical row.  It leaves logical columns 8 through 31 and 48 through 55
+unwritten.  This reproduces the device dump.  The shared width schedule starts
+at piece zero, advances one piece, and covers every logical column.  The rule
+is derived from the active traversal width (output width for pool/add and
+input reduction width for mean), so the same test checks the 224 and 192
+ResNet-50 pools and the ResNet-18 pool against the proven depthwise field.
+
+The full-stream timeout is consequently localized to index 1, class pool.
+Its task-buffer link points to index 2, its nonterminal TBE is set, and its
+control word requests both TSE and TSR.  With the old column schedule the PE
+does not retire, so q4 never observes that completion signal and reports zero
+finish lines; index 2 cannot consume the resident result.  The fixed schedule
+does not change routing or the dependency chain.  The ladder already has a
+one-block rung (first add), every later block prefix, reduce-mean, and full
+linear output, so no additional task-class rung is needed.
+
+Compact PE tasks have both kernel-table and kernel-execution enables clear and
+carry no constants.  Their formerly copied KernelDMA records were therefore
+dead state; they are omitted instead of preserving unexplained words.
 
 The dependency-free numeric reference explicitly executes TensorFlow-SAME
 max-pool with the odd padding cell after the surface. Its asymmetric test case

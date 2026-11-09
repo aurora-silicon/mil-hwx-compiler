@@ -2820,6 +2820,28 @@ std::uint32_t ceilLog2(std::uint32_t value) {
     return value == (1u << floor) ? floor : floor + 1;
 }
 
+std::uint32_t commonWidthClass(std::uint32_t outputWidth) {
+    if (!outputWidth)
+        throw std::invalid_argument(
+            "h13.common-schedule: output width must be nonzero");
+    return outputWidth <= 8 ? 4
+        : std::min<std::uint32_t>(4, 7 - std::min<std::uint32_t>(
+              7, floorLog2(outputWidth - 1) + 1));
+}
+
+std::uint32_t commonColumnSchedule(std::uint32_t outputWidth,
+                                   bool repeatWidthClass) {
+    const auto widthClass = commonWidthClass(outputWidth);
+    // Common ColumnSchedule: bits 23:16 carry the column-piece width class.
+    // Width class 4 also repeats in the two low piece fields and selects its
+    // short-surface form; wider depthwise and PE surfaces leave those piece
+    // fields clear.  This is the shared geometry rule for Common +0x34.
+    return (0x20u << 16) | (widthClass << 16) |
+        (repeatWidthClass ? (widthClass << 12) | (widthClass << 8) |
+                                (widthClass == 4 ? 0x05u : 0x01u)
+                          : 0x0001u);
+}
+
 struct ConvGenericPlan {
     ConvKind kind;
     std::uint32_t inputPerTask;      // Common Cin
@@ -3035,9 +3057,7 @@ static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
     const std::uint64_t outPlane = output.nchw[4], outRow = output.nchw[5];
     const int pad = convPadding(shape);
     const std::uint32_t outputWidth = out.width;
-    const std::uint32_t cfgClass = outputWidth <= 8 ? 4
-        : std::min<std::uint32_t>(4, 7 - std::min<std::uint32_t>(7,
-              floorLog2(outputWidth - 1) + 1));
+    const std::uint32_t cfgClass = commonWidthClass(outputWidth);
     // Common 0x34: 0x20 in bits 23:16 plus a width class (4 up to 8 output
     // columns, then 3, 2, 1 per doubling, 0 from 128). The low half repeats
     // the class in two nibbles in the forms Apple picks for them: always at
@@ -3047,10 +3067,8 @@ static Program encodeConvFormula(ConvShape shape, const std::uint8_t *weights,
     const bool repeatClass = cfgClass == 4 ||
         ((cfgClass == 2 || cfgClass == 3) && plan.kind == ConvKind::Dense &&
          (shape.kernel == 3 || (in.channels >= 512 && out.channels >= 512)));
-    const std::uint32_t common34 = (0x20u << 16) | (cfgClass << 16) |
-        (repeatClass ? (cfgClass << 12) | (cfgClass << 8) |
-                       (cfgClass == 4 ? 0x05u : 0x01u)
-                     : 0x0001u);
+    const std::uint32_t common34 =
+        commonColumnSchedule(outputWidth, repeatClass);
 
     const auto baseTask = taskBytesFor(base->words, base->wordCount);
     const std::size_t baseBytes = baseTask.size();
@@ -4691,11 +4709,16 @@ constexpr std::uint32_t residualTileClass(ResidualRole role) {
     return 4u | (operationClass << 4);
 }
 
-constexpr std::uint32_t residualPipelineConfig(ResidualRole role) {
-    // Common PipelineCfg: pipeline enable plus pool/add/reduction stage mask.
-    const std::uint32_t stages = role == ResidualRole::Pool ? 2u
-        : role == ResidualRole::Add ? 6u : 10u;
-    return 1u | (stages << 3);
+std::uint32_t residualColumnSchedule(ResidualRole role,
+                                     ElementwiseShape input,
+                                     ElementwiseShape output) {
+    // Common +0x34 is ColumnSchedule, not a PE pipeline-stage mask.  Pool and
+    // add traverse their output width; mean traverses the input reduction
+    // surface.  All PE roles use the depthwise-style width form.  The shared
+    // short-surface class repeats only when the width class itself requires
+    // it, independent of a model or layer identity.
+    const auto width = role == ResidualRole::Mean ? input.width : output.width;
+    return commonColumnSchedule(width, commonWidthClass(width) == 4);
 }
 
 constexpr std::uint32_t residualPEConfig(ResidualRole role) {
@@ -4872,13 +4895,8 @@ Program residualPETask(ResidualRole role, ElementwiseShape input,
         throw std::logic_error("invalid H13 residual PE task role");
     Program task;
     task.task.resize(40, 0);
-    std::vector<std::uint32_t> kernel0(18, 0x80);
-    kernel0[0] = kernel0[1] = 0;
-    std::vector<std::uint32_t> kernel1(12, 0);
-    for (std::size_t i = 0; i != 4; ++i) kernel1[i] = 0x80;
-    for (std::size_t i = 8; i != 12; ++i) kernel1[i] = 0x40;
-    appendRecord(task.task, 0x1f800, kernel0);
-    appendRecord(task.task, 0x1f8c8, kernel1);
+    // PE-only descriptors have both KernelDMA paths disabled in BaseEnable
+    // and carry no constants.  Do not emit an unused kernel record.
     std::vector<std::uint32_t> common(16, 0);
     common[0] = (input.height << 16) | input.width;
     common[1] = 1;
@@ -4894,7 +4912,7 @@ Program residualPETask(ResidualRole role, ElementwiseShape input,
     common[9] = residualGroupConfig();
     common[10] = mean ? input.height : output.height;
     common[11] = residualTileClass(role);
-    common[13] = residualPipelineConfig(role);
+    common[13] = residualColumnSchedule(role, input, output);
     appendRecord(task.task, 0x00000, common);
     std::vector<std::uint32_t> source(28, 0);
     source[0] = source[1] = residualDisabledDMAConfig();
@@ -4912,8 +4930,8 @@ Program residualPETask(ResidualRole role, ElementwiseShape input,
     destination[0] = residualDestinationDisabledConfig();
     destination[6] = residualNeutralFormat();
     appendRecord(task.task, 0x17800, destination);
-    if (task.task.size() != 504)
-        throw std::logic_error("H13 compact PE task is not 504 bytes");
+    if (task.task.size() != 376)
+        throw std::logic_error("H13 compact PE task is not 376 bytes");
     task.firstTaskBytes = task.task.size();
     task.taskCount = 1;
     task.formulaBuilt = true;
