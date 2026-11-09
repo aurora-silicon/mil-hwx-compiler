@@ -1295,7 +1295,7 @@ static ANEHWXArtifact *encodeUnaryPointwiseProgram(
             shortName:operation.identifier role:HWXObjectBindingRoleOutput
             elementType:operation.outputType.elementType shape:view],
     ];
-    NSUInteger taskCount=[operation.operationName isEqualToString:@"log"] ? 2 : 1;
+    NSUInteger taskCount=1;
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:taskCount recordCount:program.programRecordCount
         formatCode:program.programFormatCode scratchByteLength:0

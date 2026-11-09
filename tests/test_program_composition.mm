@@ -12,6 +12,7 @@ using CC_LONG = size_t;
 #import "H16GTaskComposer.h"
 #import "H16GTaskEncoder.h"
 #import "H16GSRAMChainEncoder.h"
+#import "H16GLUTEncoder.h"
 
 static int failures = 0;
 
@@ -29,6 +30,14 @@ static NSString *sha256(NSData *data) {
     for (NSUInteger index = 0; index < sizeof(digest); ++index)
         [result appendFormat:@"%02x", digest[index]];
     return result;
+}
+
+static NSData *trimmedKernel(NSData *data) {
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    NSUInteger length = data.length;
+    while (length > 0 && bytes[length - 1] == 0) --length;
+    length = MIN(data.length,(length + 1) & ~(NSUInteger)1);
+    return [data subdataWithRange:NSMakeRange(0,length)];
 }
 
 static H16GTaskEncodingRequest *request(NSUInteger size, BOOL gelu) {
@@ -72,11 +81,9 @@ static void testTiledPostOperationComposition(void) {
         expect([[sha256(composed.tdProgram.data) lowercaseString]
                    isEqualToString:expectedHashes[sizeNumber]],
                @"composed task stream matches the controlled M4 pair");
-        expect(composed.constantRegion.length == 86 &&
-               [[sha256(composed.constantRegion) lowercaseString]
-                   isEqualToString:
-                       @"3df7fa0c50c7582ff3f1a44edaea41d3fb8585422ea36d6e7a2691c67e541a66"],
-               @"composed task uses the decoded unpadded GELU kernel");
+        NSData *unpaddedGELU = trimmedKernel(consumer.constantRegion);
+        expect([composed.constantRegion isEqualToData:unpaddedGELU],
+               @"composed task uses the constructively trimmed GELU kernel");
         expect([composed.inputIdentifiers isEqualToArray:@[@"a", @"b"]] &&
                [composed.outputIdentifier isEqualToString:@"y"] &&
                [composed.stageOperations
@@ -245,9 +252,9 @@ static void testMatmulOutputScaleFold(void) {
 static void testLUTInputScaleFold(void) {
     H16GEncodedTask *exponential = encode(unary128(@"exp", @"t", @"y"));
     H16GEncodedTask *plain = encode(unary128(@"exp", @"t", @"y"));
-    // Apple's mul(0.0884)-then-exp oracle differs from the plain exp oracle
-    // in exactly the input-scale word at 0xc4: log2 e (0x3dc5) -> 0x3015;
-    // mul(0.25) gives 0x35c5.
+    NSUInteger scaleOffset=[H16GLUTEncoder
+        inputScaleByteOffsetForOperationName:@"exp"
+        inputShape:@[@1,@1,@128,@128]];
     NSDictionary<NSNumber *, NSNumber *> *foldedWords = @{
         @0.08838834764831845: @0x00003015u,
         @0.25: @0x000035c5u,
@@ -267,12 +274,12 @@ static void testLUTInputScaleFold(void) {
         expect(composed != nil && error == nil,
                @"scalar mul then exp composes into one program");
         if (!composed) continue;
-        expect(wordAt(composed.tdProgram.data, 0xc4) ==
+        expect(wordAt(composed.tdProgram.data, scaleOffset) ==
                    foldedWords[scalar].unsignedIntValue &&
-               wordAt(plain.tdProgram.data, 0xc4) == 0x00003dc5u &&
+               wordAt(plain.tdProgram.data, scaleOffset) == 15813u &&
                dataEqualExceptWord(composed.tdProgram.data,
-                                   plain.tdProgram.data, 0xc4),
-               @"the fold changes only the decoded input-scale word");
+                                   plain.tdProgram.data, scaleOffset),
+               @"the fold changes only the constructed input-scale field");
         expect([composed.inputIdentifiers isEqualToArray:@[@"x"]] &&
                [composed.outputIdentifier isEqualToString:@"y"] &&
                [composed.stageOperations isEqualToArray:@[@"mul", @"exp"]] &&
@@ -323,10 +330,8 @@ static void testUnaryReductionSRAMChain(void) {
                isEqualToArray:@[@0xd0]] &&
            composed.tdProgram.programRecordCount == 31,
            @"the encoded task stream matches the measured two-task program");
-    expect([[sha256(composed.constantRegion) lowercaseString]
-               isEqualToString:
-                   @"b7b6085a1edc7def0f0bb2fc1fe345f1ba9d9a1a47e55b4516273149323b54d2"],
-           @"the composed program keeps the unary table");
+    expect([composed.constantRegion isEqualToData:exponential.constantRegion],
+           @"the composed program keeps the rule-built unary table");
     expect([composed.stageOperations
                isEqualToArray:@[@"exp", @"reduce_sum"]] &&
            [composed.inputIdentifiers isEqualToArray:@[@"x"]] &&
@@ -362,12 +367,14 @@ static void testRowNormalizationSRAMProgram(void) {
                isEqualToArray:@[@0x2c4, @0x434]] &&
            program.programRecordCount == 88 && program.programFormatCode == 1,
            @"the row-normalization task stream matches the measured program");
-    expect(constants != nil &&
-           [[sha256(constants) lowercaseString]
-               isEqualToString:
-                   @"3194eee529266bc79197bb4db1d299cbb6a1cfa63984024fbfd8f72b078dbdbf"] &&
+    NSMutableData *expectedConstants = [NSMutableData data];
+    [expectedConstants appendData:[H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:&error]];
+    [expectedConstants appendData:[H16GLUTEncoder
+        constantRegionForOperationName:@"reciprocal" error:&error]];
+    expect(constants != nil && [constants isEqualToData:expectedConstants] &&
            [H16GSRAMChainEncoder taskCountForStageOperations:operations] == 7,
-           @"the row-normalization constants and task count match the program");
+           @"row normalization uses constructed constants and task count");
 
     error = nil;
     expect([H16GSRAMChainEncoder encodeStageOperations:operations

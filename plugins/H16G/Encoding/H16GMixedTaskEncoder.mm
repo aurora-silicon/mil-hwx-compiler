@@ -1,6 +1,7 @@
 #import "H16GMixedTaskEncoder.h"
 
 #import "H16GDecodedFormValidator.h"
+#import "H16GLUTEncoder.h"
 #import "H16GTDWriter.h"
 
 static BOOL put(H16GTDWriter *writer, NSUInteger base, NSUInteger offset,
@@ -504,19 +505,6 @@ static BOOL writeNormalizeTransposeTask(H16GTDWriter *writer, NSUInteger base,
 
 #undef FIELD
 
-static NSData *exponentialLUT(void) {
-    static const uint16_t words[64] = {
-        0xce40,0x4c00,0x0000,0x7c00,0x3c00,0x3c16,0x3c2d,0x3c45,
-        0x3c5d,0x3c75,0x3c8e,0x3ca8,0x3cc2,0x3cdc,0x3cf8,0x3d14,
-        0x3d30,0x3d4d,0x3d6b,0x3d89,0x3da8,0x3dc8,0x3de8,0x3e09,
-        0x3e2b,0x3e4e,0x3e71,0x3e95,0x3eba,0x3ee0,0x3f06,0x3f2e,
-        0x3f56,0x3f7f,0x3fa9,0x3fd4,0x4000,0x0000,0x0000,0x0000,
-        0x0000,0x0005,0x000a,0x0000,0x0000,0x0000,0x0000,0x0000,
-        0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
-    };
-    return [NSData dataWithBytes:words length:sizeof(words)];
-}
-
 @implementation H16GMixedTaskEncoding
 - (instancetype)initWithTDProgram:(H16GEncodedTDProgram *)tdProgram
                    constantRegion:(NSData *)constantRegion
@@ -586,7 +574,10 @@ static NSData *exponentialLUT(void) {
     H16GEncodedTDProgram *program = [[H16GEncodedTDProgram alloc]
         initWithData:writer.data kernelRelocationOffsets:relocations
         programRecordCount:0x75 programFormatCode:1];
+    NSData *constants = [H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:error];
+    if (!constants) return nil;
     return [[H16GMixedTaskEncoding alloc] initWithTDProgram:program
-        constantRegion:exponentialLUT() scratchByteLength:0x10000];
+        constantRegion:constants scratchByteLength:0x10000];
 }
 @end

@@ -1,10 +1,12 @@
 #import "H16GLUTEncoder.h"
 
-static NSString *const H16GLUTEncoderErrorDomain = @"ANE.H16G.LUTEncoder";
-
-#include "H16GLUTEncoderData.inc"
+#include "H16GRulePacket.h"
 
 #include <cmath>
+#include <cstring>
+#include <limits>
+
+static NSString *const H16GLUTEncoderErrorDomain = @"ANE.H16G.LUTEncoder";
 
 typedef NS_ENUM(NSUInteger, H16GUnaryPacketFamily) {
     H16GUnaryPacketFamilyTable,
@@ -12,45 +14,29 @@ typedef NS_ENUM(NSUInteger, H16GUnaryPacketFamily) {
     H16GUnaryPacketFamilyReciprocalUnit,
 };
 
-typedef struct {
-    NSUInteger size;
-    const uint32_t *tableWords;
-    NSUInteger tableWordCount;
-    const uint32_t *reluWords;
-    NSUInteger reluWordCount;
-    const uint32_t *reciprocalWords;
-    NSUInteger reciprocalWordCount;
-    uint32_t tableFormatCode;
-    uint32_t reciprocalFormatCode;
-    NSUInteger tableRelocationOffset;
-    NSUInteger reciprocalRelocationOffset;
-    NSUInteger exponentialScaleOffset;
-} H16GUnaryGeometry;
+// The descriptor carries span selectors, not process addresses. Assign those
+// spans here so a packet never inherits an allocation from an observed stream.
+typedef struct { uint32_t offset; uint32_t length; } H16GRuleAllocation;
 
-#define WORD_COUNT(array) (sizeof(array) / sizeof((array)[0]))
-static const H16GUnaryGeometry kUnaryGeometries[] = {
-    {128,kSigmoid128TDWords,WORD_COUNT(kSigmoid128TDWords),
-         kRelu128TDWords,WORD_COUNT(kRelu128TDWords),
-         kRsqrt128TDWords,WORD_COUNT(kRsqrt128TDWords),
-         0x00,0x01,0xf0,0xf4,0xc4},
-    {256,kSigmoid256TDWords,WORD_COUNT(kSigmoid256TDWords),
-         kRelu256TDWords,WORD_COUNT(kRelu256TDWords),
-         kRsqrt256TDWords,WORD_COUNT(kRsqrt256TDWords),
-         0x03,0x04,0xd8,0xe4,0xac},
-    {512,kSigmoid512TDWords,WORD_COUNT(kSigmoid512TDWords),
-         kRelu512TDWords,WORD_COUNT(kRelu512TDWords),
-         kRsqrt512TDWords,WORD_COUNT(kRsqrt512TDWords),
-         0x0f,0x13,0xec,0xf4,0xc0},
-    {1024,kSigmoid1024TDWords,WORD_COUNT(kSigmoid1024TDWords),
-          kRelu1024TDWords,WORD_COUNT(kRelu1024TDWords),
-          kRsqrt1024TDWords,WORD_COUNT(kRsqrt1024TDWords),
-          0x3d,0x4c,0xec,0xf4,0xc0},
-    {2048,kSigmoid2048TDWords,WORD_COUNT(kSigmoid2048TDWords),
-          kRelu2048TDWords,WORD_COUNT(kRelu2048TDWords),
-          kRsqrt2048TDWords,WORD_COUNT(kRsqrt2048TDWords),
-          0xf5,0x130,0xec,0xf4,0xc0},
+class H16GRuleAllocator {
+public:
+    H16GRuleAllocation allocate(uint64_t length, uint64_t alignment) {
+        uint64_t start = (_cursor + alignment - 1) / alignment * alignment;
+        uint64_t end = start + length;
+        if (end > std::numeric_limits<uint32_t>::max()) return {0,0};
+        _cursor = end;
+        return {(uint32_t)start,(uint32_t)length};
+    }
+private:
+    uint64_t _cursor = 0;
 };
-#undef WORD_COUNT
+
+typedef struct {
+    double lower;
+    double upper;
+    uint16_t operationCode;
+    uint16_t tailFlags;
+} H16GLUTRule;
 
 static NSString *canonicalOperation(NSString *operation) {
     if ([operation isEqualToString:@"inverse"] ||
@@ -60,16 +46,12 @@ static NSString *canonicalOperation(NSString *operation) {
 }
 
 static BOOL isTableOperation(NSString *operation) {
-    return [@[@"sigmoid",@"tanh",@"gelu",@"silu",@"exp",@"sqrt"]
-        containsObject:operation];
+    return [@[@"sigmoid",@"tanh",@"gelu",@"silu",@"exp",@"log",
+              @"sqrt",@"rsqrt",@"reciprocal"] containsObject:operation];
 }
 
 static H16GUnaryPacketFamily familyForOperation(NSString *operation,
                                                  BOOL *supported) {
-    if (isTableOperation(operation)) {
-        *supported = YES;
-        return H16GUnaryPacketFamilyTable;
-    }
     if ([operation isEqualToString:@"relu"]) {
         *supported = YES;
         return H16GUnaryPacketFamilyDirectReLU;
@@ -79,45 +61,28 @@ static H16GUnaryPacketFamily familyForOperation(NSString *operation,
         *supported = YES;
         return H16GUnaryPacketFamilyReciprocalUnit;
     }
+    if (isTableOperation(operation)) {
+        *supported = YES;
+        return H16GUnaryPacketFamilyTable;
+    }
     *supported = NO;
     return H16GUnaryPacketFamilyTable;
 }
 
-static const H16GUnaryGeometry *geometryForShape(NSArray<NSNumber *> *shape) {
+static BOOL validSquareShape(NSArray<NSNumber *> *shape, NSUInteger *size) {
     if (shape.count != 4 || shape[0].unsignedIntegerValue != 1 ||
         shape[1].unsignedIntegerValue != 1 ||
         shape[2].unsignedIntegerValue != shape[3].unsignedIntegerValue)
-        return NULL;
-    NSUInteger size = shape[2].unsignedIntegerValue;
-    for (const H16GUnaryGeometry &row : kUnaryGeometries)
-        if (row.size == size) return &row;
-    return NULL;
+        return NO;
+    NSUInteger candidate = shape[2].unsignedIntegerValue;
+    if (candidate < 128 || candidate > 2048 || candidate % 64 != 0)
+        return NO;
+    if (size) *size = candidate;
+    return YES;
 }
 
-static NSData *dataFromWords(const uint32_t *words, NSUInteger count) {
-    return [NSData dataWithBytes:words length:count * sizeof(uint32_t)];
-}
-
-static NSData *kernelTable(NSString *operation) {
-    struct TableRow { NSString *__unsafe_unretained operation;
-                      const uint32_t *words; NSUInteger count; };
-#define TABLE_ROW(name, array) {name,array,sizeof(array)/sizeof(array[0])}
-    static const TableRow rows[] = {
-        TABLE_ROW(@"sigmoid",kSigmoidKERNWords),
-        TABLE_ROW(@"tanh",kTanhKERNWords),
-        TABLE_ROW(@"gelu",kGeluKERNWords),
-        TABLE_ROW(@"silu",kSiluKERNWords),
-        TABLE_ROW(@"exp",kExpKERNWords),
-        TABLE_ROW(@"log",kLogKERNWords),
-        TABLE_ROW(@"sqrt",kSqrtKERNWords),
-        TABLE_ROW(@"rsqrt",kRsqrtKERNWords),
-        TABLE_ROW(@"reciprocal",kRecipKERNWords),
-    };
-#undef TABLE_ROW
-    for (const TableRow &row : rows)
-        if ([operation isEqualToString:row.operation])
-            return dataFromWords(row.words,row.count);
-    return nil;
+static NSUInteger alignUp(NSUInteger value, NSUInteger alignment) {
+    return (value + alignment - 1) / alignment * alignment;
 }
 
 static void setError(NSError **error, NSString *message) {
@@ -125,88 +90,255 @@ static void setError(NSError **error, NSString *message) {
         code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
 }
 
+static uint16_t floatToHalf(float value);
+
+static uint32_t unaryEngineCount(H16GUnaryPacketFamily family) {
+    // Table/direct packets enable five NE lanes; reciprocal-family packets
+    // use the single reciprocal execution lane.
+    return family == H16GUnaryPacketFamilyReciprocalUnit ? 1 : 5;
+}
+
+static uint32_t unaryOpcode(NSString *operation,
+                            H16GUnaryPacketFamily family) {
+    using namespace ane::h16::rule::fields;
+    if (family == H16GUnaryPacketFamilyDirectReLU)
+        return unaryCommand(1,UnaryOpcode::Direct);
+    if (family == H16GUnaryPacketFamilyReciprocalUnit)
+        return unaryCommand(1,UnaryOpcode::Reciprocal,
+            ![operation isEqualToString:@"rsqrt"]);
+    return unaryCommand(2,UnaryOpcode::Direct);
+}
+
+static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
+                                               NSUInteger size,
+                                               H16GUnaryPacketFamily family,
+                                               NSError **error) {
+    uint64_t elements = (uint64_t)size * size;
+    uint64_t surfaceBytes = elements * sizeof(uint16_t);
+    uint32_t rowBytes = (uint32_t)(size * sizeof(uint16_t));
+    constexpr uint32_t allocationPageBytes=uint32_t(1)<<14;
+    constexpr uint32_t tableBytes=128;
+    constexpr uint32_t tableAlignment=64;
+    uint32_t tiles = (uint32_t)((elements + allocationPageBytes-1) /
+                                allocationPageBytes);
+
+    H16GRuleAllocator allocator;
+    H16GRuleAllocation input = allocator.allocate(surfaceBytes,allocationPageBytes);
+    H16GRuleAllocation output = allocator.allocate(surfaceBytes,allocationPageBytes);
+    H16GRuleAllocation table = family == H16GUnaryPacketFamilyDirectReLU
+        ? H16GRuleAllocation{0,0} : allocator.allocate(tableBytes,tableAlignment);
+    if (input.length == 0 || output.length == 0 ||
+        (family != H16GUnaryPacketFamilyDirectReLU && table.length == 0)) {
+        setError(error,@"unary packet allocations exceed the H16G field width");
+        return nil;
+    }
+
+    // Register addresses are ABI fields; the record headers and word order are
+    // constructed from this map by H16GRulePacket.
+    std::map<uint32_t,uint32_t> registers;
+    registers[0x0004]=(uint32_t)size;
+    registers[0x0008]=(uint32_t)size;
+    registers[0x000c]=1;
+    registers[0x0014]=(uint32_t)size;
+    registers[0x0018]=(uint32_t)size;
+    registers[0x001c]=1;
+    registers[0x0034]=tiles;
+    registers[0x003c]=(uint32_t)((table.offset + table.length +
+        allocationPageBytes-1) / allocationPageBytes);
+    registers[0x0040]=(uint32_t)((output.offset + output.length) /
+        allocationPageBytes);
+    using namespace ane::h16::rule::fields;
+    registers[0x004c]=surfaceLimit(1u << 20);
+    registers[0x4104]=l2Transfer(5,7,2);
+    registers[0x4108]=l2Transfer(5,3,0);
+    registers[0x4114]=rowBytes;
+    registers[0x4118]=(uint32_t)surfaceBytes;
+    registers[0x411c]=(uint32_t)surfaceBytes;
+    registers[0x4120]=(uint32_t)surfaceBytes;
+    registers[0x4148]=l2Transfer(5,7,10);
+    registers[0x4150]=rowBytes;
+    registers[0x4154]=(uint32_t)surfaceBytes;
+    registers[0x4158]=(uint32_t)surfaceBytes;
+    registers[0x415c]=(uint32_t)surfaceBytes;
+    registers[0x4900]=family == H16GUnaryPacketFamilyDirectReLU
+        ? 0u : neuralInput();
+    registers[0x4904]=unaryOpcode(operation,family);
+    registers[0x4910]=floatToHalf([operation isEqualToString:@"exp"]
+        ? (float)M_LOG2E : 1.0f);
+    registers[0x4d00]=endpoint(2);
+    registers[0x4d08]=sourceDMAFlags();
+    registers[0x4d10]=0;
+    registers[0x4d14]=0;
+    registers[0x4d18]=rowBytes;
+    registers[0x4d1c]=(uint32_t)surfaceBytes;
+    registers[0x4d68]=surfaceDescriptor(0,2);
+    registers[0x5100]=endpoint(3);
+    registers[0x5108]=0;
+    registers[0x510c]=0;
+    registers[0x5110]=rowBytes;
+    registers[0x5114]=(uint32_t)surfaceBytes;
+    registers[0x5138]=surfaceDescriptor(3,2);
+    registers[0x5900]=storeFlags();
+    registers[0x5904]=storeGeometry();
+    registers[0x5918]=0;
+    registers[0x5928]=storeCompletionMask();
+    registers[0x592c]=outputSurface();
+    BOOL hasTable=family != H16GUnaryPacketFamilyDirectReLU;
+    if(hasTable){registers[0x5500]=lookupKernelCommand();registers[0x5510]=0;
+        registers[0x5514]=0;}
+    try {
+        ane::h16::rule::Packet packet=ane::h16::rule::build(
+            registers,unaryEngineCount(family),hasTable);
+        NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+        for(std::size_t offset:packet.kernelRelocations)
+            [relocations addObject:@(offset)];
+        NSData *data=[NSData dataWithBytes:packet.bytes.data()
+                                   length:packet.bytes.size()];
+        return [[H16GEncodedTDProgram alloc] initWithData:data
+            kernelRelocationOffsets:relocations
+            programRecordCount:packet.recordCount
+            programFormatCode:tiles-1 scratchByteLength:0];
+    } catch(const std::exception &exception) {
+        setError(error,[NSString stringWithUTF8String:exception.what()]);
+        return nil;
+    }
+}
+
+static uint16_t floatToHalf(float value) {
+    constexpr uint32_t floatMantissaMask=(uint32_t(1)<<23)-1;
+    constexpr uint32_t floatHiddenBit=uint32_t(1)<<23;
+    constexpr uint32_t halfSignMask=uint32_t(1)<<15;
+    constexpr uint32_t halfRoundBit=uint32_t(1)<<12;
+    constexpr uint32_t halfRoundIncrement=uint32_t(1)<<13;
+    constexpr uint32_t halfInfinity=uint32_t(31)<<10;
+    constexpr uint32_t halfQuietNaN=uint32_t(1)<<9;
+    uint32_t bits = 0;
+    memcpy(&bits,&value,sizeof(bits));
+    uint32_t sign = (bits >> 16) & halfSignMask;
+    int exponent = (int)((bits >> 23) & ((uint32_t(1)<<8)-1)) - 127 + 15;
+    uint32_t mantissa = bits & floatMantissaMask;
+    if (exponent <= 0) {
+        if (exponent < -10) return (uint16_t)sign;
+        mantissa = (mantissa | floatHiddenBit) >> (1 - exponent);
+        if (mantissa & halfRoundBit) mantissa += halfRoundIncrement;
+        return (uint16_t)(sign | (mantissa >> 13));
+    }
+    if (exponent >= 31)
+        return (uint16_t)(sign | halfInfinity |
+                          (mantissa ? halfQuietNaN : 0));
+    if (mantissa & halfRoundBit) {
+        mantissa += halfRoundIncrement;
+        if (mantissa & floatHiddenBit) {
+            mantissa = 0;
+            if (++exponent >= 31) return (uint16_t)(sign | halfInfinity);
+        }
+    }
+    return (uint16_t)(sign | ((uint32_t)exponent << 10) | (mantissa >> 13));
+}
+
+static uint32_t packHalves(double low, double high) {
+    return (uint32_t)floatToHalf((float)low) |
+        ((uint32_t)floatToHalf((float)high) << 16);
+}
+
+static BOOL ruleForOperation(NSString *operation, H16GLUTRule *rule) {
+    if ([operation isEqualToString:@"sigmoid"]) *rule = {-8.0,8.0,1,0};
+    else if ([operation isEqualToString:@"tanh"]) *rule = {-4.0,4.0,2,0};
+    else if ([operation isEqualToString:@"gelu"]) *rule = {-4.0,4.0,3,3};
+    else if ([operation isEqualToString:@"silu"]) *rule = {-8.0,8.0,4,3};
+    else if ([operation isEqualToString:@"exp"]) *rule = {0.0,1.0,5,2};
+    else if ([operation isEqualToString:@"log"]) *rule = {0.5,1.0,6,1};
+    else if ([operation isEqualToString:@"sqrt"]) *rule = {0.0,4.0,7,2};
+    else if ([operation isEqualToString:@"rsqrt"]) *rule = {1.0,2.0,8,1};
+    else if ([operation isEqualToString:@"reciprocal"])
+        *rule = {1.0,2.0,9,1};
+    else return NO;
+    return YES;
+}
+
+static double evaluateTable(NSString *operation, double x) {
+    if ([operation isEqualToString:@"sigmoid"]) return 1.0/(1.0+std::exp(-x));
+    if ([operation isEqualToString:@"tanh"]) return std::tanh(x);
+    if ([operation isEqualToString:@"gelu"])
+        return 0.5*x*(1.0+std::erf(x/std::sqrt(2.0)));
+    if ([operation isEqualToString:@"silu"]) return x/(1.0+std::exp(-x));
+    if ([operation isEqualToString:@"exp"]) return std::exp2(x);
+    if ([operation isEqualToString:@"log"]) return std::log2(x);
+    if ([operation isEqualToString:@"sqrt"]) return std::sqrt(x);
+    if ([operation isEqualToString:@"rsqrt"]) return 1.0/std::sqrt(x);
+    return 1.0/x;
+}
+
+static NSData *buildKernelTable(NSString *operation, NSError **error) {
+    H16GLUTRule rule;
+    if (!ruleForOperation(operation,&rule)) {
+        setError(error,@"operation has no rule-built H16G unary table");
+        return nil;
+    }
+    NSMutableData *data = [NSMutableData dataWithLength:128];
+    uint32_t bounds = packHalves(rule.lower,rule.upper);
+    [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&bounds];
+    uint32_t tails = packHalves(evaluateTable(operation,rule.lower),
+                               evaluateTable(operation,rule.upper));
+    [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&tails];
+    for (NSUInteger index = 0; index < 33; ++index) {
+        double t = (double)index / 32.0;
+        double x = rule.lower + (rule.upper-rule.lower)*t;
+        uint16_t sample = floatToHalf((float)evaluateTable(operation,x));
+        [data replaceBytesInRange:NSMakeRange(8+index*2,2) withBytes:&sample];
+    }
+    uint32_t metadata = ((uint32_t)rule.operationCode << 16) | rule.tailFlags;
+    uint32_t sampleCount = 33;
+    [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&metadata];
+    [data replaceBytesInRange:NSMakeRange(84,4) withBytes:&sampleCount];
+    return data;
+}
+
 @implementation H16GLUTEncoder
 + (BOOL)supportsOperationName:(NSString *)operationName
                    inputShape:(NSArray<NSNumber *> *)inputShape {
-    NSString *operation = canonicalOperation(operationName);
-    if ([operation isEqualToString:@"log"])
-        return [inputShape isEqualToArray:@[@1,@1,@256,@256]];
     BOOL supported = NO;
-    familyForOperation(operation,&supported);
-    return supported && geometryForShape(inputShape) != NULL;
+    familyForOperation(canonicalOperation(operationName),&supported);
+    return supported && validSquareShape(inputShape,NULL);
 }
 
 + (NSUInteger)squareViewSizeForOperationName:(NSString *)operationName
                                 elementCount:(NSUInteger)elementCount {
-    if (elementCount == 0) return NSNotFound;
-    for (const H16GUnaryGeometry &row : kUnaryGeometries) {
-        NSArray<NSNumber *> *view = @[@1,@1,@(row.size),@(row.size)];
-        if (row.size*row.size >= elementCount &&
-            [self supportsOperationName:operationName inputShape:view])
-            return row.size;
-    }
-    return NSNotFound;
+    BOOL supported = NO;
+    familyForOperation(canonicalOperation(operationName),&supported);
+    if (!supported || elementCount == 0) return NSNotFound;
+    NSUInteger root = (NSUInteger)std::ceil(std::sqrt((double)elementCount));
+    NSUInteger size = MAX((NSUInteger)128,alignUp(root,64));
+    return size <= 2048 ? size : NSNotFound;
 }
 
 + (H16GEncodedTDProgram *)encodeOperationName:(NSString *)operationName
                                     inputShape:(NSArray<NSNumber *> *)inputShape
                                          error:(NSError **)error {
     NSString *operation = canonicalOperation(operationName);
-    if ([operation isEqualToString:@"log"]) {
-        if (![inputShape isEqualToArray:@[@1,@1,@256,@256]]) {
-            setError(error,@"log currently requires the decoded [1,1,256,256] two-task family");
-            return nil;
-        }
-        return [[H16GEncodedTDProgram alloc]
-            initWithData:dataFromWords(kLog256TDWords,
-                sizeof(kLog256TDWords)/sizeof(kLog256TDWords[0]))
-            kernelRelocationOffsets:@[@0xc8] programRecordCount:31
-            programFormatCode:4 scratchByteLength:0];
-    }
     BOOL supported = NO;
     H16GUnaryPacketFamily family = familyForOperation(operation,&supported);
-    const H16GUnaryGeometry *row = geometryForShape(inputShape);
-    if (!supported || !row) {
-        setError(error,@"unary pointwise operation requires a decoded operation and square [1,1,N,N], N in {128,256,512,1024,2048}");
+    NSUInteger size = 0;
+    if (!supported || !validSquareShape(inputShape,&size)) {
+        setError(error,@"unary pointwise operation requires a supported operation and square [1,1,N,N], N a multiple of 64 in [128,2048]");
         return nil;
     }
-    const uint32_t *words = NULL;
-    NSUInteger count = 0, relocation = NSNotFound;
-    uint32_t format = 0;
-    switch (family) {
-        case H16GUnaryPacketFamilyTable:
-            words=row->tableWords; count=row->tableWordCount;
-            relocation=row->tableRelocationOffset; format=row->tableFormatCode;
-            break;
-        case H16GUnaryPacketFamilyDirectReLU:
-            words=row->reluWords; count=row->reluWordCount;
-            format=row->tableFormatCode;
-            break;
-        case H16GUnaryPacketFamilyReciprocalUnit:
-            words=row->reciprocalWords; count=row->reciprocalWordCount;
-            relocation=row->reciprocalRelocationOffset;
-            format=row->reciprocalFormatCode;
-            break;
-    }
-    NSMutableData *data=[dataFromWords(words,count) mutableCopy];
-    if ([operation isEqualToString:@"exp"]) {
-        uint32_t log2eFP16 = 0x00003dc5;
-        [data replaceBytesInRange:NSMakeRange(row->exponentialScaleOffset,4)
-                        withBytes:&log2eFP16];
-    }
-    NSArray<NSNumber *> *relocations = relocation == NSNotFound
-        ? @[] : @[@(relocation)];
-    return [[H16GEncodedTDProgram alloc] initWithData:data
-        kernelRelocationOffsets:relocations programRecordCount:16
-        programFormatCode:format scratchByteLength:0];
+    return encodeUnaryPacket(operation,size,family,error);
 }
 
 + (NSUInteger)inputScaleByteOffsetForOperationName:(NSString *)operationName
                                         inputShape:(NSArray<NSNumber *> *)inputShape {
     NSString *operation = canonicalOperation(operationName);
-    const H16GUnaryGeometry *row = geometryForShape(inputShape);
-    if (!row || !isTableOperation(operation)) return NSNotFound;
-    return row->exponentialScaleOffset;
+    NSUInteger size=0;
+    if(!validSquareShape(inputShape,&size)||!isTableOperation(operation))
+        return NSNotFound;
+    BOOL supported=NO;
+    H16GUnaryPacketFamily family=familyForOperation(operation,&supported);
+    H16GEncodedTDProgram *program=encodeUnaryPacket(operation,size,family,nil);
+    if(!program)return NSNotFound;
+    std::size_t offset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)program.data.bytes,program.data.length,0x4910);
+    return offset==SIZE_MAX?NSNotFound:(NSUInteger)offset;
 }
 
 + (double)inputScaleValueForOperationName:(NSString *)operationName {
@@ -219,11 +351,6 @@ static void setError(NSError **error, NSString *message) {
                                       error:(NSError **)error {
     NSString *operation = canonicalOperation(operationName);
     if ([operation isEqualToString:@"relu"]) return [NSData data];
-    NSData *table = kernelTable(operation);
-    if (!table) {
-        setError(error,@"operation has no decoded H16G unary constant table");
-        return nil;
-    }
-    return table;
+    return buildKernelTable(operation,error);
 }
 @end
