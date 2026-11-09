@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
                 format:(NSString *)format
        outputDirectory:(NSURL *)directory
               schedule:(NSString *)schedule
+        terminateAfter:(nullable NSString *)terminateAfter
            diagnostics:(ANEDiagnosticEngine *)diagnostics
                  error:(NSError **)error;
 + (BOOL)compileConvMILData:(NSData *)milData
