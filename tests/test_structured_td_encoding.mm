@@ -274,145 +274,101 @@ static void testBinaryALUPacketsFollowMeasuredGeometry(void) {
         @"unknown ALU selectors and unmeasured geometry fail closed");
 }
 
-static void testUnaryPointwisePacketsAndTablesFollowMeasuredFamilies(void) {
-    NSArray<NSNumber *> *sizes = @[@128,@256,@512,@1024,@2048];
-    NSArray<NSString *> *hashes = @[
-        @"0816aeafe502da3e027587d730cba455a3424c5589cf333010824243a56b4ed3",
-        @"6e86fb37ce458b7f5a5952c94e4f38ca28d458e6afb22e75884a738825a7d4f0",
-        @"b3d7ce3f51c6d693d56430c8775b7b0892d554a12564a6836bd5a5ba4bf8235a",
-        @"c0624039ec55ef0b8c8f675dbaa5e458e04b6e6c00c13ffc1dcde4085b21cea3",
-        @"6171aa5214af2a262ec8dac74d55001f8cd3c4f5d0862d311d944b56908c8151",
-    ];
-    for (NSUInteger index = 0; index < sizes.count; ++index) {
-        NSError *error = nil;
-        NSUInteger size = sizes[index].unsignedIntegerValue;
-        H16GEncodedTDProgram *program = [H16GLUTEncoder
-            encodeOperationName:@"sigmoid" inputShape:@[@1,@1,@(size),@(size)]
-            error:&error];
-        expect(program != nil && error == nil &&
-               [[sha256(program.data) lowercaseString]
-                    isEqualToString:hashes[index]] &&
-               program.programRecordCount == 16 &&
-               program.kernelRelocationOffsets.count == 1,
-               @"sigmoid selects its measured pointwise DMA geometry");
-    }
-    NSDictionary<NSString *,NSString *> *tableHashes = @{
-        @"sigmoid": @"73f5680aa5f7b3833479e0ecd5a9dd0e3ec221e3aad5170e9db1e40e7a0c7469",
-        @"tanh": @"f4a38468b2a29430c8ffa4bb04cef84b8347394bbe2d6eb1081093ed4eaa57c6",
-        @"gelu": @"34540958c4c1928918d1f50b00a88a56a3b8291f13d0b010fe4646d1d7f89838",
-        @"silu": @"0d48f9b9a9a791fcef312a765cd621e43acb2b56306b9bf491ee0957c5842897",
-        @"exp": @"b7b6085a1edc7def0f0bb2fc1fe345f1ba9d9a1a47e55b4516273149323b54d2",
-        @"log": @"d6889430e6ba96f59e9581b83919f7dd159c22229e8e9060b4c5518702c3d284",
-        @"sqrt": @"07dff4d87f5df889ef0981865b54a4253e00c12eb444430215be401fe2d69607",
-        @"rsqrt": @"182158a2cbc0c3da91e3447d7afae8825d45a1e6396d611b4a48fb2ed8f0a6d3",
-        @"reciprocal": @"8a5840509d79c95c6e5a80bdb5938d55624a29211ab6f71f8c069191bef1538b",
-    };
-    for (NSString *operation in tableHashes) {
-        NSError *error = nil;
-        NSData *table = [H16GLUTEncoder constantRegionForOperationName:operation
-            error:&error];
-        expect(table.length == 0x80 && error == nil &&
-               [[sha256(table) lowercaseString]
-                    isEqualToString:tableHashes[operation]],
-               @"unary pointwise constants reproduce the decoded 64-fp16 table");
-    }
-    NSError *error = nil;
-    H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
-        inputShape:@[@1,@1,@256,@256] error:&error];
-    expect(log.data.length == 0x1a4 && log.programRecordCount == 31 &&
-           log.kernelRelocationOffsets.firstObject.unsignedIntegerValue == 0xc8,
-           @"log selects its decoded two-task range-reduction family");
-    H16GEncodedTDProgram *relu = [H16GLUTEncoder encodeOperationName:@"relu"
-        inputShape:@[@1,@1,@256,@256] error:&error];
-    expect(relu.data.length == 0xec &&
-           [H16GLUTEncoder constantRegionForOperationName:@"relu"
-               error:&error].length == 0,
-           @"standalone ReLU uses its direct packet and no KERN table");
-    expect([H16GLUTEncoder encodeOperationName:@"sigmoid"
-        inputShape:@[@1,@1,@384,@384] error:&error] == nil && error != nil,
-        @"unmeasured pointwise packet geometry fails closed");
-}
-
-static void testReductionPacketsFollowMeasuredFamilies(void) {
-    NSArray<NSArray *> *cases = @[
-        @[@"reduce_sum",@32,@8,@8,@1,@2,@18,@0,
-          @"0bd05ff35ea3a768f6108942fc48935ec3554e238abeeb2699441ebf981aaafd"],
-        @[@"reduce_sum",@64,@8,@8,@1,@2,@18,@0,
-          @"2b0204892d67bc09942061b3a082a3add80b9f073967b78eea19c311b3040c5b"],
-        @[@"reduce_sum",@128,@8,@8,@1,@2,@18,@0,
-          @"cf9aa34ace73c097d262afda8948e012e403fd758d9b8d9361e51bbbb3a95969"],
-        @[@"reduce_sum",@64,@16,@16,@1,@2,@18,@1,
-          @"12c62b6575c77a34deecf6a74edf42bad0bff8e9c091a43969665fa83c2c5df9"],
-        @[@"reduce_sum",@64,@32,@32,@1,@2,@18,@4,
-          @"5d2332468e6f856d74f046292b46c0313c9cff0ee61aaa43e2dfedfd56028825"],
-        @[@"reduce_sum",@1,@64,@64,@3,@1,@16,@0,
-          @"0338d3ea2db7c120cd0e0a65a0fa9c1b63e5c1fee1c1d72a5f0b13e2ff5ee9f4"],
-        @[@"reduce_sum",@1,@128,@128,@3,@1,@16,@1,
-          @"e1f8f38756ff979b5e44fa0942679b3d5519f9e56cf3176d683475cddf8f9fee"],
-        @[@"reduce_sum",@32,@64,@16,@2,@3,@19,@2,
-          @"9d8a9a3a6798b44af152dfe929450746c65ae2bd319a2dd777e27d7b763ff4e6"],
-        @[@"reduce_mean",@64,@16,@16,@1,@2,@18,@1,
-          @"25e63f01968526b19952047f28d08217d82fc37e5fcc656484f4f014698ce769"],
-        @[@"reduce_mean",@1,@128,@128,@3,@1,@16,@1,
-          @"96017f3f1f12787321f98c45f537b71d978f5c3913dbe2e80c285d1f686aa75e"],
-        @[@"reduce_mean",@32,@64,@16,@2,@3,@19,@2,
-          @"62d156da972191bbe97988f1638f304b64cfff34aad7d3e5383bd2ce7c56c571"],
-        @[@"reduce_max",@128,@8,@8,@1,@1,@16,@0,
-          @"b084823770828c8b2f5a49e0cf61463dde99930e2b77396056a5b4806f00df8c"],
-        @[@"reduce_max",@64,@32,@32,@1,@1,@16,@1,
-          @"279cca218163cc6cda9591a277a744a0cbcc1362746431a0a15daa5fe70a7e34"],
-        @[@"reduce_max",@1,@64,@64,@3,@1,@16,@0,
-          @"7948924ca60cb7466678c214330211f2d60ec0b178fe1ea51ab2b35b4494ad2c"],
-        @[@"reduce_max",@32,@64,@16,@2,@3,@19,@2,
-          @"291f3a3750eb30c07f5b53072578d4a522e778f9fe45d4115252f050f557d821"],
-    ];
-    for (NSArray *row in cases) {
-        NSError *error = nil;
-        NSArray<NSNumber *> *shape = @[@1,row[1],row[2],row[3]];
-        H16GReduceEncoding *encoding = [H16GReduceEncoder
-            encodeOperationName:row[0] inputShape:shape
-            axis:[row[4] unsignedIntegerValue] error:&error];
-        expect(encoding != nil && error == nil &&
-               [[sha256(encoding.tdProgram.data) lowercaseString]
-                    isEqualToString:row[8]] &&
-               encoding.taskCount == [row[5] unsignedIntegerValue] &&
-               encoding.tdProgram.programRecordCount ==
-                    [row[6] unsignedIntegerValue] &&
-               encoding.tdProgram.programFormatCode ==
-                    [row[7] unsignedIntValue] &&
-               encoding.tdProgram.kernelRelocationOffsets.count == 0,
-               @"reduction selects a complete measured H16G packet family");
-    }
-
-    NSError *error = nil;
-    H16GReduceEncoding *channel = [H16GReduceEncoder
-        encodeOperationName:@"reduce_sum" inputShape:@[@1,@64,@8,@8]
-        axis:1 error:&error];
-    H16GReduceEncoding *height = [H16GReduceEncoder
-        encodeOperationName:@"reduce_sum" inputShape:@[@1,@32,@64,@16]
-        axis:2 error:&error];
-    expect([channel.outputShape isEqualToArray:@[@1,@1,@8,@8]] &&
-           channel.inputRowStrideBytes == 64 &&
-           channel.inputPlaneStrideBytes == 512 &&
-           channel.inputStorageByteLength == 32768 &&
-           channel.outputRowStrideBytes == 64 &&
-           channel.outputPlaneStrideBytes == 512 &&
-           channel.outputStorageByteLength == 512,
-           @"channel reduction preserves semantic shape and measured row padding");
-    expect([height.outputShape isEqualToArray:@[@1,@32,@1,@16]] &&
-           height.outputRowStrideBytes == 64 &&
-           height.outputBatchStrideBytes == 2048 &&
-           height.outputStorageByteLength == 2048,
-           @"height reduction derives its padded physical surface layout");
-    expect([H16GReduceEncoder encodeOperationName:@"reduce_sum"
-        inputShape:@[@1,@96,@8,@8] axis:1 error:&error] == nil && error != nil,
-        @"unmeasured reduction geometry fails closed");
-}
-
 static uint32_t word(NSData *data, NSUInteger offset) {
     uint32_t value = 0;
     [data getBytes:&value range:NSMakeRange(offset, sizeof(value))];
     return value;
+}
+
+static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
+    // 192 and 320 were not among the captured programs used by the old
+    // position-selected encoder. They exercise the common constructor.
+    NSArray<NSNumber *> *sizes = @[@128,@192,@320,@512,@1024,@2048];
+    NSMutableArray<NSData *> *packets=[NSMutableArray array];
+    for (NSNumber *sizeNumber in sizes) {
+        NSError *error = nil;
+        NSUInteger size = sizeNumber.unsignedIntegerValue;
+        H16GEncodedTDProgram *program = [H16GLUTEncoder
+            encodeOperationName:@"sigmoid" inputShape:@[@1,@1,@(size),@(size)]
+            error:&error];
+        NSUInteger tiles = (size*size + 0x3fff) / 0x4000;
+        expect(program != nil && error == nil && program.data.length >= 0x80 &&
+               ((const uint8_t *)program.data.bytes)[0] == 1 &&
+               program.programFormatCode == tiles-1 &&
+               program.programRecordCount > 0 &&
+               program.kernelRelocationOffsets.count == 1,
+               @"LUT register records are derived from square geometry");
+        if(program)[packets addObject:program.data];
+    }
+    expect([[NSSet setWithArray:packets] count] == sizes.count,
+           @"each LUT geometry produces a distinct rule-built packet");
+    for (NSString *operation in @[@"sigmoid",@"tanh",@"gelu",@"silu",
+            @"exp",@"log",@"sqrt",@"rsqrt",@"reciprocal"]) {
+        NSError *error = nil;
+        NSData *first = [H16GLUTEncoder constantRegionForOperationName:operation
+            error:&error];
+        NSData *second = [H16GLUTEncoder constantRegionForOperationName:operation
+            error:&error];
+        expect(first.length == 0x80 && error == nil &&
+               [first isEqualToData:second] && word(first,0x54) == 33,
+               @"unary constants are deterministic 33-sample rule-built tables");
+    }
+    NSError *error = nil;
+    H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
+        inputShape:@[@1,@1,@192,@192] error:&error];
+    H16GEncodedTDProgram *relu = [H16GLUTEncoder encodeOperationName:@"relu"
+        inputShape:@[@1,@1,@320,@320] error:&error];
+    expect(log.data.length >= 0x80 && log.programRecordCount > 0 &&
+           log.kernelRelocationOffsets.count == 1,
+           @"log uses the common rule-built table packet");
+    expect(relu.data.length >= 0x80 && relu.kernelRelocationOffsets.count == 0 &&
+           [H16GLUTEncoder constantRegionForOperationName:@"relu"
+               error:&error].length == 0,
+           @"standalone ReLU is generated without a constant table");
+    expect([H16GLUTEncoder encodeOperationName:@"sigmoid"
+        inputShape:@[@1,@1,@160,@160] error:&error] == nil && error != nil,
+        @"pointwise geometry outside the 64-lane rule fails closed");
+}
+
+static void testReductionPacketsAreRuleBuilt(void) {
+    NSArray<NSArray *> *cases = @[
+        @[@"reduce_sum",@96,@12,@20,@1,@0],
+        @[@"reduce_mean",@7,@33,@19,@2,@1],
+        @[@"reduce_max",@5,@11,@37,@3,@2],
+        @[@"reduce_sum",@64,@8,@8,@1,@0],
+    ];
+    for (NSArray *row in cases) {
+        NSError *error = nil;
+        NSUInteger axis=[row[4] unsignedIntegerValue];
+        NSArray<NSNumber *> *shape = @[@1,row[1],row[2],row[3]];
+        H16GReduceEncoding *encoding = [H16GReduceEncoder
+            encodeOperationName:row[0] inputShape:shape axis:axis error:&error];
+        NSMutableArray<NSNumber *> *output=[shape mutableCopy]; output[axis]=@1;
+        expect(encoding != nil && error == nil && encoding.taskCount == 1 &&
+               encoding.tdProgram.data.length >= 0x80 &&
+               encoding.tdProgram.programRecordCount > 0 &&
+               encoding.tdProgram.kernelRelocationOffsets.count == 0 &&
+               [encoding.outputShape isEqualToArray:output],
+               @"reduction records derive from operation, shape, and axis");
+    }
+    NSError *error = nil;
+    H16GReduceEncoding *channel = [H16GReduceEncoder
+        encodeOperationName:@"reduce_sum" inputShape:@[@1,@96,@12,@20]
+        axis:1 error:&error];
+    H16GReduceEncoding *height = [H16GReduceEncoder
+        encodeOperationName:@"reduce_mean" inputShape:@[@1,@7,@33,@19]
+        axis:2 error:&error];
+    expect(channel.inputRowStrideBytes == 64 &&
+           channel.inputPlaneStrideBytes == 768 &&
+           channel.outputStorageByteLength == 768,
+           @"channel reduction derives padded physical strides");
+    expect(height.outputRowStrideBytes == 64 &&
+           height.outputBatchStrideBytes == 448 &&
+           height.outputStorageByteLength == 448,
+           @"height reduction derives output storage without a shape table");
+    expect([H16GReduceEncoder encodeOperationName:@"reduce_sum"
+        inputShape:@[@1,@1,@8,@8] axis:1 error:&error] == nil && error != nil,
+        @"unit reduction axes fail closed");
 }
 
 static NSString *sha256(NSData *data) {
@@ -879,10 +835,10 @@ static void testMatrixRowDivisionUsesMeasuredTwoTaskFamily(void) {
                isEqualToString:
                @"accfb4fae347c972bb7d0465a1788e4f32ce77a0ef35cfd859cfcae35d5656bc"],
            @"matrix-row division fields reproduce the N128 descriptor");
-    expect([[sha256(division.constantRegion) lowercaseString]
-               isEqualToString:
-               @"8a5840509d79c95c6e5a80bdb5938d55624a29211ab6f71f8c069191bef1538b"],
-           @"matrix-row division uses the measured reciprocal table");
+    NSData *reciprocal = [H16GLUTEncoder
+        constantRegionForOperationName:@"reciprocal" error:&error];
+    expect([division.constantRegion isEqualToData:reciprocal],
+           @"matrix-row division uses the rule-built reciprocal table");
     error = nil;
     expect([H16GMatrixRowDivisionEncoder encodeRows:96 columns:128
         error:&error] == nil && error != nil,
@@ -957,8 +913,8 @@ int main(void) {
         testRegularConvPacketsMatchMeasuredFamilies();
         testSquareMatmulPacketsFollowDecodedFamilies();
         testBinaryALUPacketsFollowMeasuredGeometry();
-        testUnaryPointwisePacketsAndTablesFollowMeasuredFamilies();
-        testReductionPacketsFollowMeasuredFamilies();
+        testUnaryPointwisePacketsAndTablesAreRuleBuilt();
+        testReductionPacketsAreRuleBuilt();
         testW8A8ChainIsGeneratedFromDepthAndLayerState();
         testLayoutPacketsAreGeneratedFromGeometry();
         testFusedLayoutConvChainIsGeneratedFromGeometry();

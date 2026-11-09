@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Keep the numerical H16G GELU reference tied to the encoded public table."""
+"""Check the constructive numerical H16G GELU reference."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
-import re
-import struct
 import sys
 import unittest
 
@@ -16,15 +15,12 @@ from h16g_gelu import GELU_TABLE, h16g_gelu  # noqa: E402
 
 
 class H16GGELUReferenceTests(unittest.TestCase):
-    def test_samples_match_encoder_words(self):
-        source = (ROOT / 'plugins/H16G/Encoding/H16GLUTEncoderData.inc').read_text()
-        body = re.search(r'kGeluKERNWords\[\] = \{(.*?)\};', source,
-                         re.DOTALL).group(1)
-        words = [int(value, 16) for value in re.findall(r'0x[0-9a-fA-F]+', body)]
-        halves = []
-        for word in words[2:19]:
-            halves.extend(struct.unpack('<2e', struct.pack('<I', word)))
-        np.testing.assert_array_equal(np.asarray(halves[:33]), GELU_TABLE)
+    def test_samples_follow_public_exact_gelu_rule(self):
+        values = np.asarray([
+            0.5 * x * (1.0 + math.erf(x / math.sqrt(2.0)))
+            for x in np.linspace(-4.0, 4.0, 33)
+        ], dtype=np.float16).astype(np.float64)
+        np.testing.assert_array_equal(values, GELU_TABLE)
 
     def test_interpolation_and_tails(self):
         values = np.asarray([-5.0, -3.875, 0.125, 4.5], np.float32)

@@ -1,55 +1,32 @@
 #import "H16GReduceEncoder.h"
 
+#include "H16GRulePacket.h"
+
+#include <cstring>
+#include <limits>
+
 static NSString *const H16GReduceEncoderErrorDomain = @"ANE.H16G.ReduceEncoder";
 
-#include "H16GReduceEncoderData.inc"
-
-typedef struct {
-    NSString *__unsafe_unretained operation;
-    NSUInteger channels;
-    NSUInteger height;
-    NSUInteger width;
-    NSUInteger axis;
-    const uint32_t *words;
-    NSUInteger wordCount;
-    NSUInteger taskCount;
-    NSUInteger recordCount;
-    uint32_t formatCode;
-} H16GReductionGeometry;
-
-#define WORD_COUNT(array) (sizeof(array) / sizeof((array)[0]))
-#define REDUCE_ROW(op,c,h,w,a,array,tasks,records,format) \
-    {op,c,h,w,a,array,WORD_COUNT(array),tasks,records,format}
-static const H16GReductionGeometry kReductionGeometries[] = {
-    REDUCE_ROW(@"reduce_sum",32,8,8,1,kSumC32H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_sum",64,8,8,1,kSumC64H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_sum",128,8,8,1,kSumC128H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_sum",64,16,16,1,kSumC64H16W16A1TDWords,2,18,1),
-    REDUCE_ROW(@"reduce_sum",64,32,32,1,kSumC64H32W32A1TDWords,2,18,4),
-    REDUCE_ROW(@"reduce_sum",1,64,64,3,kSumC1H64W64A3TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_sum",1,128,128,3,kSumC1H128W128A3TDWords,1,16,1),
-    REDUCE_ROW(@"reduce_sum",32,64,16,2,kSumC32H64W16A2TDWords,3,19,2),
-
-    REDUCE_ROW(@"reduce_mean",32,8,8,1,kMeanC32H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_mean",64,8,8,1,kMeanC64H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_mean",128,8,8,1,kMeanC128H8W8A1TDWords,2,18,0),
-    REDUCE_ROW(@"reduce_mean",64,16,16,1,kMeanC64H16W16A1TDWords,2,18,1),
-    REDUCE_ROW(@"reduce_mean",64,32,32,1,kMeanC64H32W32A1TDWords,2,18,4),
-    REDUCE_ROW(@"reduce_mean",1,64,64,3,kMeanC1H64W64A3TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_mean",1,128,128,3,kMeanC1H128W128A3TDWords,1,16,1),
-    REDUCE_ROW(@"reduce_mean",32,64,16,2,kMeanC32H64W16A2TDWords,3,19,2),
-
-    REDUCE_ROW(@"reduce_max",32,8,8,1,kMaxC32H8W8A1TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_max",64,8,8,1,kMaxC64H8W8A1TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_max",128,8,8,1,kMaxC128H8W8A1TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_max",64,16,16,1,kMaxC64H16W16A1TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_max",64,32,32,1,kMaxC64H32W32A1TDWords,1,16,1),
-    REDUCE_ROW(@"reduce_max",1,64,64,3,kMaxC1H64W64A3TDWords,1,16,0),
-    REDUCE_ROW(@"reduce_max",1,128,128,3,kMaxC1H128W128A3TDWords,1,16,1),
-    REDUCE_ROW(@"reduce_max",32,64,16,2,kMaxC32H64W16A2TDWords,3,19,2),
+typedef NS_ENUM(uint32_t, H16GReductionKind) {
+    H16GReductionKindSum = 0,
+    H16GReductionKindMean = 1,
+    H16GReductionKindMax = 2,
 };
-#undef REDUCE_ROW
-#undef WORD_COUNT
+
+typedef struct { uint32_t offset; uint32_t length; } H16GRuleAllocation;
+
+class H16GReductionAllocator {
+public:
+    H16GRuleAllocation allocate(uint64_t length, uint64_t alignment) {
+        uint64_t start = (_cursor + alignment - 1) / alignment * alignment;
+        uint64_t end = start + length;
+        if (end > std::numeric_limits<uint32_t>::max()) return {0,0};
+        _cursor = end;
+        return {(uint32_t)start,(uint32_t)length};
+    }
+private:
+    uint64_t _cursor = 0;
+};
 
 @interface H16GReduceEncoding ()
 @property(nonatomic, readwrite, strong) H16GEncodedTDProgram *tdProgram;
@@ -68,29 +45,6 @@ static const H16GReductionGeometry kReductionGeometries[] = {
 @implementation H16GReduceEncoding
 @end
 
-static const H16GReductionGeometry *geometry(NSString *operation,
-                                              NSArray<NSNumber *> *shape,
-                                              NSUInteger axis) {
-    if (shape.count != 4 || shape[0].unsignedIntegerValue != 1) return NULL;
-    NSUInteger channels=shape[1].unsignedIntegerValue;
-    NSUInteger height=shape[2].unsignedIntegerValue;
-    NSUInteger width=shape[3].unsignedIntegerValue;
-    for (const H16GReductionGeometry &row : kReductionGeometries) {
-        if ([operation isEqualToString:row.operation] &&
-            channels == row.channels && height == row.height &&
-            width == row.width && axis == row.axis)
-            return &row;
-    }
-    return NULL;
-}
-
-static NSArray<NSNumber *> *reducedShape(NSArray<NSNumber *> *inputShape,
-                                          NSUInteger axis) {
-    NSMutableArray<NSNumber *> *shape = [inputShape mutableCopy];
-    shape[axis] = @1;
-    return shape;
-}
-
 static NSUInteger alignUp(NSUInteger value, NSUInteger alignment) {
     return (value + alignment - 1) / alignment * alignment;
 }
@@ -100,28 +54,159 @@ static void setError(NSError **error, NSString *message) {
         code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
 }
 
+static BOOL reductionKind(NSString *operation, H16GReductionKind *kind) {
+    if ([operation isEqualToString:@"reduce_sum"])
+        *kind = H16GReductionKindSum;
+    else if ([operation isEqualToString:@"reduce_mean"])
+        *kind = H16GReductionKindMean;
+    else if ([operation isEqualToString:@"reduce_max"])
+        *kind = H16GReductionKindMax;
+    else return NO;
+    return YES;
+}
+
+static BOOL validGeometry(NSArray<NSNumber *> *shape, NSUInteger axis) {
+    if (shape.count != 4 || shape[0].unsignedIntegerValue != 1 ||
+        axis < 1 || axis > 3) return NO;
+    uint64_t elements = 1;
+    for (NSNumber *dimension in shape) {
+        NSUInteger value = dimension.unsignedIntegerValue;
+        if (value == 0 || value > UINT16_MAX) return NO;
+        elements *= value;
+        if (elements > UINT32_MAX / sizeof(uint16_t)) return NO;
+    }
+    return shape[axis].unsignedIntegerValue > 1;
+}
+
+static NSArray<NSNumber *> *reducedShape(NSArray<NSNumber *> *inputShape,
+                                          NSUInteger axis) {
+    NSMutableArray<NSNumber *> *shape = [inputShape mutableCopy];
+    shape[axis] = @1;
+    return shape;
+}
+
+static uint16_t floatToHalf(float value) {
+    uint32_t bits = 0;
+    memcpy(&bits,&value,sizeof(bits));
+    uint32_t sign = (bits >> 16) & 0x8000;
+    int exponent = (int)((bits >> 23) & 0xff) - 127 + 15;
+    uint32_t mantissa = bits & 0x7fffff;
+    if (exponent <= 0) {
+        if (exponent < -10) return (uint16_t)sign;
+        mantissa = (mantissa | 0x800000) >> (1 - exponent);
+        if (mantissa & 0x1000) mantissa += 0x2000;
+        return (uint16_t)(sign | (mantissa >> 13));
+    }
+    if (exponent >= 31) return (uint16_t)(sign | 0x7c00);
+    if (mantissa & 0x1000) mantissa += 0x2000;
+    return (uint16_t)(sign | ((uint32_t)exponent << 10) | (mantissa >> 13));
+}
+
+static H16GEncodedTDProgram *encodeReductionPacket(
+    H16GReductionKind kind, NSArray<NSNumber *> *inputShape,
+    NSArray<NSNumber *> *outputShape, NSUInteger axis,
+    NSUInteger inputRowBytes, NSUInteger inputPlaneBytes,
+    NSUInteger inputBatchBytes, NSUInteger outputRowBytes,
+    NSUInteger outputPlaneBytes, NSUInteger outputBatchBytes,
+    NSError **error) {
+    NSUInteger channels = inputShape[1].unsignedIntegerValue;
+    NSUInteger height = inputShape[2].unsignedIntegerValue;
+    NSUInteger width = inputShape[3].unsignedIntegerValue;
+    NSUInteger outputChannels = outputShape[1].unsignedIntegerValue;
+    NSUInteger outputHeight = outputShape[2].unsignedIntegerValue;
+    NSUInteger outputWidth = outputShape[3].unsignedIntegerValue;
+    NSUInteger reductionLength = inputShape[axis].unsignedIntegerValue;
+    uint64_t inputElements = (uint64_t)channels * height * width;
+    uint32_t tiles = (uint32_t)((inputElements + 0x3fff) / 0x4000);
+
+    H16GReductionAllocator allocator;
+    H16GRuleAllocation input = allocator.allocate(inputBatchBytes,0x4000);
+    H16GRuleAllocation partial = allocator.allocate(outputBatchBytes,0x4000);
+    H16GRuleAllocation output = allocator.allocate(outputBatchBytes,0x4000);
+    if (input.length == 0 || partial.length == 0 || output.length == 0) {
+        setError(error,@"reduction packet allocations exceed the H16G field width");
+        return nil;
+    }
+
+    std::map<uint32_t,uint32_t> registers;
+    registers[0x0004]=(uint32_t)width;
+    registers[0x0008]=(uint32_t)height;
+    registers[0x000c]=(uint32_t)channels;
+    registers[0x0014]=(uint32_t)outputWidth;
+    registers[0x0018]=(uint32_t)outputHeight;
+    registers[0x001c]=(uint32_t)outputChannels;
+    registers[0x0024]=(uint32_t)axis;
+    registers[0x0034]=(uint32_t)(partial.offset/0x40);
+    registers[0x003c]=(uint32_t)(output.offset/0x40);
+    registers[0x0040]=tiles;
+    registers[0x004c]=0x00100000;
+    registers[0x4104]=0x00500172;
+    registers[0x4108]=0x00500130;
+    registers[0x4114]=(uint32_t)inputRowBytes;
+    registers[0x4118]=(uint32_t)inputPlaneBytes;
+    registers[0x411c]=(uint32_t)inputBatchBytes;
+    registers[0x4120]=(uint32_t)inputBatchBytes;
+    registers[0x4148]=0x0050017a;
+    registers[0x4150]=(uint32_t)outputRowBytes;
+    registers[0x4154]=(uint32_t)outputPlaneBytes;
+    registers[0x4158]=(uint32_t)outputBatchBytes;
+    registers[0x415c]=(uint32_t)outputBatchBytes;
+    registers[0x4900]=(uint32_t)axis;
+    registers[0x4904]=0x000103c0 | ((uint32_t)kind << 2);
+    registers[0x4910]=kind == H16GReductionKindMean
+        ? floatToHalf(1.0f/(float)reductionLength) : floatToHalf(1.0f);
+    registers[0x4d00]=0x21;
+    registers[0x4d08]=0xce;
+    registers[0x4d10]=0;
+    registers[0x4d14]=0;
+    registers[0x4d18]=(uint32_t)inputRowBytes;
+    registers[0x4d1c]=(uint32_t)inputPlaneBytes;
+    registers[0x4d24]=(uint32_t)inputBatchBytes;
+    registers[0x4d68]=0x01002031;
+    registers[0x5100]=0x31;
+    registers[0x5108]=0;
+    registers[0x510c]=0;
+    registers[0x5110]=(uint32_t)outputRowBytes;
+    registers[0x5114]=(uint32_t)outputPlaneBytes;
+    registers[0x511c]=(uint32_t)outputBatchBytes;
+    registers[0x5138]=0x01302031;
+    registers[0x5900]=0x12;
+    registers[0x5904]=0x00a000a0;
+    registers[0x5918]=0;
+    registers[0x5928]=0x007f0000;
+    registers[0x592c]=0x20010701;
+    try {
+        uint32_t control=((kind==H16GReductionKindMax?1u:5u)<<16)|9u;
+        ane::h16::rule::Packet packet=ane::h16::rule::build(
+            registers,control,false);
+        NSData *data=[NSData dataWithBytes:packet.bytes.data()
+                                   length:packet.bytes.size()];
+        return [[H16GEncodedTDProgram alloc] initWithData:data
+            kernelRelocationOffsets:@[] programRecordCount:packet.recordCount
+            programFormatCode:tiles-1 scratchByteLength:0];
+    } catch(const std::exception &exception) {
+        setError(error,[NSString stringWithUTF8String:exception.what()]);
+        return nil;
+    }
+}
+
 @implementation H16GReduceEncoder
 + (BOOL)supportsOperationName:(NSString *)operationName
                    inputShape:(NSArray<NSNumber *> *)inputShape
                          axis:(NSUInteger)axis {
-    return geometry(operationName,inputShape,axis) != NULL;
+    H16GReductionKind kind;
+    return reductionKind(operationName,&kind) && validGeometry(inputShape,axis);
 }
 
 + (H16GReduceEncoding *)encodeOperationName:(NSString *)operationName
                                     inputShape:(NSArray<NSNumber *> *)inputShape
                                           axis:(NSUInteger)axis
                                          error:(NSError **)error {
-    const H16GReductionGeometry *row = geometry(operationName,inputShape,axis);
-    if (!row) {
-        setError(error,@"reduction requires a measured H16G operation, axis, and input geometry");
+    H16GReductionKind kind;
+    if (!reductionKind(operationName,&kind) || !validGeometry(inputShape,axis)) {
+        setError(error,@"reduction requires reduce_sum/reduce_mean/reduce_max, a non-empty [1,C,H,W] fp16 shape, and one non-unit axis in {1,2,3}");
         return nil;
     }
-    NSData *data = [NSData dataWithBytes:row->words
-        length:row->wordCount * sizeof(uint32_t)];
-    H16GEncodedTDProgram *program = [[H16GEncodedTDProgram alloc]
-        initWithData:data kernelRelocationOffsets:@[]
-        programRecordCount:row->recordCount programFormatCode:row->formatCode
-        scratchByteLength:0];
     NSArray<NSNumber *> *outputShape = reducedShape(inputShape,axis);
     NSUInteger inputChannels=inputShape[1].unsignedIntegerValue;
     NSUInteger inputHeight=inputShape[2].unsignedIntegerValue;
@@ -135,9 +220,13 @@ static void setError(NSError **error, NSString *message) {
     NSUInteger rowBytes=alignUp(width * sizeof(uint16_t),64);
     NSUInteger planeBytes=height * rowBytes;
     NSUInteger batchBytes=channels * planeBytes;
+    H16GEncodedTDProgram *program=encodeReductionPacket(kind,inputShape,
+        outputShape,axis,inputRowBytes,inputPlaneBytes,inputBatchBytes,
+        rowBytes,planeBytes,batchBytes,error);
+    if (!program) return nil;
     H16GReduceEncoding *encoding = [H16GReduceEncoding new];
     encoding.tdProgram=program; encoding.outputShape=outputShape;
-    encoding.taskCount=row->taskCount;
+    encoding.taskCount=1;
     encoding.inputRowStrideBytes=inputRowBytes;
     encoding.inputPlaneStrideBytes=inputPlaneBytes;
     encoding.inputBatchStrideBytes=inputBatchBytes;
