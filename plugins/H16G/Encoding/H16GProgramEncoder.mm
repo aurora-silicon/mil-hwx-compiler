@@ -2189,9 +2189,9 @@ static ANEHWXArtifact *encodeLayoutProgram(
 }
 
 @implementation H16GProgramEncoder
-+ (ANEHWXArtifact *)encodeExactResNetGraph:(ANEOperationGraph *)graph
-                                  modelRoot:(NSURL *)modelRoot
-                                diagnostics:(ANEDiagnosticEngine *)diagnostics {
++ (ANEHWXArtifact *)encodeResidualGraph:(ANEOperationGraph *)graph
+                              modelRoot:(NSURL *)modelRoot
+                            diagnostics:(ANEDiagnosticEngine *)diagnostics {
     return encodeResNet50Program(graph,modelRoot,diagnostics);
 }
 + (ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph

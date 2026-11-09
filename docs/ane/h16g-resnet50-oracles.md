@@ -67,29 +67,28 @@ stride-one packing reproduces the captured sections, as does the H16G sparse
 output-lane regions; each region carries the four outputs' biases and three
 input-channel repetitions of sixteen phase-mask groups covering all 49 taps.
 
-## Perturbation results and exact encoder
+## Rule-built residual encoder
 
-The six 2026-11-09 on-ANE perturbation programs separate scheduling from
-source construction order. Projection-before and projection-after compile to
-identical task descriptors. Task-position-head and task-position-tail are
-also identical. The compiler canonicalizes both pairs, so construction order
-is not an encoder input. The branch-lifetime pair changes the residual add
-from an internal producer to the terminal task, but in both programs the
-projection convolution is delayed until immediately before its add.
+The public encoder contains no full-network descriptor table. It discovers
+basic blocks (`3x3,3x3`) and bottleneck blocks (`1x1,3x3,1x1`) by tensor
+compatibility, identifies projection branches independently of operation
+names, and preserves the graph's convolution order. Output slicing is chosen
+from convolution geometry, so the same constructors cover the wide H16G
+tasks and a synthetic ResNet-18 graph.
 
-Header word 7 is schedule-derived dependency/live-bank state rather than a
-primitive constant. Resident source/result ranges contribute the 64-KiB banks
-they occupy in the 2-MiB circular L2 arena; overlapping live values OR their
-bits. Source, second-source, and result bases are selected independently, and
-dead intermediates are reused while a residual input remains allocated
-through its add. Special branch hand-offs and terminal tasks use their
-TileDMA/Common completion fields rather than a nonzero live-bank mask.
+Each task header and register record is constructed from its input/output
+shape, kernel, stride, channel slice, operation role, and storage plan.
+Header live-bank masks are computed from the 64-KiB banks occupied in a 2-MiB
+L2 arena. A first-fit allocator keeps the active main-branch tensors apart;
+residual boundaries use the scratch BAR with explicit TileDMA offsets. Kernel
+and surface BAR slots follow the object writer's allocation rather than a
+captured program.
 
-This evidence admits the exact public 121-operation graph, not a generic DAG
-allocator. The formula encoder emits its measured 82-task stream and refuses
-other graphs. The four isolated non-convolution probes went to the CPU, so
-max-pool, add+ReLU, global mean, and the head are likewise admitted only in
-the exact full-program table.
+Max-pool, add+ReLU, global mean, and the linear head have dedicated packet
+constructors. The linear dimensions come from the final block and classifier
+bias rather than the ResNet-50 name. ResNet-50 uses a 4-MiB scratch allocation
+for two residual spill regions; smaller compatible networks use the same
+policy without adding tables.
 
 All constants are formula-built from public model weights. Dense task slices
 use one interleave width per compiler slice; stride-two 3x3 planes use padded
@@ -100,9 +99,8 @@ regions and 62 in the last eight. Together these formulas reproduce every
 convolution and head region byte-for-byte.
 
 Packaged objects follow the object-writer BAR law: input slot 6, output slot
-7, and `__KERN_0` slot 8; the fixed scratch arena remains slot 3. The offline
-validator recognizes only the exact 82-task/record/format triple, bounds both
-external DMA extents, and rejects unbound or misdirected apertures.
+7, `__KERN_0` slot 8, and scratch slot 3. The offline validator bounds every
+external DMA extent and rejects unbound or misdirected apertures.
 
 ## Admission gate
 

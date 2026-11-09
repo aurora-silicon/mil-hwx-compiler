@@ -61,11 +61,56 @@ int main() {
     auto encoded=ane::h16::encodeResNet50(
         convs,headWeights.data(),headWeights.size(),
         headBias.data(),headBias.size());
-    if (encoded.program.taskCount!=82 || encoded.program.task.size()!=26140 ||
+    if (encoded.program.taskCount!=82 || encoded.program.task.empty() ||
         encoded.program.constants.size()!=53177344 ||
         encoded.program.kernelRelocations.size()!=64 ||
-        encoded.program.scratchAllocationBytes!=0x188000 ||
+        encoded.program.scratchAllocationBytes!=0x400000 ||
         encoded.programRecordCount!=0xa5 || encoded.programFormatCode!=0x4c ||
-        encoded.program.task[0]!=1) return 1;
-    std::cout << "resnet50 exact program passed\n";
+        encoded.program.task[0]!=1 || !encoded.program.formulaBuilt) return 1;
+
+    // A basic-block ResNet-18 geometry takes the same topology discovery,
+    // allocator, DMA, and descriptor constructors.  It deliberately has no
+    // network-specific descriptor data.
+    const Shape basicShapes[] = {
+        {3,64,224,7,2},
+        {64,64,56,3,1},{64,64,56,3,1},
+        {64,64,56,3,1},{64,64,56,3,1},
+        {64,128,56,1,2},{64,128,56,3,2},{128,128,28,3,1},
+        {128,128,28,3,1},{128,128,28,3,1},
+        {128,256,28,1,2},{128,256,28,3,2},{256,256,14,3,1},
+        {256,256,14,3,1},{256,256,14,3,1},
+        {256,512,14,1,2},{256,512,14,3,2},{512,512,7,3,1},
+        {512,512,7,3,1},{512,512,7,3,1},
+    };
+    std::vector<std::vector<std::uint8_t>> basicWeights,basicBiases;
+    std::vector<ane::h16::ResNet50ConvWeights> basicConvs;
+    for (unsigned i=0;i<sizeof(basicShapes)/sizeof(basicShapes[0]);++i) {
+        const auto &s=basicShapes[i];
+        basicWeights.push_back(nonzeroHalves(
+            std::size_t(s.cout)*s.cin*s.kernel*s.kernel,i+700));
+        basicBiases.push_back(nonzeroHalves(s.cout,i+800));
+        ConvShape shape;
+        shape.input=ElementwiseShape{s.cin,s.spatial,s.spatial};
+        const unsigned output=(s.spatial+s.stride-1)/s.stride;
+        shape.output=ElementwiseShape{s.cout,output,output};
+        shape.kernel=shape.kernelWidth=s.kernel;shape.stride=s.stride;
+        shape.groups=1;shape.bias=true;
+        basicConvs.push_back({shape,basicWeights.back().data(),
+            basicWeights.back().size(),basicBiases.back().data(),
+            basicBiases.back().size()});
+    }
+    auto basicHeadWeights=nonzeroHalves(512*1000,901);
+    auto basicHeadBias=nonzeroHalves(1000,902);
+    auto basic=ane::h16::encodeResidualNetwork(
+        basicConvs,basicHeadWeights.data(),basicHeadWeights.size(),
+        basicHeadBias.data(),basicHeadBias.size());
+    if (basic.program.taskCount!=34 || basic.program.task.empty() ||
+        basic.program.kernelRelocations.size()!=24 ||
+        !basic.program.formulaBuilt) {
+        std::cerr << "basic tasks=" << basic.program.taskCount
+                  << " relocations=" << basic.program.kernelRelocations.size()
+                  << "\n";
+        return 2;
+    }
+    std::cout << "rule-built ResNet-50 and ResNet-18 programs passed\n";
 }

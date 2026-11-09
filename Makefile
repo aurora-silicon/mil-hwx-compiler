@@ -378,7 +378,7 @@ test-h14-conv-portable: $(BUILD)/h14_conv_probe $(BUILD)/test_h14_conv_encoding
 	python3 tests/test_h14_conv_cli.py $(BUILD)/h14_conv_probe --probe
 
 H16_CONV_SOURCES := $(H16_FORMULA_SOURCES)
-$(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H16G/Encoding/H16ResNet50Facts.inc plugins/H13/H13Program.h | $(BUILD)
+$(BUILD)/h16_conv_formula.o: $(H16_CONV_SOURCES) plugins/H16G/Encoding/H16ConvProgram.h plugins/H13/H13Program.h | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
 $(BUILD)/h16_conv_support.o: plugins/H13/H13Program.cpp plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) | $(BUILD)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -c $< -o $@
