@@ -939,7 +939,10 @@ std::vector<std::uint8_t> mobileTask(
         (layer.mobileRingActivation == 1 ? 0x00010000u : 0u) |
         (layer.mobileRingActivation == 2 ? 0x00020000u : 0u);
 
-    storeLE32(task, 4, mobileCost(g, last));
+    // A depthwise task with the fused clip epilogue takes header mode 2, as
+    // the H13 and H14 linked clip forms do; other tasks keep their cost word.
+    storeLE32(task, 4, g.depthwise && layer.mobileRingActivation == 2
+                           ? 2u : mobileCost(g, last));
     storeLE32(task, 8, (first ? 8u : 0u) | (last ? 0x22u : 0u));
     storeLE32(task, 16, (first || last) ? 0x00fff868u : 0x00fff800u);
     std::uint32_t banks = 0;

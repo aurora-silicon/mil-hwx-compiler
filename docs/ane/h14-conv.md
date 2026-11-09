@@ -135,6 +135,11 @@ prefixes ending at 128x56x56; the adjacent 64x56x56 and 128x28x28 terminals
 remain compact. This avoids a prefix-number table and applies to other frame
 sizes at the same allocation boundary.
 
+Finite-clip rings keep ordinary scheduler costs except on depthwise tasks,
+where header word 1 selects mode 2. That is the same operation/epilogue rule
+used by the existing H13 and H14 linked clip forms. ReLU tasks do not take
+this branch and retain their previous bytes.
+
 ## Envelope and verification limits
 
 Formula-built convolutions emit ANEC. HWX remains available for the existing

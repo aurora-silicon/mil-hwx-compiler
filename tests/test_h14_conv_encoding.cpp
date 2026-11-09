@@ -85,7 +85,7 @@ static Program ringConv(unsigned ci, unsigned co, unsigned h, unsigned k,
     for (std::size_t i=0;i<w.size();i+=2) { w[i]=1+(i/2)%251;w[i+1]=0x34; }
     return encodeConvLinkedRing(s,w.data(),w.size(),b.data(),b.size());
 }
-static std::vector<Program> mobile(unsigned input) {
+static std::vector<Program> mobile(unsigned input, bool relu=true) {
     static const unsigned co[] = {32,32,64,64,128,128,128,128,256,256,256,256,
         512,512,512,512,512,512,512,512,512,512,512,512,1024,1024,1024,1024};
     static const unsigned stride[] = {2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,
@@ -96,7 +96,7 @@ static std::vector<Program> mobile(unsigned input) {
         const bool dw=i&&i!=27&&(i&1);
         const auto k=(i==0||dw)?3u:1u;
         layers.push_back(ringConv(ci,co[i],h,k,stride[i],dw));
-        if(i!=27) fuseConvRelu(layers.back());
+        if(relu && i!=27) fuseConvRelu(layers.back());
         ci=co[i]; h=(h+stride[i]-1)/stride[i];
     }
     return layers;
@@ -322,6 +322,25 @@ int main() {
         assert(reg(ring,fullLast,0x530)==0x14a);
         assert(!hasReg(ring,fullLast,0x538));
         assert(!hasReg(ring,fullLast,0x53c));
+
+        // Fused finite clips preserve every ordinary scheduler cost, except
+        // that depthwise clip tasks select the linked-clip header mode 2.
+        auto clippedLayers=mobile(224,false);
+        for(unsigned i=0;i+1<clippedLayers.size();++i)
+            fuseConvClip(clippedLayers[i],0x0000,0x4600);
+        const auto clipped=linkMobileNetRing(clippedLayers);
+        const auto clippedSizes=taskSizes(clipped.taskStream);
+        std::size_t clippedAt=16, reluAt=16;
+        for(unsigned i=0;i<28;++i) {
+            const auto clipCost=word(clipped.taskStream,clippedAt+4);
+            const auto reluCost=word(ring.taskStream,reluAt+4);
+            if(clippedLayers[i].depthwiseConv && i+1<28)
+                assert(clipCost==2);
+            else
+                assert(clipCost==reluCost);
+            clippedAt=(clippedAt+clippedSizes[i]+15)&~std::size_t(15);
+            reluAt=(reluAt+sizes[i]+15)&~std::size_t(15);
+        }
 
     }
     std::cout << "H14 formula/linked encoding: PASS\n";
