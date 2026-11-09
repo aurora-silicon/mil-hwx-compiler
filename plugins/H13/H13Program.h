@@ -133,6 +133,28 @@ struct Program {
     bool depthwiseConv = false;
 };
 
+/// One biased convolution in the decoded H13 ResNet-50 schedule.  The
+/// caller supplies dense MIL weights in [Cout,Cin,Kh,Kw] order; the encoder
+/// derives every packed kernel chunk and never imports a compiler payload.
+struct ResNet50ConvWeights {
+    ConvShape shape;
+    const std::uint8_t *weights = nullptr;
+    std::size_t weightBytes = 0;
+    const std::uint8_t *bias = nullptr;
+    std::size_t biasBytes = 0;
+};
+
+/// Build the clean-room 80-task H13 ResNet-50 program: native sparse stem,
+/// max-pool, sixteen bottleneck residual blocks, global mean, and the
+/// 2048->1000 classifier. Convolutions are supplied in execution order; the
+/// first 56-wide projection follows Main3, while later stage projections
+/// precede their main branches so the shortcut remains live in the ring.
+Program encodeResNet50(const std::vector<ResNet50ConvWeights> &convolutions,
+                       const std::uint8_t *headWeights,
+                       std::size_t headWeightBytes,
+                       const std::uint8_t *headBias,
+                       std::size_t headBiasBytes);
+
 Program encodeBinary(BinaryOperation operation);
 bool supportsElementwise(BinaryOperation operation, ElementwiseShape shape,
                          bool scalarConstant = false);
