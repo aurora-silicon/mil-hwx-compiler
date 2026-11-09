@@ -23,6 +23,12 @@ def main():
                   [0.0, 0.0, 0.0]]]]
     down = module.conv2d_python(sample, identity, [0.0], stride=2)
     assert down == [[[1.0, 3.0], [7.0, 9.0]]]
+    pool_sample = [[[float(y * 4 + x + 1) for x in range(4)]
+                    for y in range(4)]]
+    # 4-wide TF-SAME has no leading pad and one trailing pad.  A symmetric
+    # torchvision-style padding=1 window would start with 6 rather than 11.
+    assert module.maxpool_python(pool_sample) == \
+        [[[11.0, 12.0], [15.0, 16.0]]]
     branch = module.conv2d_python(down, [[[[2.0]]]], [0.0])
     fused = [[[max(0.0, branch[0][y][x] + down[0][y][x])
                for x in range(2)] for y in range(2)]]

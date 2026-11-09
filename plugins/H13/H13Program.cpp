@@ -319,6 +319,14 @@ constexpr std::size_t destinationDepthStride = 0x268;
 constexpr std::size_t destinationFormat = 0x270;
 } // namespace reg
 
+// Header BaseEnable: kernel-carrying tasks need both the kernel table stream
+// and kernel execution paths enabled.  PE-only tasks deliberately carry
+// neither bit.
+constexpr std::uint32_t kHeaderKernelTableEnable = 1u << 24;
+constexpr std::uint32_t kHeaderKernelExecutionEnable = 1u << 26;
+constexpr std::uint32_t kHeaderKernelEnableMask =
+    kHeaderKernelTableEnable | kHeaderKernelExecutionEnable;
+
 constexpr std::size_t outputRows = 512;
 constexpr std::uint32_t matvecInputChannels = 512; // channels matvecTask moves from surface channel 5, whatever the reduction
 constexpr std::size_t rowsPerBlock = 32;
@@ -458,8 +466,8 @@ std::vector<std::uint8_t> binaryTask(std::uint32_t operation) {
 std::vector<std::uint8_t> matvecTask() {
     std::vector<std::uint8_t> task(taskBytes, 0);
     putTaskHeader(task,
-                  5u | (1u << 5) | (36u << 12) | (1u << 24) |
-                      (1u << 26),
+                  5u | (1u << 5) | (36u << 12) |
+                      kHeaderKernelEnableMask,
                   0x21);
     putFirmwareDMA(task);
     putStreamHeaders(task);
@@ -3254,6 +3262,32 @@ enum class EdgeMode { Dram, AliasInit, AliasChained, Dep104, Dep120 };
 bool isAlias(EdgeMode m) { return m == EdgeMode::AliasInit || m == EdgeMode::AliasChained; }
 bool isDependent(EdgeMode m) { return m == EdgeMode::Dep104 || m == EdgeMode::Dep120; }
 
+constexpr std::uint32_t kL2ResultResident = 1u << 8;
+constexpr std::uint32_t kL2ResultChainedTraversal = 4u << 4;
+constexpr std::uint32_t kL2ResultInitialAliasTraversal = 7u << 4;
+constexpr std::uint32_t kL2ResultInitialAliasDMAClass = 5u << 20;
+constexpr std::uint32_t kL2SourceInitialAliasTraversal = 6u << 4;
+constexpr std::uint32_t kL2SourceResident = 1u << 8;
+constexpr std::uint32_t kL2SourceDependentClass = 1u << 2;
+
+/// L2 ResultCfg fields shared by linked-ring and residual resident results.
+/// The first producer in a resident run carries the initial-alias traversal
+/// and DMA class; later resident producers use the chained traversal only.
+constexpr std::uint32_t l2ResidentResultConfig(bool initialAlias) {
+    return kL2ResultResident |
+        (initialAlias ? kL2ResultInitialAliasTraversal |
+                            kL2ResultInitialAliasDMAClass
+                      : kL2ResultChainedTraversal);
+}
+
+constexpr std::uint32_t l2InitialAliasSourceConfig() {
+    return kL2SourceInitialAliasTraversal | kL2SourceResident;
+}
+
+constexpr std::uint32_t l2DependentSourceConfig() {
+    return kL2SourceResident | kL2SourceDependentClass;
+}
+
 /// What one layer occupies in L2, read back from its first task's words.
 struct LayerGeometry {
     bool depthwise;
@@ -3901,7 +3935,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
     if (n >= 2) {
         sourceCfg[1] = 0x160u;
         outResident[0] = true;
-        resultCfg[0] = 0x500170u;
+        resultCfg[0] = l2ResidentResultConfig(true);
         resultSpan[0] = g[1].sourceSpan;
         resultBase[0] = 0;
         sourceBase[0] = resultSpan[0];
@@ -3915,7 +3949,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
         resultBase[1] = g[1].sourceSpan;
         sourceCfg[2] = 0x842u;
         outResident[2] = true;
-        resultCfg[2] = 0x140u;
+        resultCfg[2] = l2ResidentResultConfig(false);
         resultBase[2] = 0;
         resultSpan[2] = g[3].sourceSpan;
         sourceBase[2] = resultSpan[2];
@@ -3938,7 +3972,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
                     ? 0x120u : 0x104u;
             }
             outResident[i] = true;
-            resultCfg[i] = 0x140u;
+            resultCfg[i] = l2ResidentResultConfig(false);
             resultSpan[i] = consumer.sourceSpan;
             std::uint64_t candidate = align16(sourceBase[i] + g[i].sourceSpan) % kL2Bytes;
             if (!g[i].depthwise && g[i].co > g[i].ci) {
@@ -3960,7 +3994,7 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
         resultBase[1] = g[1].sourceSpan;
     } else if (n == 3) {
         sourceCfg[2] = 0x120u;
-        resultCfg[1] = 0x140u;
+        resultCfg[1] = l2ResidentResultConfig(false);
         outResident[1] = true;
         resultSpan[1] = g[2].sourceSpan;
         resultBase[1] = g[1].sourceSpan;
@@ -4707,6 +4741,12 @@ constexpr std::uint32_t residualDisabledDMAConfig() {
     return (8u << 4) | (8u << 8) | (8u << 12);
 }
 
+constexpr std::uint32_t residualAliasSourceDMAConfig() {
+    // TileDMA source Cfg: disabled transfer, cache hint 8 in all three
+    // nibbles, and dependency class 4 for an initial resident alias.
+    return residualDisabledDMAConfig() | (4u << 16);
+}
+
 constexpr std::uint32_t residualNeutralFormat() {
     // TileDMA format: neutral fp16 surface class with no layout transform.
     return 1u << 24;
@@ -4809,7 +4849,19 @@ constexpr std::uint32_t residualStemConvFlags() {
 constexpr std::uint32_t kResidualHeaderSrcLoc = 1u << 28;
 constexpr std::uint32_t kResidualHeaderDstLoc = 1u << 29;
 constexpr std::uint32_t kResidualHeaderSPL = 1u << 11;
+constexpr std::uint32_t kResidualHeaderTaskSignalEnable = 1u << 15;
+constexpr std::uint32_t kResidualHeaderTaskSignalReset = 1u << 12;
+constexpr std::uint32_t kResidualHeaderProducerControl = 1u << 14;
+constexpr std::uint32_t kResidualHeaderConsumerControl = 1u << 13;
 constexpr std::uint32_t kResidualTaskBufferEnable = 1u << 23;
+constexpr std::uint32_t kResidualHeaderSourceRouteMask = 63u;
+constexpr std::uint32_t kResidualHeaderSecondSourceRouteMask = 31u << 6;
+constexpr std::uint32_t kResidualHeaderResultRouteMask = 63u << 12;
+constexpr std::uint32_t kResidualHeaderRouteMask =
+    kResidualHeaderSourceRouteMask |
+    kResidualHeaderSecondSourceRouteMask |
+    kResidualHeaderResultRouteMask |
+    kResidualTaskBufferEnable;
 
 Program residualPETask(ResidualRole role, ElementwiseShape input,
                        ElementwiseShape output) {
@@ -5282,11 +5334,25 @@ void disableResidualDestinationDMA(std::vector<std::uint8_t> &stream,
 void configureResidualSource(std::vector<std::uint8_t> &stream,
                              std::size_t at, std::size_t bytes,
                              const ResidualValue &value,
-                             std::uint32_t stage) {
+                             std::uint32_t stage,
+                             bool initialAlias) {
     if (value.storage == ResidualStorage::Ring) {
-        residualL2Source(stream, at, bytes, 0x104, value.base,
+        residualL2Source(stream, at, bytes,
+                         initialAlias ? l2InitialAliasSourceConfig()
+                                      : l2DependentSourceConfig(),
+                         value.base,
                          value.layout.words); // L2 resident source
-        disableResidualSourceDMA(stream, at, bytes);
+        if (initialAlias) {
+            const auto row = static_cast<std::uint32_t>(
+                align16(2ull * value.shape.width));
+            const auto plane = row * value.shape.height;
+            const auto depth = plane * value.shape.channels;
+            residualTileSource(stream, at, bytes,
+                residualAliasSourceDMAConfig(), 0, row, plane, depth,
+                residualSourceFormat(true));
+        } else {
+            disableResidualSourceDMA(stream, at, bytes);
+        }
         return;
     }
     residualL2Source(stream, at, bytes,
@@ -5311,12 +5377,21 @@ void configureResidualResult(std::vector<std::uint8_t> &stream,
                              std::size_t at, std::size_t bytes,
                              const ResidualValue &value,
                              std::uint32_t stage,
-                             std::uint32_t channelOffset) {
+                             std::uint32_t channelOffset,
+                             bool initialAlias) {
     if (value.storage == ResidualStorage::Ring) {
-        residualL2Result(stream, at, bytes, 0x140,
+        residualL2Result(stream, at, bytes,
+                         l2ResidentResultConfig(initialAlias),
                          value.base + channelOffset * value.layout.words.channel,
                          value.layout.words); // L2 resident result
-        disableResidualDestinationDMA(stream, at, bytes);
+        if (initialAlias) {
+            // Initial aliases retain the convolution template's populated
+            // destination geometry; only the transfer itself is disabled.
+            putRegister(stream, at, bytes, 0x17800,
+                        residualDestinationDisabledConfig());
+        } else {
+            disableResidualDestinationDMA(stream, at, bytes);
+        }
         return;
     }
     residualL2Result(stream, at, bytes,
@@ -5371,26 +5446,39 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
                        std::size_t at, bool last) {
     auto &task = planned.task;
     const auto bytes = task.encoded.firstTaskBytes;
+    const bool initialAliasProducer = task.role == ResidualRole::Stem;
+    const bool initialAliasConsumer = task.role == ResidualRole::Pool;
     configureResidualSource(program.task, at, bytes, planned.route.source,
-                            planned.route.sourceStage);
+                            planned.route.sourceStage,
+                            initialAliasConsumer);
     configureResidualResult(program.task, at, bytes, planned.route.result,
-                            planned.route.resultStage, task.firstOutput);
+                            planned.route.resultStage, task.firstOutput,
+                            initialAliasProducer);
     if (planned.route.hasSecond)
         configureResidualSecond(program.task, at, bytes, planned.route.second,
                                 planned.route.secondStage);
 
-    // Header control is assembled from semantic locations.  These are the
-    // generation-wide SrcLoc, DstLoc, SPL, TSE and TSR bits.
-    std::uint32_t control = 0;
+    // Every task closes its work with TSE+TSR.  The following task's L2 or
+    // TileDMA dependency consumes that signal, serialising resident reads as
+    // well as spill reads.  Without the signal, even the two-task stem/pool
+    // rung can let the pool read the ring before the stem has filled it.
+    std::uint32_t control = kResidualHeaderTaskSignalEnable |
+                            kResidualHeaderTaskSignalReset;
     if (planned.route.source.storage != ResidualStorage::Ring)
         control |= kResidualHeaderSrcLoc | kResidualHeaderSPL;
     if (planned.route.result.storage != ResidualStorage::Ring)
-        control |= kResidualHeaderDstLoc | (1u << 15) | (1u << 12);
+        control |= kResidualHeaderDstLoc;
+    if (initialAliasProducer)
+        control |= kResidualHeaderProducerControl;
+    if (initialAliasConsumer)
+        control |= kResidualHeaderConsumerControl | kResidualHeaderSPL;
     std::uint32_t selectors = last ? 0u : kResidualTaskBufferEnable;
     const auto sourceChannel = planned.route.source.storage ==
             ResidualStorage::External ? 5u : 3u;
     if (planned.route.source.storage != ResidualStorage::Ring)
         selectors |= sourceChannel | 1u << 5;
+    else if (initialAliasConsumer)
+        selectors |= 3u | 1u << 5;
     if (planned.route.hasSecond && planned.route.second.storage !=
             ResidualStorage::Ring)
         selectors |= 3u << 6; // scratch second-source channel
@@ -5398,8 +5486,16 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
             ResidualStorage::External ? 4u : 3u;
     if (planned.route.result.storage != ResidualStorage::Ring)
         selectors |= (resultChannel | 1u << 5) << 12;
+    else if (initialAliasProducer)
+        selectors |= (3u | 1u << 5) << 12;
     storeLE32(program.task, at + 24, control);
-    storeLE32(program.task, at + 32, selectors);
+    // Replace only the route-owned fields.  Kernel templates already set the
+    // two BaseEnable kernel bits, while compact PE tasks leave them clear.
+    // Keeping that base word is required: replacing it with `selectors`
+    // disables the kernel path before the first residual convolution runs.
+    const auto baseEnable = loadLE32(program.task, at + 32);
+    storeLE32(program.task, at + 32,
+              (baseEnable & ~kResidualHeaderRouteMask) | selectors);
 }
 
 } // namespace

@@ -207,6 +207,91 @@ static void expect(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+constexpr std::uint32_t kKernelTableEnable = 1u << 24;
+constexpr std::uint32_t kKernelExecutionEnable = 1u << 26;
+constexpr std::uint32_t kKernelEnableMask =
+    kKernelTableEnable | kKernelExecutionEnable;
+constexpr std::uint32_t kTaskBufferEnable = 1u << 23;
+constexpr std::uint32_t kTaskSignalEnable = 1u << 15;
+constexpr std::uint32_t kTaskSignalReset = 1u << 12;
+
+static bool isPETask(const ane::h13::Program::TaskRecord &record) {
+    return record.role == "pool" || record.role == "add+relu" ||
+           record.role == "reduce_mean";
+}
+
+static void validateTaskHeaders(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() == program.taskRecords.size(),
+           "residual task records do not cover every decoded task");
+    for (std::size_t index = 0; index != spans.size(); ++index) {
+        const auto span = spans[index];
+        const bool kernel = !isPETask(program.taskRecords[index]);
+        const auto baseEnable = word(program.task, span.offset + 32);
+        expect((baseEnable & kKernelEnableMask) ==
+                   (kernel ? kKernelEnableMask : 0u),
+               "residual kernel enables disagree with the task role");
+        expect((word(program.task, span.offset + 36) != 0) == kernel,
+               "residual header word 9 disagrees with the task role");
+        expect(bool(baseEnable & kTaskBufferEnable) ==
+                   (index + 1 != spans.size()),
+               "residual task-buffer chain is not closed at the terminal task");
+        const auto control = word(program.task, span.offset + 24);
+        expect((control & (kTaskSignalEnable | kTaskSignalReset)) ==
+                   (kTaskSignalEnable | kTaskSignalReset),
+               "residual task does not signal and reset completion");
+    }
+}
+
+static ane::h13::Program linkedRingStemReference() {
+    const ConvShape stemShape{3, 3, 2, 1, true,
+        ElementwiseShape{3, 224, 224}, ElementwiseShape{32, 112, 112}};
+    const ConvShape depthwiseShape{3, 3, 1, 32, true,
+        stemShape.output, stemShape.output};
+    const auto encode = [](const ConvShape &shape) {
+        const auto reduction = static_cast<std::size_t>(shape.input.channels) /
+            shape.groups * shape.kernel * shape.kernelWidth;
+        std::vector<std::uint8_t> weights(
+            2 * static_cast<std::size_t>(shape.output.channels) * reduction,
+            0);
+        std::vector<std::uint8_t> bias(2 * shape.output.channels, 0);
+        return ane::h13::encodeConvLinkedRing(
+            shape, weights.data(), weights.size(), bias.data(), bias.size());
+    };
+    return ane::h13::linkMobileNetRing(
+        {encode(stemShape), encode(depthwiseShape)});
+}
+
+static void validateStemPoolHandoff(const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() >= 2, "residual stream has no stem/pool pair");
+    const auto stem = spans[0];
+    const auto pool = spans[1];
+    expect(reg(program, stem, 0x04834) == reg(program, pool, 0x04808) &&
+               reg(program, stem, 0x04838) == reg(program, pool, 0x0480c) &&
+               reg(program, stem, 0x0483c) == reg(program, pool, 0x04810) &&
+               reg(program, stem, 0x04840) == reg(program, pool, 0x04814),
+           "stem result and pool source L2 layouts differ");
+
+    const auto linked = linkedRingStemReference();
+    const auto linkedStem = taskSpans(linked).front();
+    expect(word(program.task, stem.offset + 32) ==
+               word(linked.task, linkedStem.offset + 32) &&
+               word(program.task, stem.offset + 36) ==
+                   word(linked.task, linkedStem.offset + 36),
+           "residual stem kernel header fields differ from linked-ring stem");
+    expect(reg(program, stem, 0x04830) ==
+               reg(linked, linkedStem, 0x04830),
+           "residual stem ResultCfg differs from linked-ring initial alias");
+}
+
+static void validatePoolBoundaryLayout(const ane::h13::Program &program) {
+    const auto terminal = taskSpans(program).back();
+    expect(program.output.nchw[5] == reg(program, terminal, 0x17808) &&
+               program.output.nchw[4] == reg(program, terminal, 0x1780c),
+           "pool terminal DMA row/plane strides differ from the manifest layout");
+}
+
 static std::uint32_t floatWord(float value) {
     std::uint32_t result = 0;
     std::memcpy(&result, &value, sizeof(result));
@@ -314,6 +399,8 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
         network.convs, head.first.data(), head.first.size(),
         head.second.data(), head.second.size());
     validateGeometry(program, network, blocks, 1000);
+    validateTaskHeaders(program);
+    validateStemPoolHandoff(program);
     return {std::move(program), std::move(logits)};
 }
 
@@ -367,6 +454,11 @@ int main(int argc, char **argv) {
                mean.output.nchw[1] == 2048 && mean.output.nchw[2] == 1 &&
                mean.output.nchw[3] == 1,
            "mean boundary metadata differs from the compiler plan");
+    validateTaskHeaders(pool);
+    validateTaskHeaders(block);
+    validateStemPoolHandoff(pool);
+    validateStemPoolHandoff(block);
+    validatePoolBoundaryLayout(pool);
     const auto fullSpans = taskSpans(full);
     for (const auto *boundary : {&pool, &block, &mean}) {
         const auto spans = taskSpans(*boundary);

@@ -32,6 +32,26 @@ for all three, and every compiled task's input/output geometry, final spatial
 extent, and mean scale are checked before the generated ANECs reach the libane
 extent gate.
 
+The residual stream preserves each task template's BaseEnable word while it
+replaces only the three surface selectors and task-buffer bit. Consequently,
+kernel table/execution enables remain set on convolution and linear tasks and
+remain clear on pool, add, and mean PE tasks. Every task emits TSE+TSR before
+its successor can consume an L2 or spill dependency. The stem-to-pool edge is
+the linked-ring initial-alias form: the stem keeps the populated destination
+geometry and producer control, while the pool carries the matching source
+configuration, consumer control, and channel-3 selectors. A host test decodes
+every task of the 224/192 bottleneck programs, ResNet-18, the two-task pool
+rung, and the first-block rung; it also checks that the stem result base and
+channel/row/plane strides equal the pool source fields and that the terminal
+pool DMA row/plane strides equal the package layout.
+
+The dependency-free numeric reference explicitly executes TensorFlow-SAME
+max-pool with the odd padding cell after the surface. Its asymmetric test case
+would produce a different first window under torchvision-style symmetric
+padding, so the padding convention is part of the host gate. The synthetic
+float64 residual tests execute the pool and one-block arithmetic topology;
+they do not claim to simulate undocumented ANE arithmetic internals.
+
 `--terminate-after <tensor>` makes a named pool, fused block result, mean, or
 logits tensor the external result of the linked stream. The encoder rebuilds
 that terminal task through the same L2 result, destination DMA, destination

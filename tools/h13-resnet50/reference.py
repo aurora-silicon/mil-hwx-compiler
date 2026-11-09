@@ -98,6 +98,31 @@ def maxpool(x: np.ndarray, kernel: int = 3, stride: int = 2) -> np.ndarray:
     return windows.max(axis=(-1, -2))
 
 
+def maxpool_python(x, kernel: int = 3, stride: int = 2):
+    """Dependency-free TensorFlow-SAME max-pool used by the host gate."""
+    channels, height, width = len(x), len(x[0]), len(x[0][0])
+    top, bottom = tf_same_pad(height, kernel, stride)
+    left, right = tf_same_pad(width, kernel, stride)
+    out_height = (height + stride - 1) // stride
+    out_width = (width + stride - 1) // stride
+    result = [[[-float('inf') for _ in range(out_width)]
+               for _ in range(out_height)] for _ in range(channels)]
+    for channel in range(channels):
+        for oy in range(out_height):
+            for ox in range(out_width):
+                value = -float('inf')
+                for ky in range(kernel):
+                    iy = oy * stride + ky - top
+                    if not 0 <= iy < height:
+                        continue
+                    for kx in range(kernel):
+                        ix = ox * stride + kx - left
+                        if 0 <= ix < width:
+                            value = max(value, float(x[channel][iy][ix]))
+                result[channel][oy][ox] = value
+    return result
+
+
 def evaluate_boundaries(model: Path, x: np.ndarray) -> dict[str, np.ndarray]:
     c = constants(model)
     result = {}
