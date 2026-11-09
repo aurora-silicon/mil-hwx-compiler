@@ -1,8 +1,10 @@
 #pragma once
+#include "H14Fields.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <string>
 
@@ -89,6 +91,16 @@ struct TensorLayout {
 struct Program {
     bool formulaBuilt = false;
     bool depthwiseConv = false;
+    /// The native MobileNet ring encoder deliberately does not borrow a
+    /// decoded task image.  It retains the geometry and coefficient-lane
+    /// plan here until the whole-program allocator has chosen every L2 edge.
+    bool mobileRingRuleBuilt = false;
+    ConvShape mobileRingShape{};
+    std::array<std::uint32_t, 16> mobileRingKernelOffsets{};
+    std::array<std::uint32_t, 16> mobileRingKernelSizes{};
+    fields::Activation mobileRingActivation = fields::Activation::None;
+    std::uint16_t mobileRingClipLower = 0;
+    std::uint16_t mobileRingClipUpper = 0;
     std::uint64_t scratchAllocationBytes = 0;
     /// Complete __TEXT/__text content: the zero-size prefix frame followed by
     /// 16-byte aligned tasks, with the final task left unpadded.
@@ -174,6 +186,14 @@ Program encodeConvGeneric(ConvShape shape, const std::uint8_t *weights,
                           std::size_t weightBytes,
                           const std::uint8_t *bias = nullptr,
                           std::size_t biasBytes = 0);
+/// Native, one-task MobileNet convolution used by `linked-ring`.  Unlike the
+/// generic/parity paths this stores no prebuilt task prefix: all H14 records
+/// are emitted later from geometry, coefficient lanes and allocator roles.
+std::string convLinkedRingRefusal(ConvShape shape);
+Program encodeConvLinkedRing(ConvShape shape, const std::uint8_t *weights,
+                             std::size_t weightBytes,
+                             const std::uint8_t *bias = nullptr,
+                             std::size_t biasBytes = 0);
 void fuseConvRelu(Program &program);
 /// Fuses a finite fp16 clip into a formula-built convolution by selecting the
 /// NE lookup-table epilogue and prepending the 128-byte bounds descriptor to
@@ -183,9 +203,27 @@ void fuseConvClip(Program &program, std::uint16_t lower,
 struct LinkedLayer {
     std::uint32_t firstTask, taskCount;
     std::uint64_t inputOffset, outputOffset;
+    bool readsScratch = false;
+    bool writesScratch = false;
+    int inputEdge = 0;
+    int outputEdge = 0;
+    std::uint64_t l2Source = 0;
+    std::uint64_t l2Result = 0;
+    std::uint64_t l2ResultBytes = 0;
+};
+/// Research-only changes to the native ring task envelope.  An absent value
+/// selects the named device-tested default in H14Fields.h.
+struct LinkedRingResearchOptions {
+    std::optional<std::size_t> compactTaskMinimumBytes;
 };
 Program linkConvChain(const std::vector<Program> &layers,
                       std::vector<LinkedLayer> *layout = nullptr);
+/// Rule-built H14 native-frame MobileNet prefix.  The allocator keeps all but
+/// the conv_1 -> conv_2 bridge in the 2 MiB circular L2 arena and emits one
+/// packed task per convolution without consulting a fixed-word table.
+Program linkMobileNetRing(const std::vector<Program> &layers,
+                          std::vector<LinkedLayer> *layout = nullptr,
+                          LinkedRingResearchOptions options = {});
 
 /// Byte lengths of the tasks a task stream carries, in stream order.
 /// A decoded epilogue Apple folds into the producer's own task instead of

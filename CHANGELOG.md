@@ -4,10 +4,19 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H14: add the rule-built native MobileNetV1 `linked-ring` schedule. It emits
+  28 packed tasks, native k3/s2 stem/depthwise coefficients, one interleave-8
+  scratch spill, then geometry-allocated 2 MiB L2 residency; resident roles
+  omit TileDMA records and coefficient BAR addends follow the concatenated
+  section allocator. The same rules compile synthetic 224 and 192 frames,
+  fused ReLU6, and a 35-program smallest-first M2 kit. Every task record is
+  constructed from named fields and geometry rules. The compact-task probe
+  now covers ring prefixes and the full ReLU program, with its padding minimum
+  passed through an explicit research-only compiler option.
 - H13/H14: fuse a single-consumer finite fp16 `clip` into formula-built
   convolutions with the lookup-table NE selector, duplicated per-lane bounds
   descriptor and generation-specific kernel-DMA framing. MobileNetV1 now
-  emits fused ReLU6 and compiles as a 45-task linked-L2 program.
+  emits fused ReLU6; H14's native ring keeps one task per layer.
 - H16G: fail closed on the three transformer forms that did not pass J616s
   qualification. Standalone softmax now admits only the measured S=1500,
   H=8 form; H=6 is refused after its prefixes failed LOAD or hung and its

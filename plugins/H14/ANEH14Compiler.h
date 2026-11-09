@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
                 format:(NSString *)format
        outputDirectory:(NSURL *)directory
               schedule:(NSString *)schedule
+researchCompactTaskMinimumBytes:(nullable NSString *)researchCompactTaskMinimumBytes
            diagnostics:(ANEDiagnosticEngine *)diagnostics
                  error:(NSError **)error;
 @end

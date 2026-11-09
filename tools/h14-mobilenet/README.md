@@ -1,11 +1,11 @@
 # MobileNetV1 224 on H14
 
-Build the same mirrored, space-to-depth stem and 28-layer graph used by
-`tools/h13-mobilenet`, with H14 formula-built convolutions and one linked
-program. No Apple model or compiled bytes are bundled. Random fp16 weights
-are the default; `--weights model.tflite` uses the existing H13 converter
-for the public Apache-2.0 quantized MobileNetV1 weights. Its ReLU replacement
-for ReLU6 and the host's final average pool are unchanged.
+Build the native-frame 28-layer graph used by `tools/h13-mobilenet`, with a
+rule-built H14 `linked-ring`: native k3/s2 stem and depthwise layers, one early
+scratch spill, then a 2 MiB circular L2 allocation. Every task record is built
+from named fields and geometry rules. Random fp16 weights are the default;
+`--weights model.tflite` uses the existing converter for the public Apache-2.0
+quantized MobileNetV1 weights.
 
 ```sh
 make build/mil-hwxc
@@ -13,10 +13,29 @@ python3 -m pip install numpy
 MILC="$PWD/build/mil-hwxc" tools/h14-mobilenet/package.sh build/mobilenet-h14
 ```
 
-The directory contains `src/model.mil`, original generated weights,
-`params.npz`, `tfweights.npz`, `linked/manifest.json`, one H14 ANEC and, unless
-`--no-perop` is supplied, per-layer programs for cold comparisons. This is a
-host-built package; M2 accuracy and timing still need qualification.
+The directory contains `src/model.mil`, generated weights, `params.npz`,
+`tfweights.npz`, `linked/manifest.json`, and one 28-task H14 ANEC. Use
+`ring_kit.py` for the smallest-first M2 test sequence: depthwise stride-2 singles,
+stem, prefixes, full ReLU, and full fused ReLU6.
+
+`envelope_kit.py` builds ReLU ring prefixes p04 and p08 plus the full ReLU
+ring at padding minima 0, 128, 256, and 312 bytes. `kit.json` records every
+task's actual size and the full ring's semantic and padded sizes. The
+generator passes its restricted minimum through the research-only compiler
+option; other builds keep `compactTaskMinimumBytes`.
+
+```sh
+MILC="$PWD/build/mil-hwxc" \
+  tools/h14-mobilenet/envelope_kit.py out/h14-envelope
+```
+
+After building the C runner below, execute a generated kit in its declared
+smallest-first order with:
+
+```sh
+python3 out/h14-ring/run_kit.py out/h14-ring \
+  --runner ./h14-mobilenet-run --device 0 --repeat 1
+```
 
 On the M2, build `run.c` against the existing MIT libane from
 [aurora-silicon/omarchy-ane](https://github.com/aurora-silicon/omarchy-ane).
@@ -29,7 +48,7 @@ cc -O2 -Wall -Wextra -Werror tools/h14-mobilenet/run.c \
   -I/path/to/libane -I/path/to/uapi -I/usr/include/libdrm \
   -L/path/to/libane -lane -o h14-mobilenet-run
 python3 tools/h14-mobilenet/run.py build/mobilenet-h14 \
-  --runner ./h14-mobilenet-run --device 0 --compare-perop --reference
+  --runner ./h14-mobilenet-run --device 0 --reference
 ```
 
 Use the controller's explicit M2 identity and approval policy when running
@@ -38,9 +57,10 @@ checks ABI 2, prints the device's reported family, binds the exact input,
 output and scratch sizes from the ANEC header, then calls libane. Libane
 performs PROG_LOAD/PROC_CREATE/EXEC and releases its objects on exit.
 
-`--compare-perop` also runs the 28 per-layer programs once each, using the
-explicit ABI-v2 ports, and fails if their logical fp16 output differs bit
-for bit from the linked output. Padding bytes are excluded.
+The native k3/s2 forms are intentionally a linked-ring-only lowering. A
+separately supplied `perop/manifest.json` can still be selected with
+`--compare-perop`; the standard package and kit do not synthesize a different
+standalone schedule for comparison.
 
 The default is one execution with **zero warm-ups**. `--input image.npy`
 accepts finite `[3,224,224]` floats in [-1,1]; otherwise a deterministic
