@@ -4,6 +4,16 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: repair the gated layer-normalization and fused-attention research
+  constructors without exposing them prematurely. Standalone layer norm now
+  keeps the captured serialized schedule and connects its affine/output tail
+  to the normalization prefix's measured L2 producer base instead of zero.
+  Fused attention now stages resident probabilities at the exact fp16 scale
+  128 into the second score plane and folds 1/128 into every PV head, matching
+  the device-qualified standalone PV numerical fix. Offline validation and
+  simulation cover the new 5/11-task normalization and heads+12 fused forms;
+  the named compiler refusals remain until a device run proves completion,
+  numerical agreement, and zero translation faults.
 - H16G: fail closed on the three transformer forms that did not pass J616s
   qualification. Standalone softmax now admits only the measured S=1500,
   H=8 form; H=6 is refused after its prefixes failed LOAD or hung and its
