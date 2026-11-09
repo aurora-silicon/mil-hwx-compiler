@@ -43,11 +43,15 @@ def tf_layers():
 def ane_layers(head='ane', frame='mirrored', relu6=True):
     activation = dict(relu=not relu6, relu6=relu6)
     layers = [dict(cout=32, k=3, s=2 if frame == 'native' else 1,
-                   g=1, bias=True, **activation)]
+                   g=1, bias=True,
+                   **({'pad': 'tf_same'} if frame == 'native' else {}),
+                   **activation)]
     c = 32
     for co, s in CFG:
         layers.append(dict(cout=c, k=3, s=s if frame == 'native' else 1,
-                           g=c, bias=True, **activation))
+                           g=c, bias=True,
+                           **({'pad': 'tf_same'} if frame == 'native' else {}),
+                           **activation))
         layers.append(dict(cout=co, k=1, s=1 if frame == 'native' else s,
                            g=1, bias=True, **activation))
         c = co

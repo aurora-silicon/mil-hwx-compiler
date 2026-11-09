@@ -4,6 +4,7 @@
 Usage: test_h13_ring_kit_bind.py [COMPILER]
 """
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -18,6 +19,9 @@ COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else
 
 
 def main():
+    if importlib.util.find_spec('numpy') is None:
+        print('SKIP linked-ring kit bind test (NumPy unavailable)')
+        return
     with tempfile.TemporaryDirectory() as directory:
         out = Path(directory) / 'ring-kit'
         env = dict(os.environ, MILC=str(COMPILER))

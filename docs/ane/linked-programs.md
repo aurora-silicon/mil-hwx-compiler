@@ -351,6 +351,14 @@ immediately before its selected fp16 values, drops both signed zero forms,
 and 64-byte-aligns each of the 16 chunks.  The stem pairs adjacent output
 channels; depthwise channels are striped by `channel % 16`.
 
+Native k3/s2 layers use TensorFlow SAME phase: for an even input extent, the
+single required zero row and column are on the bottom/right.  The builder
+spells those MIL convolutions with `pad_type="same"`, and the float64 chain
+reference computes the same asymmetric padding.  Fused finite-fp16 conv clips
+from the H13 ReLU6 path are accepted unchanged; MobileNetV1 with clip(0, 6)
+therefore remains one task per convolution (28 tasks including the padded
+classifier).
+
 Coefficient streams above 1 MiB are allowed only for a whole-output tile in
 the decoded 7x7 class (`TileHeight == output height`).  ANECOMP fleet44 ran
 1024-to-1024 at 7x7 in 172 us busy as one task versus 195 us as four tasks;

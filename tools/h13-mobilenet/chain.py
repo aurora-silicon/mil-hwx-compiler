@@ -18,9 +18,17 @@ def conv_ref(x, w, b, s, g, pad, relu, relu6=False):
     """float64 convolution of one CHW image (groups 1 or depthwise)."""
     C, H, W = x.shape
     Co, cig, k, _ = w.shape
-    xp = np.pad(x.astype(np.float64), ((0, 0), (pad, pad), (pad, pad)))
-    Ho = (H + 2 * pad - k) // s + 1
-    Wo = (W + 2 * pad - k) // s + 1
+    if pad == 'tf_same':
+        Ho, Wo = -(-H // s), -(-W // s)
+        ph = max((Ho - 1) * s + k - H, 0)
+        pw = max((Wo - 1) * s + k - W, 0)
+        pads = ((0, 0), (ph // 2, ph - ph // 2),
+                (pw // 2, pw - pw // 2))
+    else:
+        Ho = (H + 2 * pad - k) // s + 1
+        Wo = (W + 2 * pad - k) // s + 1
+        pads = ((0, 0), (pad, pad), (pad, pad))
+    xp = np.pad(x.astype(np.float64), pads)
     out = np.zeros((Co, Ho, Wo))
     wd = w.astype(np.float64)
     for dy in range(k):
@@ -42,8 +50,11 @@ def chain_ref(x, layers, params, per_layer_round=True):
     outs = []
     cur = x
     for L, P in zip(layers, params):
-        y = conv_ref(cur, P['w'], P['b'], L['s'], L['g'],
-                     (L['k'] - 1) // 2, L.get('relu', False),
+        pad = ('tf_same' if L.get('pad') == 'tf_same'
+               else (L['k'] - 1) // 2 if L.get('pad', 'same') == 'same'
+               else 0)
+        y = conv_ref(cur, P['w'], P['b'], L['s'], L['g'], pad,
+                     L.get('relu', False),
                      L.get('relu6', False))
         cur = f16_ties_away(y) if per_layer_round else y
         outs.append(cur)

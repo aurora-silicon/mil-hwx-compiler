@@ -85,7 +85,7 @@ def main():
     milc = os.environ.get('MILC', 'build/mil-hwxc')
     tfw = (M.random_tf_weights(5964) if not args.weights else
            __import__('tflite_weights').mobilenet_v1_weights(args.weights))
-    layers = M.ane_layers('ane', 'native')
+    layers = M.ane_layers('ane', 'native', relu6=False)
     params = M.to_ane_params(tfw, 'ane', 'native')
 
     full = out / 'full'

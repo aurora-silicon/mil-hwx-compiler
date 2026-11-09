@@ -8,6 +8,8 @@ MILC=build/mil-hwxc python3 tools/h13-mobilenet/ring_kit.py out/h13-ring
 
 The output contains five native stride-2 single-task cases, all 28 prefixes,
 the full native-frame MobileNet program, and deterministic float64 references.
+The native k3/s2 references use TensorFlow SAME padding, with the extra row
+and column at bottom/right for even input extents.
 Generation fails unless all 34 ANEC files pass the same TileDMA extent versus
 channel-allocation check used by libane's `ane_bind_overrun`.
 The runner starts with the smallest depthwise case and grows through the stem
