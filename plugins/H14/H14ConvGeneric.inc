@@ -689,6 +689,10 @@ namespace {
 
 constexpr std::uint64_t kMobileL2Bytes = 2ull * 1024 * 1024;
 constexpr std::uint64_t kMobileL2BankBytes = 64ull * 1024;
+// The wide dependent terminal form switches from the compact direct-result
+// class above the largest edge that class carries.  H13 uses the same bound;
+// H14's 128x56x56 prefixes are the first native-ring outputs to cross it.
+constexpr std::uint64_t kMobileDirectResultMaxBytes = 0x80800;
 
 std::uint64_t align16(std::uint64_t value) {
     return (value + 15) & ~std::uint64_t(15);
@@ -998,11 +1002,15 @@ std::vector<std::uint8_t> mobileTask(
     }
     l2.emplace_back(0x0530, resultCfg);
     if (resultBase) l2.emplace_back(0x0534, static_cast<std::uint32_t>(resultBase));
-    if (outputResident) {
+    if (resultChannel || resultRow) {
         l2.emplace_back(0x0538, resultChannel);
         l2.emplace_back(0x053c, resultRow);
     }
     ringScatter(task, l2);
+    if (resultCfg == 0x142u) {
+        const auto depth = g.shape.output.channels * resultChannel;
+        ringDense(task, 0x0540, {depth, depth});
+    }
 
     std::vector<std::pair<std::uint32_t, std::uint32_t>> ne;
     if (sparse) ne.emplace_back(0x0d00, 0x182u);
@@ -1032,7 +1040,8 @@ std::vector<std::uint8_t> mobileTask(
                                          : layer.output.nchw[4];
         ringScatter(task, {
             {0x1500, writesScratch ? 0x01000ef1u | (index << 16)
-                                   : 0x01000e31u | (index << 16)},
+                       : resultCfg == 0x142u ? 0x00000e31u | (index << 16)
+                                            : 0x01000e31u | (index << 16)},
             {0x1510, static_cast<std::uint32_t>(row)},
             {0x1514, static_cast<std::uint32_t>(plane)},
             {0x1520, writesScratch ? 0x08302031u : 0x01302031u},
@@ -1264,7 +1273,14 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
         }
         const auto last = n - 1;
         outputResident[last] = false;
-        resultCfg[last] = 0x14au;
+        // A wide 0x120 consumer whose external result exceeds the compact
+        // direct-result limit needs the complete terminal staging form.  Its
+        // result strides are derived below from the external surface.  This
+        // selects p05-p07 by geometry and edge role, not by layer number.
+        resultCfg[last] = sourceCfg[last] == 0x120u &&
+                layers[last].output.allocationBytes >
+                    kMobileDirectResultMaxBytes
+            ? 0x142u : 0x14au;
         resultBase[last] = align16(sourceBase[last] +
                                    geometry[last].sourceSpan) % kMobileL2Bytes;
     }
@@ -1286,13 +1302,23 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
     if (layout) layout->clear();
     for (std::size_t i = 0; i != n; ++i) {
         const bool inputResident = i && !readsScratch[i];
+        const bool stagedTerminal = !outputResident[i] && resultCfg[i] == 0x142u;
+        const auto resultChannel = outputResident[i]
+            ? geometry[i + 1].sourceChannel
+            : stagedTerminal
+                ? static_cast<std::uint32_t>(align16(
+                    2ull * geometry[i].shape.output.width)) : 0u;
+        const auto resultRow = outputResident[i]
+            ? geometry[i + 1].sourceRow
+            : stagedTerminal
+                ? geometry[i].shape.output.channels * resultChannel +
+                    0x40u : 0u;
         const auto task = mobileTask(layers[i], geometry[i],
             static_cast<std::uint32_t>(i), i == 0, i + 1 == n,
             readsScratch[i], writesScratch[i], inputResident,
             outputResident[i], sourceCfg[i], sourceBase[i],
             geometry[i].sourceSpan, resultCfg[i], resultBase[i],
-            resultSpan[i], outputResident[i] ? geometry[i + 1].sourceChannel : 0,
-            outputResident[i] ? geometry[i + 1].sourceRow : 0,
+            resultSpan[i], resultChannel, resultRow,
             spillBytes, result.constants.size());
         result.taskStream.resize(static_cast<std::size_t>(alignUp(
             result.taskStream.size(), taskAlignment)), 0);

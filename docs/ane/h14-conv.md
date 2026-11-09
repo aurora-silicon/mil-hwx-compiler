@@ -125,6 +125,16 @@ tests compare these semantic fields and run a BAR-based port of libane's
 bind-overrun walk. A private, uncommitted gate compares all decoded role words
 and constant bytes with the retained H14 MobileNet artifact.
 
+A terminal task normally uses compact ResultCfg `0x14a`. A wide dependent
+(`0x120`) terminal whose external allocation exceeds `0x80800` bytes instead
+uses the complete `0x142` staging form already present in the public H14
+chain corpus: channel stride `align16(2*W)`, row stride `C*channel+0x40`, and
+matching depth/group strides. Its destination DMA drops the compact form's
+high enable bit. In MobileNetV1 this geometry rule selects exactly the three
+prefixes ending at 128x56x56; the adjacent 64x56x56 and 128x28x28 terminals
+remain compact. This avoids a prefix-number table and applies to other frame
+sizes at the same allocation boundary.
+
 ## Envelope and verification limits
 
 Formula-built convolutions emit ANEC. HWX remains available for the existing

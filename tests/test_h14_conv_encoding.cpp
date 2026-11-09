@@ -290,6 +290,39 @@ int main() {
         bridge=(bridge+smallerSizes[0]+15)&~std::size_t(15);
         bridge=(bridge+smallerSizes[1]+15)&~std::size_t(15);
         assert(reg(smaller,bridge,0x50c)==192); // no 224-only 64px narrowing
+
+        // A terminal wide-dependent result crosses the compact direct-result
+        // limit at 128x56x56.  The boundary is geometric: p04 and p08 keep
+        // 0x14a, while all three operation kinds ending at that surface use
+        // 0x142 with the external staging strides.
+        for(unsigned prefix=4;prefix<=8;++prefix) {
+            const std::vector<Program> p(native.begin(),native.begin()+prefix);
+            const auto q=linkMobileNetRing(p);
+            const auto qSizes=taskSizes(q.taskStream);
+            std::size_t last=16;
+            for(unsigned i=1;i<prefix;++i)
+                last=(last+qSizes[i-1]+15)&~std::size_t(15);
+            const bool wide=prefix>=5&&prefix<=7;
+            assert(reg(q,last,0x530)==(wide?0x142u:0x14au));
+            assert(hasReg(q,last,0x538)==wide);
+            assert(hasReg(q,last,0x53c)==wide);
+            assert(hasReg(q,last,0x540)==wide);
+            assert(hasReg(q,last,0x544)==wide);
+            if(wide) {
+                assert(reg(q,last,0x538)==0x70);
+                assert(reg(q,last,0x53c)==0x3840);
+                assert(reg(q,last,0x540)==0x3800);
+                assert(reg(q,last,0x544)==0x3800);
+                assert((reg(q,last,0x1500)&0xff000000u)==0);
+            }
+        }
+        std::size_t fullLast=16;
+        for(unsigned i=1;i<28;++i)
+            fullLast=(fullLast+sizes[i-1]+15)&~std::size_t(15);
+        assert(reg(ring,fullLast,0x530)==0x14a);
+        assert(!hasReg(ring,fullLast,0x538));
+        assert(!hasReg(ring,fullLast,0x53c));
+
     }
     std::cout << "H14 formula/linked encoding: PASS\n";
 }
