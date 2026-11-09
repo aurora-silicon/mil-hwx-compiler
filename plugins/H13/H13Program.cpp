@@ -1,4 +1,5 @@
 #include "H13Program.h"
+#include "../H16G/Encoding/H16ConvProgram.h"
 
 #include <algorithm>
 #include <cstring>
@@ -2622,7 +2623,7 @@ const OracleConvTemplate *convFamilyBase(const ConvShape &shape,
             candidate.kernelWidth == shape.kernelWidth &&
             candidate.stride == shape.stride;
         const bool ringStemBase = linkedRing && convKind(shape) == ConvKind::Dense &&
-            shape.kernel == 3 && shape.stride == 2 &&
+            (shape.kernel == 3 || shape.kernel == 7) && shape.stride == 2 &&
             candidate.kernel == 1 && candidate.kernelWidth == 1 &&
             candidate.stride == 2;
         const bool ringDepthwiseBase = linkedRing &&
@@ -2685,8 +2686,12 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     plan.kind = convKind(shape);
     if (plan.kind == ConvKind::Other)
         return "grouped convolutions other than depthwise have no generic form";
+    const bool resnetStem = linkedRing && plan.kind == ConvKind::Dense &&
+        shape.kernel == 7 && shape.kernelWidth == 7 && shape.stride == 2 &&
+        shape.input.channels == 3 && shape.output.channels == 64 &&
+        shape.input.height == 224 && shape.input.width == 224;
     if (shape.kernel != shape.kernelWidth ||
-        (shape.kernel != 1 && shape.kernel != 3))
+        (shape.kernel != 1 && shape.kernel != 3 && !resnetStem))
         return "the generic form covers square 1x1 and 3x3 kernels";
     if (shape.stride != 1 && shape.stride != 2)
         return "the generic form covers stride 1 and 2";
@@ -2700,8 +2705,9 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     if (!in.channels || !out.channels || !in.height || !in.width ||
         !out.height || !out.width)
         return "convolution surfaces must be nonempty";
-    const bool nativeStem = linkedRing && shape.kernel == 3 && shape.stride == 2 &&
-        plan.kind == ConvKind::Dense && in.channels == 3 && out.channels == 32;
+    const bool nativeStem = linkedRing && shape.stride == 2 &&
+        plan.kind == ConvKind::Dense && in.channels == 3 &&
+        ((shape.kernel == 3 && out.channels == 32) || resnetStem);
     if ((!nativeStem && in.channels % 16) || out.channels % 16)
         return "the generic form needs channel counts that are multiples of 16";
     if (in.width > 4096 || in.height > 16384)
@@ -2739,10 +2745,11 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     if (plan.kind == ConvKind::Dense &&
         slice * perChannel > kGenericKernelBudget &&
         (!linkedRing || largeKernelNeedsSplit)) {
-        if (shape.stride != 1)
+        if (shape.stride != 1 && !linkedRing)
             return "a strided convolution above the per-task kernel budget has no generic split";
         std::uint64_t fit = kGenericKernelBudget / perChannel;
-        slice = static_cast<std::uint32_t>(fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
+        slice = static_cast<std::uint32_t>(
+            fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
         if (!slice) return "one output channel exceeds the per-task kernel budget";
     }
     if (plan.kind == ConvKind::Dense) {
@@ -4227,6 +4234,270 @@ void fuseElementwisePostOperation(Program &program, PostOperation operation) {
             "h13.chain-unrepresentable-edge: elementwise PE word is not the "
             "decoded no-post-operation form 0x00080000");
     storeLE32(program.task, word, value | 0x20u);
+}
+
+namespace {
+
+struct H13ResNetRecordFact {
+    std::uint32_t header;
+    std::uint32_t valueStart;
+    std::uint32_t valueCount;
+};
+
+struct H13ResNetTaskFact {
+    std::array<std::uint32_t, 10> header;
+    std::uint32_t recordStart;
+    std::uint32_t recordCount;
+};
+
+#include "H13ResNet50Facts.inc"
+
+using H13ResNetTapGroup = std::vector<unsigned>;
+const std::array<H13ResNetTapGroup, 8> h13ResNet3x3Phases = {{
+    {0,2}, {6,8}, {1}, {7}, {3,5}, {}, {4}, {},
+}};
+const std::array<H13ResNetTapGroup, 16> h13ResNet7x7Phases = {{
+    {0,2,4,6}, {14,16,18,20}, {28,30,32,34}, {42,44,46,48},
+    {1,3,5}, {15,17,19}, {29,31,33}, {43,45,47},
+    {7,9,11,13}, {21,23,25,27}, {35,37,39,41}, {},
+    {8,10,12}, {22,24,26}, {36,38,40}, {},
+}};
+
+std::vector<unsigned> h13ResNetLaneChunks(unsigned outputs, unsigned cap) {
+    unsigned lanes = outputs / 16;
+    std::vector<unsigned> chunks;
+    while (lanes > cap) { chunks.push_back(cap); lanes -= cap; }
+    if (lanes) chunks.push_back(lanes);
+    return chunks;
+}
+
+template <std::size_t N>
+void appendH13ResNetPhasePlane(
+    std::vector<std::uint8_t> &out,
+    const std::array<H13ResNetTapGroup, N> &groups, unsigned cin,
+    unsigned lanes, unsigned first, unsigned taps,
+    const std::uint8_t *weights, const std::uint8_t *bias,
+    unsigned perInputPadding) {
+    if (bias)
+        out.insert(out.end(), bias + 2 * first, bias + 2 * (first + lanes));
+    const std::size_t lengthAt = out.size();
+    out.insert(out.end(), 3, 0);
+    const unsigned maxTaps = std::max_element(
+        groups.begin(), groups.end(), [](const auto &left, const auto &right) {
+            return left.size() < right.size();
+        })->size();
+    const std::size_t bodyAt = out.size();
+    for (unsigned input = 0; input != cin; ++input) {
+        unsigned structural = 0;
+        if constexpr (N == 1) {
+            // H13's k1 sparse form, like its phase form, places each mask
+            // immediately before the eight lanes it selects.
+            for (unsigned begin = 0; begin < lanes; begin += 8) {
+                const unsigned width = std::min(8u, lanes - begin);
+                std::uint8_t mask = 0;
+                std::vector<std::uint8_t> values;
+                for (unsigned lane = 0; lane != width; ++lane) {
+                    const auto *value = weights + 2 *
+                        ((static_cast<std::size_t>(first + begin + lane) * cin +
+                          input) * taps);
+                    if (!nonzeroHalfword(value)) continue;
+                    mask |= static_cast<std::uint8_t>(1u << lane);
+                    appendHalfword(values, value);
+                }
+                out.push_back(mask);
+                out.insert(out.end(), values.begin(), values.end());
+            }
+        } else {
+            const unsigned evenLanes = (lanes + 1) & ~1u;
+            std::vector<const std::uint8_t *> slots;
+            for (const auto &group : groups)
+                for (unsigned tapIndex = 0; tapIndex != maxTaps; ++tapIndex)
+                    for (unsigned lane = 0; lane != evenLanes; ++lane)
+                        slots.push_back(tapIndex < group.size() && lane < lanes
+                            ? weights + 2 *
+                                ((static_cast<std::size_t>(first + lane) * cin +
+                                  input) * taps + group[tapIndex])
+                            : nullptr);
+            if (slots.size() % 16)
+                throw std::logic_error(
+                    "H13 ResNet phase slots are not a whole mask vector");
+            for (std::size_t at = 0; at != slots.size(); at += 16) {
+                // H13 serializes each 8-bit mask immediately before the
+                // values it selects; H16G writes the two masks first.
+                for (unsigned half = 0; half != 2; ++half) {
+                    std::uint8_t mask = 0;
+                    std::vector<std::uint8_t> values;
+                    for (unsigned bit = 0; bit != 8; ++bit) {
+                        const auto *value = slots[at + half * 8 + bit];
+                        if (!value || !nonzeroHalfword(value)) continue;
+                        mask |= static_cast<std::uint8_t>(1u << bit);
+                        appendHalfword(values, value);
+                    }
+                    out.push_back(mask);
+                    out.insert(out.end(), values.begin(), values.end());
+                }
+            }
+        }
+        unsigned trailing = perInputPadding;
+        if constexpr (N == 1)
+            if (structural) --trailing;
+        out.insert(out.end(), trailing, 0);
+    }
+    const std::size_t bytes = out.size() - bodyAt;
+    if (bytes > 0xffffff)
+        throw std::invalid_argument(
+            "H13 ResNet sparse plane exceeds a 24-bit body count");
+    out[lengthAt] = static_cast<std::uint8_t>(bytes);
+    out[lengthAt + 1] = static_cast<std::uint8_t>(bytes >> 8);
+    out[lengthAt + 2] = static_cast<std::uint8_t>(bytes >> 16);
+}
+
+std::vector<std::uint8_t> packH13ResNetStride2(
+    ConvShape shape, const std::uint8_t *weights, const std::uint8_t *bias) {
+    if (shape.groups != 1 || shape.stride != 2 || !shape.bias ||
+        !weights || !bias || !shape.output.channels ||
+        shape.output.channels % 16 ||
+        (shape.kernel != 1 && shape.kernel != 3 && shape.kernel != 7))
+        throw std::invalid_argument("invalid H13 ResNet stride-2 convolution");
+    const unsigned cap = std::max(shape.output.width, shape.output.height) <= 8
+        ? 32 : 16;
+    const auto chunks = h13ResNetLaneChunks(shape.output.channels, cap);
+    std::vector<std::uint8_t> out;
+    for (unsigned region = 0; region != 16; ++region) {
+        unsigned base = 0;
+        for (unsigned lanes : chunks) {
+            const unsigned first = base + region * lanes;
+            if (shape.kernel == 7) {
+                appendH13ResNetPhasePlane(out, h13ResNet7x7Phases,
+                    shape.input.channels, lanes, first, 49, weights, bias, 0);
+            } else if (shape.kernel == 3) {
+                appendH13ResNetPhasePlane(out, h13ResNet3x3Phases,
+                    shape.input.channels, lanes, first, 9, weights, bias, 0);
+            } else {
+                const std::array<H13ResNetTapGroup, 1> one = {{{0}}};
+                const unsigned masks = (lanes + 7) / 8;
+                appendH13ResNetPhasePlane(out, one, shape.input.channels,
+                    lanes, first, 1, weights, bias,
+                    lanes / 2 > masks ? lanes / 2 - masks : 0);
+            }
+            base += 16 * lanes;
+        }
+        out.resize(alignUp(out.size(), 64), 0);
+    }
+    return out;
+}
+
+std::vector<std::pair<std::uint32_t, std::uint32_t>>
+h13ResNetOutputSlices(const ConvShape &shape) {
+    // These are geometry rules, not layer-number exceptions.  They are the
+    // output partitions selected when a whole H13 kernel would exceed the
+    // scheduler's large-kernel class while both branches must remain live.
+    if (shape.stride == 2 && shape.kernel == 1 &&
+        shape.input.channels == 512 && shape.output.channels == 1024)
+        return {{800, 224}, {0, 800}};
+    if (shape.stride == 2 && shape.kernel == 3 &&
+        shape.input.channels == 256 && shape.output.channels == 256)
+        return {{192, 64}, {0, 192}};
+    if (shape.stride == 1 && shape.kernel == 3 &&
+        shape.input.channels == 256 && shape.output.channels == 256 &&
+        shape.input.height == 14)
+        return {{224, 32}, {0, 224}};
+    if (shape.stride == 1 && shape.kernel == 1 &&
+        shape.input.channels == 1024 && shape.output.channels == 512 &&
+        shape.input.height == 14)
+        return {{256, 256}, {0, 256}};
+    return {{0, shape.output.channels}};
+}
+
+void appendResNetWord(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    const std::size_t at = out.size();
+    out.resize(at + 4);
+    storeLE32(out, at, value);
+}
+
+} // namespace
+
+Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes) {
+    if (convolutions.size() != 53)
+        throw std::invalid_argument(
+            "H13 ResNet-50 needs 53 scheduled convolution operations");
+
+    Program program;
+    for (const auto &conv : convolutions) {
+        const auto &shape = conv.shape;
+        const std::size_t reduction = static_cast<std::size_t>(
+            shape.input.channels) * shape.kernel * shape.kernelWidth;
+        if (shape.groups != 1 || !shape.bias || !conv.weights || !conv.bias ||
+            conv.weightBytes !=
+                static_cast<std::size_t>(shape.output.channels) * reduction * 2 ||
+            conv.biasBytes != static_cast<std::size_t>(shape.output.channels) * 2)
+            throw std::invalid_argument(
+                "H13 ResNet convolution weights do not match the biased groups-1 shape");
+        for (const auto &[first, count] : h13ResNetOutputSlices(shape)) {
+            ConvShape slice = shape;
+            slice.output.channels = count;
+            const auto *weights = conv.weights + 2 * static_cast<std::size_t>(first) * reduction;
+            const auto *bias = conv.bias + 2 * first;
+            std::vector<std::uint8_t> packed;
+            if (shape.stride == 2)
+                packed = packH13ResNetStride2(slice, weights, bias);
+            else {
+                const auto chunks = h13ResNetLaneChunks(
+                    slice.output.channels, laneCap(slice.input));
+                packed = packConvDense(
+                    static_cast<std::uint32_t>(reduction), chunks,
+                    weights, bias, false);
+            }
+            program.constants.insert(program.constants.end(), packed.begin(),
+                                     packed.end());
+        }
+    }
+    if (!headWeights || !headBias ||
+        headWeightBytes != static_cast<std::size_t>(2048) * 1000 * 2 ||
+        headBiasBytes != static_cast<std::size_t>(1000) * 2)
+        throw std::invalid_argument(
+            "H13 ResNet-50 head needs [1000,2048] weights and [1000] bias");
+    std::array<std::uint32_t, 16> headChunks{};
+    auto head = ane::h16::packResNetLinearHead(
+        2048, 1000, headWeights, headBias, headChunks);
+    program.constants.insert(program.constants.end(), head.begin(), head.end());
+    if (program.constants.size() != 53158912)
+        throw std::logic_error(
+            "H13 ResNet-50 packed constants do not match the decoded extent");
+
+    std::size_t nextTaskOffset = 0;
+    for (const auto &task : h13ResNetTaskFacts) {
+        if (nextTaskOffset < program.task.size())
+            throw std::logic_error(
+                "H13 ResNet-50 task schedule overlaps a descriptor");
+        program.task.resize(nextTaskOffset, 0);
+        for (std::uint32_t value : task.header)
+            appendResNetWord(program.task, value);
+        for (std::uint32_t index = 0; index != task.recordCount; ++index) {
+            const auto &record =
+                h13ResNetRecordFacts[task.recordStart + index];
+            appendResNetWord(program.task, record.header);
+            for (std::uint32_t value = 0; value != record.valueCount; ++value)
+                appendResNetWord(program.task,
+                    h13ResNetRecordValues[record.valueStart + value]);
+        }
+        if (task.header[7]) nextTaskOffset = task.header[7];
+    }
+    if (program.task.size() != 57204)
+        throw std::logic_error(
+            "H13 ResNet-50 task rules do not match the decoded stream extent");
+    program.inputs = {{5, {1, 3, 224, 224, 100352, 448}, 0x4c000}};
+    program.output = {4, {1, 1, 1, 1000, 2048, 2048}, 0x4000};
+    program.firstTaskBytes = 628;
+    program.taskCount = 80;
+    program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
+    program.scratchAllocationBytes = 0x188000;
+    program.taskSurfaceChannels = {4, 5, 6, 7};
+    program.formulaBuilt = true;
+    return program;
 }
 
 } // namespace ane::h13

@@ -1,0 +1,69 @@
+#include "../plugins/H13/H13Program.h"
+
+#include <cstdint>
+#include <iostream>
+#include <vector>
+
+using ane::h13::ConvShape;
+using ane::h13::ElementwiseShape;
+
+struct Shape { unsigned cin, cout, spatial, kernel, stride; };
+
+static const Shape shapes[] = {
+    {3,64,224,7,2},{64,64,56,1,1},{64,64,56,3,1},{64,256,56,1,1},
+    {64,256,56,1,1},{256,64,56,1,1},{64,64,56,3,1},{64,256,56,1,1},
+    {256,64,56,1,1},{64,64,56,3,1},{64,256,56,1,1},{256,512,56,1,2},
+    {256,128,56,1,1},{128,128,56,3,2},{128,512,28,1,1},{512,128,28,1,1},
+    {128,128,28,3,1},{128,512,28,1,1},{512,128,28,1,1},{128,128,28,3,1},
+    {128,512,28,1,1},{512,128,28,1,1},{128,128,28,3,1},{128,512,28,1,1},
+    {512,1024,28,1,2},{512,256,28,1,1},{256,256,28,3,2},{256,1024,14,1,1},
+    {1024,256,14,1,1},{256,256,14,3,1},{256,1024,14,1,1},{1024,256,14,1,1},
+    {256,256,14,3,1},{256,1024,14,1,1},{1024,256,14,1,1},{256,256,14,3,1},
+    {256,1024,14,1,1},{1024,256,14,1,1},{256,256,14,3,1},{256,1024,14,1,1},
+    {1024,256,14,1,1},{256,256,14,3,1},{256,1024,14,1,1},{1024,2048,14,1,2},
+    {1024,512,14,1,1},{512,512,14,3,2},{512,2048,7,1,1},{2048,512,7,1,1},
+    {512,512,7,3,1},{512,2048,7,1,1},{2048,512,7,1,1},{512,512,7,3,1},
+    {512,2048,7,1,1},
+};
+
+static std::vector<std::uint8_t> halves(std::size_t count, unsigned seed) {
+    std::vector<std::uint8_t> out(2 * count);
+    for (std::size_t i=0; i<count; ++i) {
+        const std::uint16_t value = std::uint16_t(0x2001 + (i + seed) % 0x1ffe);
+        out[2*i] = std::uint8_t(value);
+        out[2*i+1] = std::uint8_t(value >> 8);
+    }
+    return out;
+}
+
+int main() {
+    std::vector<std::vector<std::uint8_t>> weights, biases;
+    std::vector<ane::h13::ResNet50ConvWeights> convs;
+    weights.reserve(53); biases.reserve(53); convs.reserve(53);
+    for (unsigned index=0; index<53; ++index) {
+        const auto &s = shapes[index];
+        weights.push_back(halves(
+            std::size_t(s.cout) * s.cin * s.kernel * s.kernel, index));
+        biases.push_back(halves(s.cout, 100 + index));
+        const unsigned output = (s.spatial + s.stride - 1) / s.stride;
+        ConvShape shape{s.kernel, s.kernel, s.stride, 1, true,
+            ElementwiseShape{s.cin,s.spatial,s.spatial},
+            ElementwiseShape{s.cout,output,output}};
+        convs.push_back({shape,weights.back().data(),weights.back().size(),
+                         biases.back().data(),biases.back().size()});
+    }
+    auto headWeights = halves(2048 * 1000, 501);
+    auto headBias = halves(1000, 502);
+    auto program = ane::h13::encodeResNet50(
+        convs, headWeights.data(), headWeights.size(),
+        headBias.data(), headBias.size());
+    if (program.taskCount != 80 || program.task.size() != 57204 ||
+        program.constants.size() != 53158912 ||
+        program.constantOffsetBytes != 0xdf80 ||
+        program.scratchAllocationBytes != 0x188000 ||
+        program.inputs.size() != 1 ||
+        program.inputs[0].allocationBytes < 301056 ||
+        program.output.allocationBytes < 2048)
+        return 1;
+    std::cout << "H13 ResNet-50: exact 80-task program and bind extents PASS\n";
+}
