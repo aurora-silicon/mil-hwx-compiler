@@ -6,6 +6,7 @@ static ANEOperationKind classifyOperation(NSString *name) {
             @"const": @(ANEOperationKindConstant),
             @"conv": @(ANEOperationKindConv),
             @"matmul": @(ANEOperationKindMatmul),
+            @"linear": @(ANEOperationKindMatmul),
             @"relu": @(ANEOperationKindALU),
             @"add": @(ANEOperationKindALU),
             @"mul": @(ANEOperationKindALU),

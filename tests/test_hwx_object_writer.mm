@@ -503,7 +503,7 @@ static void testScratchAllocationIsIndependentFromUsableScratch(void) {
     HWXObjectProgramInfo *info = [[HWXObjectProgramInfo alloc]
         initWithTaskCount:7 recordCount:62 formatCode:0x8a
         scratchByteLength:0x800000
-        scratchAllocationByteLength:0x900000
+        scratchAllocationByteLength:0x900001
         descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
     NSError *error = nil;
     NSData *imageData = [HWXObjectWriter buildObjectWithTaskDescriptor:td
@@ -512,9 +512,9 @@ static void testScratchAllocationIsIndependentFromUsableScratch(void) {
         programInfo:info error:&error];
     expect(imageData != nil && error == nil,
            @"fused object accepts distinct allocated and usable scratch sizes");
-    expect(segmentVMSize(imageData, "__DATA") == 0x900000 &&
+    expect(segmentVMSize(imageData, "__DATA") == 0x904000 &&
            programDescriptorWord(imageData, 0x858) == 0x800000,
-           @"Mach-O BSS allocation and program scratch field remain independent");
+           @"Mach-O BSS rounds to a segment boundary independently of usable scratch");
     const struct mach_header_64 *header =
         (const struct mach_header_64 *)imageData.bytes;
     expect(header->sizeofcmds < 0x8000 - sizeof(*header),

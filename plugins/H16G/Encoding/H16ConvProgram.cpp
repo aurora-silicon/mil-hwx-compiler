@@ -1,12 +1,16 @@
 #include "H16ConvProgram.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
 namespace ane::h16 {
 namespace {
 using U32 = std::uint32_t;
+// Standalone H16G objects place input, output and __KERN_0 at BAR slots
+// 6, 7 and 8. Formula tasks must use this object-writer BAR law rather than
+// the one-slot-earlier numbering retained by sanitized captures.
 struct Schedule {
     U32 cin, cout, width, kernel, stride, groups;
     bool bias;
@@ -64,6 +68,7 @@ const Schedule *schedule(ConvShape s) {
     return s.bias ? plain : nullptr;
 }
 U32 align64(U32 n) { return (n + 63) & ~U32(63); }
+constexpr U32 taskBar(U32 slot) { return 0x20000000u | (slot<<23); }
 void word(std::vector<std::uint8_t> &out, U32 value) {
     for (unsigned b = 0; b < 4; ++b) out.push_back(value >> (8*b));
 }
@@ -109,9 +114,13 @@ void range(Task &t, U32 lo, U32 hi, U32 flags = 0) {
 void pack(Task &t) {
     t.bytes.clear();
     for (U32 h : t.header) word(t.bytes, h);
-    std::vector<U32> coefficients{0x5500};
-    for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
-    record(t,coefficients); range(t,0x5544,0x555c);
+    if (t.registers.count(0x5500)) {
+        if (t.registers.count(0x5520)) {
+            std::vector<U32> coefficients{0x5500};
+            for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
+            record(t,coefficients); range(t,0x5544,0x555c);
+        } else record(t,{0x5500});
+    }
     // Reset chunk size 64 is omitted, including mixed sparse tables.
     // Split across a default hole; contiguous offsets/sizes share a record.
     std::vector<U32> chunk;
@@ -125,16 +134,25 @@ void pack(Task &t) {
     }
     record(t,chunk);
     range(t,0x0004,0x000c); range(t,0x0014,0x004c);
-    if (t.registers.count(0x4d08)) record(t,{0x4d08,0x4d18,0x4d1c});
+    if (t.registers.count(0x4d08)) {
+        std::vector<U32> sourceGeometry;
+        for (U32 address : {0x4d08u,0x4d18u,0x4d1cu})
+            if (t.registers.count(address)) sourceGeometry.push_back(address);
+        record(t,sourceGeometry);
+    }
     range(t,0x4d68,0x4d68);
-    if (t.registers.at(0x4148) == 0x50017a) {
+    if (t.transformerStagingRecords) {
+        range(t,0x4104,0x4108); range(t,0x4110,0x415c);
+    } else if (t.transformerContinuationRecords) {
+        range(t,0x4114,0x415c);
+    } else if (t.registers.at(0x4148) == 0x50017a) {
         range(t,0x4104,0x4108); range(t,0x4114,0x414c);
     } else {
         range(t,0x4104,0x4120); range(t,0x4148,0x415c);
     }
-    range(t,0x4900,0x4910); range(t,0x5110,0x5138);
+    range(t,0x4900,0x4910); range(t,0x5110,0x5150);
     range(t,0x5900,0x592c);
-    range(t,0x5510,0x5514,0x24000000);
+    range(t,0x5510,0x5514,t.kernelSlotFlags);
     range(t,0x4d10,0x4d14,t.sourceSlotFlags);
     range(t,0x5108,0x510c,t.resultSlotFlags);
     range(t,0x4d00,0x4d00,0x22000000);
@@ -265,7 +283,815 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     }
     return t;
 }
+
+U32 linearInternalRow(U32 tokens) {
+    return align64(2*tokens)+16;
 }
+
+std::vector<U32> linearOutputSlices(U32 tokens, U32 cin, U32 cout,
+                                    bool bias, bool gelu) {
+    if (tokens != 1500) return {cout};
+    const std::uint64_t budget = 1024*1024;
+    std::vector<U32> slices;
+    U32 remaining = cout;
+    while (remaining) {
+        const auto fits=[&](U32 candidate) {
+            const std::uint64_t lanes = candidate/16;
+            const std::uint64_t group = align64(2*(cin+(bias ? 1u : 0u))*lanes)
+                                      + (gelu ? 128u : 0u);
+            return 16*group <= budget;
+        };
+        U32 candidate=remaining;
+        if (!fits(candidate)) {
+            candidate=remaining/16*16;
+            while (candidate && !fits(candidate)) candidate-=16;
+            candidate=candidate/(candidate>=256 ? 256 : 32)
+                     *(candidate>=256 ? 256 : 32);
+        }
+        if (!candidate) throw std::invalid_argument(
+            "one transformer-linear output slice exceeds the 1 MiB kernel envelope");
+        slices.push_back(candidate);
+        remaining -= candidate;
+    }
+    return slices;
+}
+
+std::vector<U32> linearLaneWidths(U32 outputs) {
+    // The scratch-backed narrow contraction treats a sub-256 slice as one
+    // (possibly non-power-of-two) interleave. Wider slices use 256-channel
+    // chunks and a power-of-two tail.
+    if (outputs<256) return {outputs/16};
+    std::vector<U32> widths;
+    U32 remaining = outputs;
+    while (remaining) {
+        U32 lanes = 1;
+        while (lanes < 16 && 32*lanes <= remaining) lanes *= 2;
+        widths.push_back(lanes);
+        remaining -= 16*lanes;
+    }
+    return widths;
+}
+
+std::vector<std::uint8_t> packLinearSlice(
+    U32 cin, U32 firstOutput, U32 outputs, const std::uint8_t *weights,
+    const std::uint8_t *bias, const std::uint8_t *table, std::size_t tableBytes) {
+    const auto widths = linearLaneWidths(outputs);
+    const std::size_t rows = cin+(bias ? 1 : 0);
+    std::size_t groupBytes = 0;
+    for (U32 width : widths) groupBytes += 2*rows*width;
+    groupBytes = align64(U32(groupBytes));
+    std::vector<std::uint8_t> packed(16*(groupBytes+tableBytes));
+    U32 chunkFirst = 0;
+    for (U32 group=0; group<16; ++group) {
+        const std::size_t groupStart=group*(groupBytes+tableBytes);
+        if (tableBytes)
+            std::copy(table,table+tableBytes,packed.begin()+groupStart);
+        std::size_t cursor=groupStart+tableBytes;
+        chunkFirst=0;
+        for (U32 width : widths) {
+            if (bias) for (U32 lane=0; lane<width; ++lane) {
+                const U32 output=firstOutput+chunkFirst+group*width+lane;
+                packed[cursor++]=bias[2*output];
+                packed[cursor++]=bias[2*output+1];
+            }
+            for (U32 input=0; input<cin; ++input)
+                for (U32 lane=0; lane<width; ++lane) {
+                    const U32 output=firstOutput+chunkFirst+group*width+lane;
+                    const std::size_t source=2*(std::size_t(output)*cin+input);
+                    packed[cursor++]=weights[source];
+                    packed[cursor++]=weights[source+1];
+                }
+            chunkFirst += 16*width;
+        }
+    }
+    return packed;
+}
+
+Task linearStagingTask(U32 tokens, U32 cin, bool wide) {
+    Task t;
+    t.transformerStagingRecords=true;
+    // A standalone object binds its first external surface at BAR 6.  Wide
+    // contractions stage through the fixed scratch aperture at BAR 3.
+    t.sourceSlotFlags=taskBar(6);
+    if (wide) t.resultSlotFlags=taskBar(3);
+    const U32 row=linearInternalRow(tokens);
+    U32 dependency=0;
+    if (!wide) {
+        const U32 dispatches=(cin*row+0xffff)/0x10000;
+        if (dispatches>=32) throw std::invalid_argument(
+            "transformer-linear staging exceeds the decoded dependency mask");
+        dependency=(U32(1)<<dispatches)-1;
+    }
+    t.header={0,0,0x68,0,0x68,0,0,dependency,0x50001};
+    auto &r=t.registers;
+    r[4]=r[0x14]=cin; r[8]=r[0x18]=1; r[0xc]=r[0x1c]=tokens;
+    r[0x30]=0x84000; r[0x34]=1; r[0x3c]=0x30210100; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130; r[0x4114]=0x100;
+    r[0x4118]=r[0x411c]=r[0x4120]=tokens*0x100;
+    if (wide) {
+        r[0x4148]=0x50087a; r[0x414c]=tokens*0x100;
+    } else {
+        r[0x4110]=cin*row; r[0x4148]=0x500170; r[0x4150]=row;
+    }
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=2*cin; r[0x4d68]=0x1002031;
+    if (wide) {
+        r[0x5100]=0x10000f1; r[0x5108]=r[0x510c]=0;
+        r[0x5114]=tokens*16; r[0x5138]=0x8302031;
+    }
+    pack(t);
+    return t;
+}
+
+Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
+                       U32 firstOutput, U32 taskIndex, U32 taskCount,
+                       U32 kernelBase, bool wide, bool bias, bool gelu,
+                       U32 outputScale) {
+    Task t;
+    // The object writer places input/output/__KERN_0 at BAR 6/7/8.  Bias and
+    // post-op tables are packed into __KERN_0 alongside the weights, so every
+    // coefficient slice uses BAR 8.  Wide contractions read staged data from
+    // the fixed scratch aperture at BAR 3.
+    t.kernelSlotFlags=taskBar(8);
+    t.resultSlotFlags=taskBar(7);
+    if (wide) t.sourceSlotFlags=taskBar(3);
+    if (!wide && taskIndex>1) t.transformerContinuationRecords=true;
+    const bool last=taskIndex+1==taskCount;
+    U32 dependency=0;
+    if (!last && !wide) {
+        const U32 dispatches=(cin*linearInternalRow(tokens)+0xffff)/0x10000;
+        dependency=(U32(1)<<dispatches)-1;
+    }
+    bool serialized = false;
+    if (wide) serialized=!bias;
+    else if (tokens==128 && cin>cout) serialized=true;
+    else if (gelu && (tokens==128 || cin>=512)) serialized=true;
+    else if (outputScale!=0x3c00 && cin!=512) serialized=true;
+    else if (bias && ((tokens==128 && cout>cin) ||
+                      (tokens==1500 && cin==384 && cout==384))) serialized=true;
+    t.header={taskIndex,0,last ? 0x04000000u : 0u,0,
+              serialized ? (last ? 0x00fff860u : 0x00fff820u) : 0x28u,
+              0,0,dependency,last ? 0x50009u : 0x50001u};
+    auto &r=t.registers;
+    r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=cin; r[0x1c]=slice;
+    r[0x34]=1;
+    r[0x3c]=wide && slice<=64 ? 0x10220200
+            : wide && slice<256 ? 0x10210100 : 0x10200000;
+    if (!wide) r[0x40]=4;
+    else {
+        U32 ocg=0;
+        for (U32 lanes=slice/16; lanes>1; lanes=(lanes+1)/2) ++ocg;
+        if (ocg!=3) r[0x40]=ocg;
+    }
+    r[0x4c]=0x100000;
+    if (wide) {
+        r[0x4104]=taskIndex==1 ? 0x862 : 0x842;
+        r[0x4114]=0x100;
+        r[0x4118]=r[0x411c]=r[0x4120]=cin*0x100;
+        r[0x4148]=0x14a; r[0x414c]=cin*0x100;
+        r[0x4d00]=0x0f000000+taskIndex*0x01010000+(last ? 0x41 : 0xe1);
+        r[0x4d08]=last ? 0x4e : 0xee;
+        r[0x4d10]=r[0x4d14]=0; r[0x4d1c]=tokens*16;
+        r[0x4d68]=0x8002031;
+    } else {
+        if (taskIndex==1) r[0x4104]=0x120;
+        r[0x4114]=linearInternalRow(tokens); r[0x4148]=0x14a;
+        r[0x414c]=cin*linearInternalRow(tokens);
+    }
+    r[0x4904]=0x103c00 | (bias ? 0x10 : 0) | (gelu ? 0x20000 : 0);
+    r[0x4910]=outputScale;
+    r[0x5100]=0x1000031 | taskIndex<<16; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=2*cout; r[0x5138]=0x1302031;
+    if (firstOutput) r[0x5150]=firstOutput<<16;
+    r[0x5500]=(taskIndex+1)<<16 | (last ? 0x2c0 : 0x240);
+    r[0x5510]=kernelBase; r[0x5514]=0;
+    const U32 lanes=slice/16;
+    const U32 laneBytes=align64(2*(cin+(bias ? 1u : 0u))*lanes)
+                      +(gelu ? 128u : 0u);
+    U32 offset=0;
+    for (U32 lane=0; lane<16; ++lane) {
+        r[0x5520+4*lane]=taskIndex<<16 | 0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (laneBytes!=64) r[0x55a0+4*lane]=laneBytes;
+        offset+=laneBytes;
+    }
+    if (last) {
+        r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5908]=taskIndex<<16|0xe0;
+        r[0x5918]=0; r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    }
+    pack(t);
+    return t;
+}
+
+Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
+    Task t;
+    t.kernelSlotFlags=taskBar(8);
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
+    const U32 externalRow=align64(2*tokens);
+    t.header={0,0,0x04000068,0,
+              (gelu || cout>=512) ? 0x00fff868u : 0x68u,
+              0,0,0,0x50009};
+    auto &r=t.registers;
+    r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=80; r[0x1c]=cout;
+    r[0x28]=0x5002a043; r[0x34]=1; r[0x3c]=0x200000;
+    r[0x40]=4; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130;
+    r[0x4114]=0x150; r[0x4118]=r[0x411c]=r[0x4120]=80*0x150;
+    r[0x4148]=0x50017a; r[0x414c]=80*0x150;
+    r[0x4904]=0x103c10 | (gelu ? 0x20000 : 0); r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=externalRow; r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=externalRow; r[0x5138]=0x1302031;
+    r[0x5500]=0x102c0; r[0x5510]=0; r[0x5514]=0;
+    const U32 laneBytes=kernelBytes/16;
+    U32 offset=0;
+    for (U32 lane=0;lane<16;++lane) {
+        r[0x5520+4*lane]=0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (laneBytes!=64) r[0x55a0+4*lane]=laneBytes;
+        offset+=laneBytes;
+    }
+    r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5918]=0;
+    r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    pack(t);
+    return t;
+}
+
+std::vector<U32> whisperStem2Slices(U32 channels, bool gelu) {
+    if (channels==384) return gelu ? std::vector<U32>{128,256}
+                                   : std::vector<U32>{384};
+    return gelu ? std::vector<U32>{64,224,224}
+                : std::vector<U32>{208,288,16};
+}
+
+std::vector<U32> whisperStem2FirstOutputs(U32 channels, bool gelu) {
+    if (channels==384) return gelu ? std::vector<U32>{256,0}
+                                   : std::vector<U32>{0};
+    return gelu ? std::vector<U32>{448,224,0}
+                : std::vector<U32>{304,0,288};
+}
+
+bool whisperStemNonzeroHalf(const std::uint8_t *value) {
+    return value[0] || (value[1]&0x7f);
+}
+void whisperStemHalf(std::vector<std::uint8_t> &out,
+                     const std::uint8_t *value) {
+    out.push_back(value[0]); out.push_back(value[1]);
+}
+
+// One output-lane group of the phase-sparse 1x3 writer. Each input channel
+// occupies four even-width phase rows: taps 0,2,1, then an all-zero row.
+// Sixteen logical halfword slots share one little-endian nonzero mask.
+// Signed zero is structural zero; every other fp16 bit pattern is retained.
+std::vector<std::uint8_t> packWhisperStem2Group(
+    U32 cin, U32 firstOutput, U32 outputs, U32 group,
+    const std::uint8_t *weights, const std::uint8_t *bias,
+    const std::uint8_t *table, std::size_t tableBytes) {
+    std::vector<std::uint8_t> out;
+    if (tableBytes) out.insert(out.end(),table,table+tableBytes);
+    U32 chunkFirst=0;
+    for (U32 width : linearLaneWidths(outputs)) {
+        std::vector<U32> indices;
+        for (U32 lane=0;lane<width;++lane)
+            indices.push_back(firstOutput+chunkFirst+group*width+lane);
+        for (U32 output : indices) whisperStemHalf(out,bias+2*output);
+        U32 encoded=(13*width*cin+511)/512;
+        encoded=(encoded+1)&~U32(1);
+        out.push_back(0); out.push_back(std::uint8_t(encoded));
+        out.push_back(std::uint8_t(encoded>>8));
+
+        const U32 evenWidth=(width+1)&~U32(1);
+        std::vector<const std::uint8_t *> slots;
+        slots.reserve(std::size_t(cin)*4*evenWidth);
+        for (U32 input=0;input<cin;++input) {
+            for (U32 tap : {0u,2u,1u}) {
+                for (U32 output : indices)
+                    slots.push_back(weights+2*((std::size_t(output)*cin+input)*3+tap));
+                for (U32 lane=width;lane<evenWidth;++lane) slots.push_back(nullptr);
+            }
+            for (U32 lane=0;lane<evenWidth;++lane) slots.push_back(nullptr);
+        }
+        if (slots.size()%16) throw std::logic_error(
+            "Whisper sparse plane is not a whole mask vector");
+        for (std::size_t at=0;at<slots.size();at+=16) {
+            U32 mask=0;
+            for (U32 lane=0;lane<16;++lane)
+                if (slots[at+lane] && whisperStemNonzeroHalf(slots[at+lane]))
+                    mask|=1u<<lane;
+            out.push_back(std::uint8_t(mask)); out.push_back(std::uint8_t(mask>>8));
+            for (U32 lane=0;lane<16;++lane)
+                if (mask&(1u<<lane)) whisperStemHalf(out,slots[at+lane]);
+        }
+        chunkFirst+=16*width;
+    }
+    while (out.size()%64) out.push_back(0);
+    return out;
+}
+
+Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
+                      U32 taskIndex, U32 taskCount, U32 kernelBase,
+                      const std::array<U32,16> &chunkBytes, bool gelu) {
+    Task t;
+    t.kernelSlotFlags=taskBar(8);
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
+    const bool first=taskIndex==0,last=taskIndex+1==taskCount;
+    t.header={taskIndex,0,first ? (last ? 0x04000068u : 0x68u)
+                               : (last ? 0x04000000u : 0u),
+              0,first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+              0,0,0,last ? 0x50009u : 0x50001u};
+    auto &r=t.registers;
+    r[4]=3000; r[8]=1; r[0xc]=cin;
+    r[0x14]=1500; r[0x18]=1;
+    // The one-lane tail uses the measured zero code for sixteen outputs.
+    if (slice!=16) r[0x1c]=slice;
+    r[0x28]=0x5000c043; r[0x34]=1; r[0x3c]=0x200000;
+    if (slice==64) r[0x40]=2;
+    else if (slice!=128) r[0x40]=4;
+    r[0x4c]=0x100000;
+    r[0x4104]=first ? 0x500172 : 0x142;
+    if (first) r[0x4108]=0x500130;
+    r[0x4114]=0x240;
+    r[0x4118]=r[0x411c]=r[0x4120]=cin*0x240;
+    r[0x4148]=first ? 0x50017a : 0x14a;
+    r[0x414c]=cin*0x240;
+    r[0x4900]=0x182; r[0x4904]=0x103c10|(gelu ? 0x20000 : 0);
+    r[0x4910]=0x3c00;
+    r[0x4d00]=taskIndex<<16|(last ? (first ? 0x21 : 0xc1) : 0xe1);
+    r[0x4d08]=last ? 0xce : 0xee;
+    r[0x4d10]=r[0x4d14]=0; r[0x4d1c]=align64(6000);
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031|taskIndex<<16;
+    r[0x5108]=firstOutput*align64(3000); r[0x510c]=0;
+    r[0x5114]=align64(3000); r[0x5138]=0x1302031;
+    r[0x5500]=(taskIndex+1)<<16|(last ? 0x2e0 : 0x260);
+    r[0x5510]=kernelBase; r[0x5514]=0;
+    U32 offset=0;
+    for (U32 lane=0;lane<16;++lane) {
+        r[0x5520+4*lane]=taskIndex<<16|0x21;
+        if (lane) r[0x5560+4*lane]=offset;
+        if (chunkBytes[lane]!=64) r[0x55a0+4*lane]=chunkBytes[lane];
+        offset+=chunkBytes[lane];
+    }
+    if (last) {
+        r[0x5900]=0x12; r[0x5904]=0xa000a0;
+        if (!first) r[0x5908]=taskIndex<<16|0xe0;
+        r[0x5918]=0; r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    }
+    pack(t);
+    return t;
+}
+
+Task whisperTransposeTask(U32 channels) {
+    Task t;
+    t.sourceSlotFlags=taskBar(6);
+    t.resultSlotFlags=taskBar(7);
+    t.header={0,0,0x04000068,0,0x68,0,0,0,0x50009};
+    auto &r=t.registers;
+    r[0x5500]=0x80;
+    r[4]=r[0x14]=1500; r[8]=r[0x18]=1;
+    r[0xc]=r[0x1c]=channels;
+    r[0x30]=0x84000; r[0x34]=1; r[0x3c]=0x30210100; r[0x4c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130; r[0x4114]=0x100;
+    r[0x4118]=r[0x411c]=r[0x4120]=channels*0x100;
+    r[0x4148]=0x50017a; r[0x414c]=channels*0x100;
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce; r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=align64(3000); r[0x4d68]=0x1002031;
+    r[0x5100]=0x1000031; r[0x5108]=r[0x510c]=0;
+    r[0x5114]=2*channels; r[0x5138]=0x1302031;
+    r[0x5900]=0x12; r[0x5904]=0xa000a0; r[0x5918]=0;
+    r[0x5928]=0x7f0000; r[0x592c]=0x20010701;
+    pack(t);
+    return t;
+}
+
+U32 fp32Bits(float value) {
+    U32 bits=0;
+    static_assert(sizeof(bits)==sizeof(value));
+    std::memcpy(&bits,&value,sizeof(bits));
+    return bits;
+}
+
+void layerNormHeader(Task &task,U32 index,U32 dependency,U32 mode=1) {
+    task.header={index,0,0,0,0x28,0,0,dependency,mode};
+}
+
+void packLayerNormLongLoad(Task &task,U32 index,bool noResultBase) {
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c});record(task,{0x4d68});
+    if(index==0) {
+        record(task,{0x4104,0x4108});
+        record(task,{0x4110,0x4114,0x4118,0x411c,0x4120,0x4148,0x414c,0x4150});
+    } else {
+        record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+        if(noResultBase) record(task,{0x4150}); else record(task,{0x414c,0x4150});
+    }
+    record(task,{0x4514});record(task,{0x4d10,0x4d14},taskBar(6));
+    record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);
+}
+
+void packLayerNormLongVariance(Task &task,U32 index,bool noSourceBase,
+                               bool edge) {
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c,0x4d34});record(task,{0x4d6c});
+    if(index==4) {
+        record(task,{0x4104,0x4108});
+        record(task,{0x4110,0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x414c,0x4150});
+    } else if(noSourceBase) {
+        record(task,{0x4104,0x4108});
+        record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x414c,0x4150});
+    } else if(edge) {
+        record(task,{0x4108,0x4110,0x4114,0x4124,0x4128,0x412c,0x4130,0x4134});
+        record(task,{0x414c,0x4150});
+    } else {
+        record(task,{0x4104,0x4108});
+        record(task,{0x4110,0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x414c,0x4150});
+    }
+    record(task,{0x4500,0x450c,0x4514});
+    record(task,{0x4d28,0x4d2c},taskBar(6));record(task,{0x4d04},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);
+}
+
+Task layerNormLongLoadTask(U32 channels,U32 index) {
+    const U32 tile=384,edge=1500-3*tile,row=2*channels;
+    const bool edgeTile=index==0;Task task;
+    task.header={index,0,index==0?0x68u:0u,0,index==0?0x68u:0x28u,0,0,1,1};
+    auto &r=task.registers;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
+    r[12]=r[0x1c]=edgeTile?edge:tile;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
+    r[0x4104]=index?0x142:0x500172;if(!index)r[0x4108]=0x500130;
+    r[0x4110]=1500*32;r[0x4114]=row;
+    const U32 bytes=(edgeTile?edge:tile)*row;
+    r[0x4118]=r[0x411c]=r[0x4120]=bytes;
+    if(!index)r[0x4148]=0x500130;
+    const U32 position=3-index;if(position)r[0x414c]=position*tile*16;
+    r[0x4150]=16;r[0x4514]=fp32Bits(1.0f/float(channels));
+    r[0x4d00]=index<<16|0xe1;r[0x4d08]=0xee;
+    r[0x4d10]=position*tile*row;r[0x4d14]=0;r[0x4d1c]=row;r[0x4d68]=0x1002031;
+    packLayerNormLongLoad(task,index,index==3);return task;
+}
+
+Task layerNormLongVarianceTask(U32 channels,U32 index) {
+    const U32 tile=384,edge=1500-3*tile,row=2*channels;
+    const U32 position=index==7?3:6-index;const bool last=index==7;
+    Task task;task.header={index,0,0,0,0x28,0,0,1,1};auto &r=task.registers;
+    r[4]=r[0x14]=channels;r[8]=r[0x18]=1;r[12]=r[0x1c]=last?edge:tile;
+    r[0x34]=1;r[0x3c]=0x60;r[0x44]=9;r[0x48]=1;r[0x4c]=0;
+    if(index!=7)r[0x4104]=0x400100;r[0x4108]=0x142;
+    if(position)r[0x4110]=position*tile*16;r[0x4114]=16;r[0x4124]=1500*32;
+    r[0x4128]=row;const U32 bytes=(last?edge:tile)*row;
+    r[0x412c]=r[0x4130]=r[0x4134]=bytes;
+    r[0x414c]=1500*16+position*tile*16;r[0x4150]=16;
+    r[0x4500]=0x92010;r[0x450c]=0x37280000;r[0x4514]=fp32Bits(1.0f/float(channels));
+    r[0x4d04]=index<<16|0xe1;r[0x4d0c]=0xee;
+    r[0x4d28]=position*tile*row;r[0x4d2c]=0;r[0x4d34]=row;r[0x4d6c]=0x1002031;
+    packLayerNormLongVariance(task,index,index==6,last);return task;
+}
+
+Task layerNormLongReduceTask(U32 channels) {
+    Task task;layerNormHeader(task,8,channels==512?0x1ffffff:0,
+                             channels==512?1:0);auto &r=task.registers;
+    r[4]=r[0x14]=channels;r[8]=r[0x18]=1;r[12]=r[0x1c]=1500;
+    r[0x34]=1;r[0x3c]=0x40;r[0x44]=7;r[0x4c]=0;
+    r[0x4104]=0x142;r[0x4108]=0x400100;
+    r[0x4110]=channels==384?0x184f80:0x182b80;r[0x4114]=0x100;
+    r[0x4118]=r[0x411c]=r[0x4120]=1500*0x100;r[0x4128]=16;r[0x412c]=1500*16;
+    if(channels==384){r[0x4148]=0x103;r[0x414c]=0x127380;r[0x4150]=0x100;
+        r[0x4154]=r[0x4158]=r[0x415c]=1500*0x100;}
+    else {r[0x414c]=1500*32;r[0x4150]=2*channels;}
+    r[0x4500]=0xc0000;r[0x4d00]=0x800c1;r[0x4d08]=0xce;
+    r[0x4d10]=r[0x4d14]=0;r[0x4d1c]=2*channels;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c});record(task,{0x4d68});
+    if(channels==384){record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
+        record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});}
+    else {record(task,{0x4104,0x4108});record(task,{0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c,0x414c,0x4150});}
+    record(task,{0x4500});record(task,{0x4d10,0x4d14},taskBar(6));
+    record(task,{0x4d00},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|8;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
+Task layerNormShortLoadTask() {
+    Task task;task.header={0,0,0x68,0,0x68,0,0,0x3c0,1};auto &r=task.registers;
+    r[4]=r[0x14]=768;r[8]=r[0x18]=1;r[12]=r[0x1c]=128;
+    r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x48]=0x400;r[0x4c]=0;
+    r[0x4104]=0x500171;r[0x4108]=0x500130;r[0x4110]=0x63200;
+    r[0x4114]=1536;r[0x4118]=r[0x411c]=r[0x4120]=128*1536;
+    r[0x4148]=0x500130;r[0x414c]=0x63000;r[0x4514]=fp32Bits(1.0f/768.0f);
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=r[0x4d14]=0;
+    r[0x4d1c]=1536;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d08,0x4d1c});record(task,{0x4d68});record(task,{0x4104,0x4108});
+    record(task,{0x4110,0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4514});record(task,{0x4d10,0x4d14},taskBar(6));
+    record(task,{0x4d00},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
+Task layerNormShortMiddleTask(U32 index) {
+    Task task;task.header={index,index==1?3u:1u,0,0,0x28,0,0,index==1?0x3c0u:0x3ffu,1};
+    task.header[1]=0;auto &r=task.registers;r[4]=r[0x14]=768;r[8]=r[0x18]=1;
+    r[12]=r[0x1c]=128;r[0x34]=1;r[0x3c]=index==1?0x60:0x40;
+    r[0x44]=index==1?9:7;r[0x48]=index==1?0x501:0x200;r[0x4c]=0;
+    if(index==1){r[0x4104]=0x400100;r[0x4110]=0x63000;r[0x4124]=0x63200;
+        r[0x4128]=1536;r[0x414c]=0x63100;r[0x4500]=0x92010;r[0x450c]=0x37280000;
+        r[0x4514]=fp32Bits(1.0f/768.0f);}
+    else {r[0x4108]=0x400100;r[0x4110]=0x63200;r[0x4114]=1536;
+        r[0x4124]=0x63000;r[0x412c]=0x100;r[0x414c]=0x33000;r[0x4150]=1536;
+        r[0x4500]=0xc0000;}
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    if(index==1){record(task,{0x4104,0x4110,0x4124,0x4128});record(task,{0x414c});
+        record(task,{0x4500,0x450c,0x4514});}
+    else {record(task,{0x4108,0x4110,0x4114,0x4124,0x412c});record(task,{0x414c,0x4150});
+        record(task,{0x4500});}
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task layerNormBoundaryTask(U32 tokens,U32 channels,U32 index) {
+    Task task;layerNormHeader(task,index,0x3ffff,1);auto &r=task.registers;
+    const U32 row=2*channels;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
+    r[12]=r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=0x80;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x142;r[0x4114]=row;r[0x4124]=0;
+    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;r[0x4150]=row;r[0x4500]=0x80004;
+    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0;r[0x4d2c]=0;
+    r[0x4d6c]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c});record(task,{0x4d6c});record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x4150});
+    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(8));
+    record(task,{0x4d04},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|index;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
+Task layerNormOutputTask(U32 tokens,U32 channels,U32 index) {
+    Task task;task.header={index,0,0x04000000,0,0x28,0,0,0,9};auto &r=task.registers;
+    const U32 row=2*channels;r[0x5500]=0x80;r[4]=r[0x14]=channels;
+    r[8]=r[0x18]=tokens;r[12]=r[0x1c]=1;r[0x34]=tokens;r[0x3c]=0x30;
+    r[0x44]=9;r[0x48]=0x20;r[0x4c]=0;r[0x4104]=0x400100;r[0x4108]=0x142;
+    r[0x4118]=row;r[0x4124]=0x40;r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;
+    r[0x4148]=0x14a;r[0x414c]=row+0x40;r[0x4500]=0x80000;
+    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;
+    r[0x4d28]=2*channels;r[0x4d2c]=0;
+    r[0x4d6c]=0x1002031;r[0x5100]=0x01000031|index<<16;
+    r[0x5108]=r[0x510c]=0;r[0x5110]=row;r[0x5138]=0x1302031;
+    r[0x5900]=0x12;r[0x5904]=0xa000a0;r[0x5908]=index<<16|0xe0;
+    r[0x5918]=0;r[0x5928]=0x7f0000;r[0x592c]=0x20010701;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{0x5500});record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});record(task,{0x4d0c});
+    record(task,{0x4d6c});record(task,{0x4104,0x4108});
+    record(task,{0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
+    record(task,{0x4500});record(task,{0x5110,0x5138});
+    record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x4d28,0x4d2c},taskBar(8));record(task,{0x5108,0x510c},taskBar(7));
+    record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
+}
+}
+
+std::string transformerLayerNormRefusal(U32 tokens,U32 channels) {
+    if((tokens==128&&channels==768)||(tokens==1500&&(channels==384||channels==512)))
+        return {};
+    return "transformer layer_norm requires BERT [1,128,768] or Whisper [1,1500,384/512]";
+}
+
+TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) {
+    if(auto why=transformerLayerNormRefusal(tokens,channels);!why.empty())
+        throw std::invalid_argument(why);
+    TransformerLayerNormProgram out;auto &program=out.program;
+    program.task.assign(16,0);program.task[0]=1;
+    std::vector<Task> tasks;
+    if(tokens==1500) {
+        for(U32 index=0;index<4;++index)tasks.push_back(layerNormLongLoadTask(channels,index));
+        for(U32 index=4;index<8;++index)tasks.push_back(layerNormLongVarianceTask(channels,index));
+        tasks.push_back(layerNormLongReduceTask(channels));
+    } else {
+        tasks.push_back(layerNormShortLoadTask());
+        tasks.push_back(layerNormShortMiddleTask(1));
+        tasks.push_back(layerNormShortMiddleTask(2));
+    }
+    tasks.push_back(layerNormBoundaryTask(tokens,channels,U32(tasks.size())));
+    tasks.push_back(layerNormOutputTask(tokens,channels,U32(tasks.size())));
+    for(Task &task:tasks) {
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    }
+    program.taskCount=U32(tasks.size());program.firstTaskBytes=tasks.front().bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    // The final two tasks consume the identity gamma and zero beta vectors
+    // found at the measured full-program constant boundary.  They are
+    // constants, not a scratch materialization: rebasing them to an empty
+    // standalone __DATA segment made every BERT result wrong and faulted DMA.
+    program.constants.assign(std::size_t(channels)*4,0);
+    for(U32 channel=0;channel<channels;++channel)
+        program.constants[2*channel+1]=0x3c; // fp16 1.0, little endian
+    program.scratchAllocationBytes=0;program.formulaBuilt=true;
+    const std::uint64_t row=2*channels,plane=row*tokens;
+    program.inputs={{5,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)}};
+    program.output={4,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)};
+    // Standalone object-writer metadata uses the admitted mixed-program code;
+    // the captured whole-graph descriptor counters include neighboring ops
+    // and are not portable to this isolated object.
+    out.programRecordCount=0x10;
+    out.programFormatCode=20;
+    out.scratchBytes=0;
+    out.revealedInputPrefix=true;
+    out.revealedOutputBoundary=tokens==1500&&channels==384;
+    return out;
+}
+
+std::string transformerLinearRefusal(U32 tokens, U32 cin, U32 cout,
+                                     TransformerLinearOptions options) {
+    if (!tokens || !cin || !cout || cin%16 || cout%16)
+        return "transformer linear requires nonzero S and channel multiples of 16";
+    if (options.gelu && (!options.bias || !options.geluTable ||
+                         options.geluTableBytes!=128))
+        return "fused GELU requires a bias and the decoded 128-byte H16G table";
+    if (tokens==1500 && cin>1024 && !(
+                      ((cin==1536 && cout==384) ||
+                       (cin==2048 && cout==512))))
+        return "scratch-backed contraction is measured only for the two Whisper projections";
+    if (tokens==1500) return {};
+    if (tokens==64 || tokens==128 || tokens==256 || tokens==512) return {};
+    return "transformer linear token count is outside the measured/predicted envelope";
+}
+
+TransformerLinearProgram encodeTransformerLinear(
+    U32 tokens, U32 cin, U32 cout, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options) {
+    if (auto why=transformerLinearRefusal(tokens,cin,cout,options); !why.empty())
+        throw std::invalid_argument(why);
+    if (!weights || weightBytes!=std::size_t(cin)*cout*2)
+        throw std::invalid_argument("transformer linear needs Cout*Cin fp16 weights");
+    if (options.bias!=(bias!=nullptr) ||
+        (bias && biasBytes!=std::size_t(cout)*2))
+        throw std::invalid_argument("transformer linear bias must contain Cout fp16 values");
+    const bool wide=tokens==1500 && cin>1024;
+    const auto slices=linearOutputSlices(tokens,cin,cout,options.bias,options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0);
+    program.task[0]=1;
+    Task staging=linearStagingTask(tokens,cin,wide);
+    program.task.insert(program.task.end(),staging.bytes.begin(),staging.bytes.end());
+    U32 firstOutput=0,kernelBase=0;
+    const U32 taskCount=U32(slices.size()+1);
+    for (U32 index=0; index<slices.size(); ++index) {
+        const U32 slice=slices[index];
+        auto packed=packLinearSlice(cin,firstOutput,slice,weights,
+            options.bias ? bias : nullptr,options.gelu ? options.geluTable : nullptr,
+            options.gelu ? options.geluTableBytes : 0);
+        program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        Task compute=linearComputeTask(tokens,cin,cout,slice,firstOutput,
+            index+1,taskCount,kernelBase,wide,options.bias,options.gelu,
+            options.outputScale);
+        program.kernelRelocations.push_back(program.task.size()+compute.kernelRelocation);
+        program.task.insert(program.task.end(),compute.bytes.begin(),compute.bytes.end());
+        kernelBase+=U32(packed.size()); firstOutput+=slice;
+    }
+    program.taskCount=taskCount;
+    program.firstTaskBytes=staging.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=wide ? std::size_t(tokens)*cin*2 : 0;
+    const auto tensor=[](U32 tokens_,U32 channels,U32 index) {
+        const std::uint64_t row=2*channels,plane=row*tokens_;
+        return h13::TensorLayout{index,{1,1,tokens_,channels,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(tokens,cin,5)}; program.output=tensor(tokens,cout,4);
+    program.formulaBuilt=true;
+    result.programRecordCount=wide ? 0x20 : 0x10;
+    result.programFormatCode=0;
+    result.scratchBacked=wide;
+    result.scratchBytes=program.scratchAllocationBytes;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperStem1(
+    U32 tokens, U32 cout, const std::uint8_t *weights,
+    std::size_t weightBytes, const std::uint8_t *bias,
+    std::size_t biasBytes, TransformerLinearOptions options) {
+    if (!tokens || (cout!=384 && cout!=512))
+        throw std::invalid_argument(
+            "Whisper stem1 requires T>0 and the measured C384/C512 width");
+    if (!options.bias || !bias || biasBytes!=std::size_t(cout)*2 ||
+        !weights || weightBytes!=std::size_t(cout)*80*3*2)
+        throw std::invalid_argument(
+            "Whisper stem1 requires fp16 [C,80,3] weights and [C] bias");
+    if (options.gelu && (!options.geluTable || options.geluTableBytes!=128))
+        throw std::invalid_argument(
+            "Whisper stem1 GELU requires the decoded 128-byte table");
+    auto packed=packLinearSlice(80*3,0,cout,weights,bias,
+        options.gelu ? options.geluTable : nullptr,
+        options.gelu ? options.geluTableBytes : 0);
+    Task task=whisperStem1Task(tokens,cout,U32(packed.size()),options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    program.kernelRelocations={program.task.size()+task.kernelRelocation};
+    program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    program.constants=std::move(packed); program.taskCount=1;
+    program.firstTaskBytes=task.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[&](U32 height,U32 index) {
+        const std::uint64_t row=2*tokens,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,tokens,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(80,5)}; program.output=tensor(cout,4);
+    program.formulaBuilt=true;
+    result.programRecordCount=0x10; result.programFormatCode=0;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperStem2(
+    U32 channels, const std::uint8_t *weights, std::size_t weightBytes,
+    const std::uint8_t *bias, std::size_t biasBytes,
+    TransformerLinearOptions options) {
+    if (channels!=384 && channels!=512)
+        throw std::invalid_argument("Whisper stem2 requires C384 or C512");
+    if (!options.bias || !weights || !bias ||
+        weightBytes!=std::size_t(channels)*channels*3*2 ||
+        biasBytes!=std::size_t(channels)*2)
+        throw std::invalid_argument(
+            "Whisper stem2 requires fp16 [C,C,3] weights and [C] bias");
+    if (options.gelu && (!options.geluTable || options.geluTableBytes!=128))
+        throw std::invalid_argument(
+            "Whisper stem2 GELU requires the decoded 128-byte table");
+    const auto slices=whisperStem2Slices(channels,options.gelu);
+    const auto firstOutputs=whisperStem2FirstOutputs(channels,options.gelu);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    U32 kernelBase=0;
+    std::size_t firstTaskBytes=0;
+    for (U32 index=0;index<slices.size();++index) {
+        std::array<U32,16> chunkBytes{};
+        for (U32 group=0;group<16;++group) {
+            auto packed=packWhisperStem2Group(channels,firstOutputs[index],
+                slices[index],group,weights,bias,
+                options.gelu ? options.geluTable : nullptr,
+                options.gelu ? options.geluTableBytes : 0);
+            chunkBytes[group]=U32(packed.size());
+            program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        }
+        Task task=whisperStem2Task(channels,slices[index],firstOutputs[index],
+            index,U32(slices.size()),kernelBase,chunkBytes,options.gelu);
+        if (!index) firstTaskBytes=task.bytes.size();
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        program.kernelRelocations.push_back(program.task.size()+task.kernelRelocation);
+        program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+        for (U32 bytes : chunkBytes) kernelBase+=bytes;
+    }
+    program.taskCount=U32(slices.size());
+    program.firstTaskBytes=firstTaskBytes;
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[](U32 height,U32 width,U32 index) {
+        const std::uint64_t row=2*width,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,width,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(channels,3000,5)};
+    program.output=tensor(channels,1500,4); program.formulaBuilt=true;
+    result.programRecordCount=slices.size()==1 ? 0x10 :
+                              slices.size()==2 ? 0x1f : 0x2d;
+    result.programFormatCode=0;
+    return result;
+}
+
+TransformerLinearProgram encodeWhisperTranspose(U32 channels) {
+    if (channels!=384 && channels!=512)
+        throw std::invalid_argument("Whisper transpose requires C384 or C512");
+    Task task=whisperTransposeTask(channels);
+    TransformerLinearProgram result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    program.taskCount=1; program.firstTaskBytes=task.bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    const auto tensor=[](U32 height,U32 width,U32 index) {
+        const std::uint64_t row=2*width,plane=row*height;
+        return h13::TensorLayout{index,{1,1,height,width,plane,row},
+                                 (plane+0x3fff)&~std::uint64_t(0x3fff)};
+    };
+    program.inputs={tensor(channels,1500,5)};
+    program.output=tensor(1500,channels,4); program.formulaBuilt=true;
+    result.programRecordCount=3; result.programFormatCode=0;
+    return result;
+}
+
 std::string convRefusal(ConvShape s) {
     if (s.kernel!=s.kernelWidth || (s.kernel!=1 && s.kernel!=3))
         return "only measured square 1x1/3x3 kernels are supported";
@@ -419,6 +1245,331 @@ std::vector<std::uint8_t> packSparseStride2(ConvShape s, const std::uint8_t *wei
         chunkBytes[chunk]=U32(out.size()-start);
     }
     return out;
+}
+
+namespace {
+using TapGroup = std::vector<unsigned>;
+const std::array<TapGroup,8> resnet3x3PhaseGroups = {
+    TapGroup{0,2}, TapGroup{6,8}, TapGroup{1}, TapGroup{7},
+    TapGroup{3,5}, TapGroup{}, TapGroup{4}, TapGroup{},
+};
+const std::array<TapGroup,16> resnet7x7PhaseGroups = {
+    TapGroup{0,2,4,6}, TapGroup{14,16,18,20},
+    TapGroup{28,30,32,34}, TapGroup{42,44,46,48},
+    TapGroup{1,3,5}, TapGroup{15,17,19},
+    TapGroup{29,31,33}, TapGroup{43,45,47},
+    TapGroup{7,9,11,13}, TapGroup{21,23,25,27},
+    TapGroup{35,37,39,41}, TapGroup{},
+    TapGroup{8,10,12}, TapGroup{22,24,26},
+    TapGroup{36,38,40}, TapGroup{},
+};
+
+std::vector<unsigned> resnetLaneChunks(unsigned outputs, unsigned cap) {
+    unsigned lanes=outputs/16;
+    std::vector<unsigned> chunks;
+    while (lanes>cap) { chunks.push_back(cap); lanes-=cap; }
+    if (lanes) chunks.push_back(lanes);
+    return chunks;
+}
+
+unsigned resnetOneTapMaskBytes(unsigned lanes) {
+    return (lanes+7)/8;
+}
+
+template <std::size_t N>
+void appendPhasePlane(std::vector<std::uint8_t> &out,
+                      const std::array<TapGroup,N> &groups,
+                      unsigned cin, unsigned lanes, unsigned first,
+                      unsigned taps, const std::uint8_t *weights,
+                      const std::uint8_t *bias, unsigned perInputPadding) {
+    if (bias)
+        out.insert(out.end(),bias+2*first,bias+2*(first+lanes));
+    const std::size_t lengthAt=out.size();
+    out.push_back(0); out.push_back(0); out.push_back(0);
+    const unsigned maxTaps=std::max_element(groups.begin(),groups.end(),
+        [](const TapGroup &a,const TapGroup &b){return a.size()<b.size();})->size();
+    const std::size_t bodyAt=out.size();
+    for (unsigned input=0;input<cin;++input) {
+        unsigned structural=0;
+        if constexpr (N==1) {
+            if (lanes<=8 || (lanes<=16 && (lanes%8==0 || !(input&1)))) {
+                const unsigned maskBytes=resnetOneTapMaskBytes(lanes);
+                std::vector<std::uint8_t> masks(maskBytes,0),values;
+                for (unsigned lane=0;lane<lanes;++lane) {
+                    const auto *value=weights+2*((std::size_t(first+lane)*cin+input)*taps);
+                    if (!nonzeroHalf(value)) continue;
+                    masks[lane/8]|=std::uint8_t(1u<<(lane%8));
+                    half(values,value);
+                }
+                out.insert(out.end(),masks.begin(),masks.end());
+                if (lanes<=8 && perInputPadding) { out.push_back(0); structural=1; }
+                out.insert(out.end(),values.begin(),values.end());
+            } else {
+                unsigned consumed=0;
+                const unsigned cap=lanes>16 ? 16 : 8;
+                while (consumed<lanes) {
+                    const unsigned width=std::min(cap,lanes-consumed);
+                    std::vector<std::uint8_t> masks((width+7)/8,0);
+                    std::vector<std::uint8_t> values;
+                    for (unsigned lane=0;lane<width;++lane) {
+                        const auto *value=weights+2*((std::size_t(first+consumed+lane)*cin+input)*taps);
+                        if (!nonzeroHalf(value)) continue;
+                        masks[lane/8]|=std::uint8_t(1u<<(lane%8));
+                        half(values,value);
+                    }
+                    out.insert(out.end(),masks.begin(),masks.end());
+                    if (width<cap && perInputPadding) { out.push_back(0); structural=1; }
+                    out.insert(out.end(),values.begin(),values.end());
+                    consumed+=width;
+                }
+            }
+        } else {
+            // Every phase row is padded to the next even lane count and to
+            // the widest tap group.  The resulting structural slot stream
+            // is encoded in 16-bit nonzero-mask vectors.  This unifies the
+            // 1-, 4-, 8-, 11- and 32-lane ResNet stride-two forms.
+            const unsigned evenLanes=(lanes+1)&~1u;
+            std::vector<const std::uint8_t *> slots;
+            for (const auto &group:groups) {
+                for (unsigned tapIndex=0;tapIndex<maxTaps;++tapIndex)
+                    for (unsigned lane=0;lane<evenLanes;++lane)
+                        slots.push_back(tapIndex<group.size() && lane<lanes
+                            ? weights+2*((std::size_t(first+lane)*cin+input)*taps+group[tapIndex])
+                            : nullptr);
+            }
+            if (slots.size()%16) throw std::logic_error(
+                "ResNet phase slots are not a whole mask vector");
+            for (std::size_t at=0;at<slots.size();at+=16) {
+                std::uint16_t mask=0;
+                for (unsigned bit=0;bit<16;++bit)
+                    if (slots[at+bit] && nonzeroHalf(slots[at+bit])) mask|=std::uint16_t(1u<<bit);
+                out.push_back(std::uint8_t(mask)); out.push_back(std::uint8_t(mask>>8));
+                for (unsigned bit=0;bit<16;++bit)
+                    if (mask&(1u<<bit)) half(out,slots[at+bit]);
+            }
+        }
+        unsigned trailingPadding=perInputPadding;
+        if constexpr (N==1)
+            if (structural) --trailingPadding;
+        out.insert(out.end(),trailingPadding,0);
+    }
+    const std::size_t bytes=out.size()-bodyAt;
+    if (bytes>0xffffff) throw std::invalid_argument("ResNet sparse plane exceeds u24 length");
+    out[lengthAt]=std::uint8_t(bytes); out[lengthAt+1]=std::uint8_t(bytes>>8);
+    out[lengthAt+2]=std::uint8_t(bytes>>16);
+}
+}
+
+std::vector<std::uint8_t> packResNetDense(
+    ConvShape s, const std::uint8_t *weights, const std::uint8_t *bias,
+    std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=1 || !s.bias || !weights || !bias ||
+        !s.output.channels || s.output.channels%16)
+        throw std::invalid_argument(
+            "ResNet dense packing requires biased groups-1 stride-one and Cout%16=0");
+    const unsigned reduction=s.input.channels*s.kernel*s.kernelWidth;
+    const unsigned cap=std::max(s.output.width,s.output.height)<=8 ? 32 : 16;
+    const auto chunks=resnetLaneChunks(s.output.channels,cap);
+    std::vector<std::uint8_t> out;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        unsigned first=0;
+        for (unsigned lanes:chunks) {
+            for (unsigned lane=0;lane<lanes;++lane) half(out,bias+2*(first+region*lanes+lane));
+            for (unsigned input=0;input<reduction;++input)
+                for (unsigned lane=0;lane<lanes;++lane) {
+                    const unsigned output=first+region*lanes+lane;
+                    half(out,weights+2*(std::size_t(output)*reduction+input));
+                }
+            first+=16*lanes;
+        }
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> packResNetLinearHead(
+    U32 cin, U32 cout, const std::uint8_t *weights,
+    const std::uint8_t *bias, std::array<U32,16> &chunkBytes) {
+    if (!cin || !cout || !weights || !bias)
+        throw std::invalid_argument("ResNet linear head needs nonzero dimensions, weights, and bias");
+    const unsigned fullChunks=cout/256;
+    const unsigned tail=cout-fullChunks*256;
+    const unsigned tailLanes=tail/16,tailExtra=tail%16;
+    std::vector<std::uint8_t> out;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t regionStart=out.size();
+        const auto append=[&](unsigned at,unsigned lanes) {
+            for (unsigned lane=0;lane<lanes;++lane) half(out,bias+2*(at+lane));
+            for (unsigned input=0;input<cin;++input)
+                for (unsigned lane=0;lane<lanes;++lane)
+                    half(out,weights+2*(std::size_t(at+lane)*cin+input));
+        };
+        for (unsigned chunk=0;chunk<fullChunks;++chunk)
+            append(chunk*256+region*16,16);
+        const unsigned lanes=tailLanes+(region<tailExtra);
+        if (lanes)
+            append(fullChunks*256+region*tailLanes+
+                   std::min(region,tailExtra),lanes);
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-regionStart);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> packResNetStride2(ConvShape s,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=2 || s.kernel!=s.kernelWidth ||
+        (s.kernel!=1 && s.kernel!=3) || !s.bias || !weights || !bias ||
+        !s.output.channels || s.output.channels%16)
+        throw std::invalid_argument("ResNet stride-2 packing requires biased dense 1x1/3x3 and Cout%16=0");
+    std::vector<std::uint8_t> out;
+    const unsigned cap=std::max(s.output.width,s.output.height)<=8 ? 32 : 16;
+    const auto chunks=resnetLaneChunks(s.output.channels,cap);
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        unsigned base=0;
+        for (unsigned lanes:chunks) {
+            const unsigned first=base+region*lanes;
+            if (s.kernel==3) {
+                appendPhasePlane(out,resnet3x3PhaseGroups,s.input.channels,
+                                 lanes,first,9,weights,bias,0);
+            } else {
+                const std::array<TapGroup,1> one={TapGroup{0}};
+                const unsigned masks=resnetOneTapMaskBytes(lanes);
+                appendPhasePlane(out,one,s.input.channels,lanes,first,1,
+                                 weights,bias,lanes/2>masks ? lanes/2-masks : 0);
+            }
+            base+=16*lanes;
+        }
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> packResNetStem7x7(ConvShape s,
+                                            const std::uint8_t *weights,
+                                            const std::uint8_t *bias,
+                                            std::array<std::uint32_t,16> &chunkBytes) {
+    if (s.groups!=1 || s.stride!=2 || s.kernel!=7 || s.kernelWidth!=7 ||
+        s.input.channels!=3 || s.output.channels!=64 || !s.bias ||
+        !weights || !bias)
+        throw std::invalid_argument("7x7 packing is decoded only for the biased 3->64 ResNet stem");
+    std::vector<std::uint8_t> out;
+    constexpr unsigned lanes=4;
+    for (unsigned region=0;region<16;++region) {
+        const std::size_t start=out.size();
+        appendPhasePlane(out,resnet7x7PhaseGroups,3,lanes,region*lanes,49,
+                         weights,bias,0);
+        while (out.size()%64) out.push_back(0);
+        chunkBytes[region]=U32(out.size()-start);
+    }
+    return out;
+}
+
+namespace {
+struct ResNetRecordFact { U32 header,valueStart,valueCount; };
+struct ResNetTaskFact {
+    std::array<U32,9> header;
+    U32 recordStart,recordCount;
+};
+#include "H16ResNet50Facts.inc"
+
+std::vector<std::pair<U32,U32>> resnetOutputSlices(ConvShape s) {
+    if (s.stride==2 && s.kernel==3 && s.input.channels==256 &&
+        s.output.channels==256 && s.input.width==28)
+        return {{192,64},{0,176},{176,16}};
+    if (s.stride==2 && s.kernel==1 && s.input.channels==512 &&
+        s.output.channels==1024 && s.input.width==28)
+        return {{800,224},{0,672},{672,128}};
+    if (s.stride==1 && s.kernel==3 && s.input.channels==256 &&
+        s.output.channels==256 && s.input.width==14)
+        return {{224,32},{0,224}};
+    if (s.stride==1 && s.kernel==1 && s.input.channels==1024 &&
+        s.output.channels==512 && s.input.width==14)
+        return {{256,256},{0,256}};
+    return {{0,s.output.channels}};
+}
+
+U32 resnetRecordBase(U32 header) { return (header&0x7fffu)*4; }
+U32 resnetPackagedRecordHeader(U32 header) {
+    const U32 base=resnetRecordBase(header),flags=header&0x3f800000u;
+    if (base==0x5510 && flags==0x23800000u)
+        return (header&~0x3f800000u)|taskBar(8);
+    if (base==0x5108 && flags==0x22800000u)
+        return (header&~0x3f800000u)|taskBar(7);
+    return header;
+}
+}
+
+ResNet50Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes) {
+    if (convolutions.size()!=53)
+        throw std::invalid_argument("ResNet-50 needs 53 scheduled convolution operations");
+    ResNet50Program result;
+    auto &program=result.program;
+    program.task.assign(16,0); program.task[0]=1;
+    for (const auto &conv:convolutions) {
+        const auto &s=conv.shape;
+        const std::size_t reduction=std::size_t(s.input.channels)*s.kernel*s.kernelWidth;
+        if (s.groups!=1 || !s.bias || !conv.weights || !conv.bias ||
+            conv.weightBytes!=std::size_t(s.output.channels)*reduction*2 ||
+            conv.biasBytes!=std::size_t(s.output.channels)*2)
+            throw std::invalid_argument("ResNet convolution weights do not match its biased groups-1 shape");
+        for (const auto &[first,count]:resnetOutputSlices(s)) {
+            ConvShape slice=s; slice.output.channels=count;
+            std::array<U32,16> chunks{};
+            const auto *weights=conv.weights+2*std::size_t(first)*reduction;
+            const auto *bias=conv.bias+2*first;
+            std::vector<std::uint8_t> packed;
+            if (s.kernel==7)
+                packed=packResNetStem7x7(slice,weights,bias,chunks);
+            else if (s.stride==2)
+                packed=packResNetStride2(slice,weights,bias,chunks);
+            else
+                packed=packResNetDense(slice,weights,bias,chunks);
+            program.constants.insert(program.constants.end(),packed.begin(),packed.end());
+        }
+    }
+    if (!headWeights || !headBias || headWeightBytes!=std::size_t(2048)*1000*2 ||
+        headBiasBytes!=std::size_t(1000)*2)
+        throw std::invalid_argument("ResNet-50 head needs [1000,2048] weights and [1000] bias");
+    std::array<U32,16> headChunks{};
+    auto head=packResNetLinearHead(2048,1000,headWeights,headBias,headChunks);
+    program.constants.insert(program.constants.end(),head.begin(),head.end());
+    if (program.constants.size()!=53177344)
+        throw std::logic_error("ResNet-50 packed constants do not match the measured section extent");
+
+    for (const auto &task:resnetTaskFacts) {
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        for (U32 value:task.header) word(program.task,value);
+        for (U32 index=0;index<task.recordCount;++index) {
+            const auto &record=resnetRecordFacts[task.recordStart+index];
+            const U32 base=resnetRecordBase(record.header);
+            word(program.task,resnetPackagedRecordHeader(record.header));
+            if (base==0x5510)
+                program.kernelRelocations.push_back(program.task.size());
+            for (U32 value=0;value<record.valueCount;++value)
+                word(program.task,resnetRecordValues[record.valueStart+value]);
+        }
+    }
+    if (program.kernelRelocations.size()!=64)
+        throw std::logic_error("ResNet-50 task facts do not expose 64 kernel relocations");
+    program.taskCount=82;
+    program.firstTaskBytes=program.task.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=0x188000;
+    program.formulaBuilt=true;
+    result.programRecordCount=0xa5;
+    result.programFormatCode=0x4c;
+    result.scratchBytes=0x188000;
+    return result;
 }
 Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
                               DramEdgeForm form, U32 scratchRegionBytes) {
@@ -984,5 +2135,765 @@ h13::Program linkMobileNetL2(Generation gen, const std::vector<Layer> &layers,
     out.inputs=programs.front().inputs; out.output=programs.back().output;
     out.formulaBuilt=true;
     return out;
+}
+
+namespace {
+U32 attentionAlign64(U32 value) { return (value+63u)&~63u; }
+constexpr U32 attentionBar(U32 slot) { return taskBar(slot); }
+
+void packAttentionLayoutTask(Task &task) {
+    task.bytes.clear();
+    for (U32 value : task.header) word(task.bytes,value);
+    record(task,{0x5500});
+    record(task,{0x0004,0x0008,0x000c});
+    std::vector<U32> common{0x0014,0x0018,0x001c,0x0030,0x0034,0x003c};
+    if (task.registers.count(0x0040)) common.push_back(0x0040);
+    common.push_back(0x004c);
+    record(task,common);
+    record(task,{0x4d08,0x4d18,0x4d1c});
+    record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4904,0x4910});
+    record(task,{0x5110,0x5114,0x5138});
+    record(task,{0x5900,0x5904,0x5918,0x5928,0x592c});
+    record(task,{0x4d10,0x4d14},attentionBar(6));
+    record(task,{0x5108,0x510c},attentionBar(7));
+    record(task,{0x4d00},0x22000000);
+    record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;
+    store(task.bytes,0,task.header[0]);
+}
+
+Task attentionLayoutTask(U32 tokens,U32 heads,U32 headDimension,
+                         AttentionLayout operation) {
+    const bool split=operation==AttentionLayout::Split;
+    const bool splitTranspose=operation==AttentionLayout::SplitTranspose;
+    const U32 width=heads*headDimension;
+    const U32 widthBytes=2*width;
+    const U32 headRowBytes=2*headDimension;
+    const U32 totalBytes=tokens*widthBytes;
+    const U32 sourceSkew=widthBytes>=1024 ? 0x50 : 0;
+    Task task;
+    task.header={0,0,0x04000068,0,0x68,0,0,0,0x00050009};
+    auto &r=task.registers;
+    r[0x0004]=headDimension;
+    r[0x0008]=split ? tokens : heads;
+    r[0x000c]=split ? heads : tokens;
+    r[0x0014]=headDimension;
+    r[0x0018]=split ? tokens : heads;
+    r[0x001c]=split ? heads : tokens;
+    r[0x0030]=splitTranspose ? 0x84000 : 0x14000;
+    r[0x0034]=split ? 4 : heads;
+    if (split) r[0x003c]=0x160000+(heads/2u)*0x10000;
+    else r[0x003c]=splitTranspose ? 0x30211100 : 0x210000;
+    if (split) {
+        const U32 exponent=heads<=2 ? 6 : heads<=3 ? 6 : heads<=5 ? 5
+                           : heads<=6 ? 4 : 3;
+        r[0x0040]=1u<<exponent;
+    } else if (!splitTranspose) r[0x0040]=0;
+    r[0x004c]=0x100000;
+    r[0x4104]=0x500172; r[0x4108]=0x500130;
+    r[0x4114]=headRowBytes;
+    if (split) {
+        r[0x4118]=widthBytes+sourceSkew;
+        r[0x411c]=widthBytes; r[0x4120]=widthBytes;
+        r[0x414c]=4*r[0x4118];
+    } else {
+        r[0x4118]=tokens*headRowBytes;
+        r[0x411c]=r[0x4118]; r[0x4120]=r[0x4118];
+        r[0x414c]=totalBytes;
+    }
+    r[0x4148]=0x50017a;
+    r[0x4904]=0x103c0c; r[0x4910]=0x3c00;
+    r[0x4d00]=0x21; r[0x4d08]=0xce;
+    r[0x4d10]=0; r[0x4d14]=0;
+    r[0x4d18]=split ? widthBytes
+                  : splitTranspose ? headRowBytes : tokens*headRowBytes;
+    r[0x4d1c]=split ? headRowBytes
+                  : splitTranspose ? widthBytes : headRowBytes;
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031; r[0x5108]=0; r[0x510c]=0;
+    if (splitTranspose) {
+        r[0x5110]=attentionAlign64(2*tokens)*headDimension;
+        r[0x5114]=attentionAlign64(2*tokens);
+    } else if (split) {
+        r[0x5110]=headRowBytes; r[0x5114]=tokens*headRowBytes;
+    } else {
+        r[0x5110]=headRowBytes; r[0x5114]=widthBytes;
+    }
+    r[0x5138]=0x1302031;
+    r[0x5500]=headRowBytes;
+    r[0x5900]=0x12; r[0x5904]=0x00a000a0;
+    r[0x5918]=0; r[0x5928]=0x007f0000; r[0x592c]=0x20010701;
+    packAttentionLayoutTask(task);
+    return task;
+}
+}
+
+std::string attentionLayoutRefusal(U32 tokens,U32 heads,U32 headDimension,
+                                   AttentionLayout operation) {
+    (void)operation;
+    if (!tokens || !heads || !headDimension) return "attention layout dimensions must be nonzero";
+    if (std::uint64_t(tokens)*heads*headDimension*2>std::numeric_limits<U32>::max())
+        return "attention layout surface exceeds the 32-bit packet envelope";
+    if (headDimension%16) return "attention layout head dimension must be a multiple of 16";
+    if (tokens!=128 && tokens!=1500 && tokens!=64 && tokens!=256 && tokens!=512)
+        return "attention layout sequence has neither measured nor held-out coverage";
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionLayout(
+    U32 tokens,U32 heads,U32 headDimension,AttentionLayout operation) {
+    if (auto why=attentionLayoutRefusal(tokens,heads,headDimension,operation);
+        !why.empty()) throw std::invalid_argument(why);
+    Task task=attentionLayoutTask(tokens,heads,headDimension,operation);
+    TransformerAttentionProgram out;
+    out.program.task=streamPrologue(Generation::H16G);
+    out.program.task.insert(out.program.task.end(),task.bytes.begin(),task.bytes.end());
+    out.program.taskCount=1;
+    out.program.firstTaskBytes=task.bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.formulaBuilt=true;
+    out.programRecordCount=3;
+    const U32 baseFormat=heads*11u/2u;
+    out.programFormatCode=baseFormat+
+        (operation==AttentionLayout::SplitTranspose && heads>=8 ? 1u : 0u);
+    out.revealed=tokens==1500 && headDimension==64 && (heads==6 || heads==8);
+    return out;
+}
+
+namespace {
+std::size_t appendAttentionTask(std::vector<std::uint8_t> &stream,Task &task) {
+    stream.resize((stream.size()+15)&~std::size_t(15),0);
+    const std::size_t start=stream.size();
+    stream.insert(stream.end(),task.bytes.begin(),task.bytes.end());
+    return start;
+}
+
+// A standalone PV stages probabilities through fp16 scratch before the matrix
+// engine consumes them.  At S=1500 the normalized values are small enough
+// that the unit-scale staging path loses useful accumulator precision.  A
+// power-of-two scale is exact in fp16: stage P*128 and fold 1/128 into the PV
+// output scale.  The fused path keeps its softmax intermediate resident and
+// therefore retains the captured unit-scale PV tail.
+constexpr U32 pvProbabilityStageScale=0x5800; // fp16 128
+constexpr U32 pvResultScale=0x2000;           // fp16 1/128
+
+void packQKLoad(Task &task) {
+    task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x0044,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24}); record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},attentionBar(6));
+    record(task,{0x5108,0x510c},attentionBar(3));
+    record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16; store(task.bytes,0,task.header[0]);
+}
+
+void packQKCompute(Task &task,bool final,U32 resultFlags=attentionBar(8)) {
+    task.bytes.clear(); for (U32 value:task.header) word(task.bytes,value);
+    word(task.bytes,0); // extended H16 runtime/runtime matmul header
+    record(task,{0x5500,0x5518,0x551c});
+    std::vector<U32> tileTable;
+    for (U32 address=0x5564;address<=0x55dc;address+=4) tileTable.push_back(address);
+    record(task,tileTable);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24}); record(task,{0x4d68});
+    record(task,{0x4104,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});
+    record(task,{0x5114,0x511c,0x5138});
+    if (final) record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x4d10,0x4d14},attentionBar(7));
+    record(task,{0x5108,0x510c},resultFlags);
+    record(task,{0x4d00},0x22000000); record(task,{0x5100},0x22000000);
+    for (U32 lane=0;lane<16;++lane)
+        record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16 | (task.header[0]&0xffff);
+    store(task.bytes,0,task.header[0]);
+}
+
+Task qkLoadTask(U32 tokens,U32 heads,U32 headDimension) {
+    Task task; task.header={0,0,0x68,0,0x00fff868,0,0,0,1};
+    auto &r=task.registers; const U32 rowBytes=2*headDimension;
+    const U32 planeBytes=tokens*rowBytes;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    r[4]=headDimension;r[8]=1;r[12]=tokens;
+    r[0x14]=headDimension;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x20;r[0x44]=6;r[0x4c]=0;
+    r[0x4104]=0x500172;r[0x4108]=0x500130;r[0x4114]=rowBytes;
+    r[0x4118]=planeBytes;r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x50087a;r[0x414c]=planeBytes;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=rowBytes;r[0x4d24]=planeBytes;r[0x4d68]=0x1002031;
+    r[0x5100]=0x10000f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=0x400;r[0x511c]=paddedRow*headDimension;
+    r[0x5138]=0x8302031;packQKLoad(task);return task;
+}
+
+Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) {
+    Task task; task.header={stage,0,final?0x04000000u:0u,0,
+        final?0x00fff860u:0x00fff820u,0,0,0,
+        final?0x0005000bu:0x00050003u};
+    auto &r=task.registers; const U32 headPairs=(heads+1)/2;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 halfPaddedPlane=paddedRow*headDimension/2;
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=headDimension;
+    r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=headPairs;r[0x34]=1;r[0x3c]=0x20200000;r[0x4c]=0x100000;
+    r[0x4104]=final?0x142:0x100142;r[0x4114]=0x100;
+    r[0x4118]=0x4000;r[0x411c]=0x4000;r[0x4120]=0x4000;
+    r[0x4148]=0x14a;r[0x414c]=0x4000;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x4d00]=(stage<<16)|0x21;r[0x4d08]=0xce;
+    r[0x4d10]=final?0:heads*halfPaddedPlane;r[0x4d14]=0;
+    r[0x4d1c]=paddedRow;r[0x4d24]=paddedRow*headDimension;
+    r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031|(stage<<16);r[0x5108]=final?0:heads*scorePlane/2;
+    r[0x510c]=0;r[0x5114]=paddedRow;r[0x511c]=scorePlane;
+    r[0x5138]=0x1302031;
+    r[0x5500]=final?0x302c0:0x20240;r[0x5510]=final?0:heads*halfPaddedPlane;
+    r[0x5514]=0;r[0x5518]=paddedRow*headDimension;r[0x551c]=0x4000;
+    for (U32 lane=0;lane<15;++lane) r[0x5564+4*lane]=(lane+1)*0x400;
+    for (U32 lane=0;lane<16;++lane) r[0x55a0+4*lane]=0x400;
+    for (U32 lane=0;lane<16;++lane)
+        r[0x5520+4*lane]=(stage<<16)|(final?0x41:0xc1);
+    if (final) {
+        r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x200e0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;
+    }
+    packQKCompute(task,final);return task;
+}
+
+Task qkTransposeStageTask(U32 tokens,U32 heads,U32 headDimension) {
+    const bool shortSchedule=heads==6;
+    Task task;task.header={1,0,0,0,shortSchedule?0x28u:0x20u,0,0,
+        shortSchedule?0x0003ffffu:0x00ffffffu,0x00050001};
+    auto &r=task.registers;const U32 rowBytes=2*headDimension;
+    const U32 planeBytes=tokens*rowBytes;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 paddedPlane=paddedRow*headDimension;
+    r[4]=headDimension;r[8]=1;r[12]=tokens;r[0x14]=headDimension;
+    r[0x18]=1;r[0x1c]=tokens;r[0x24]=heads;r[0x30]=0x84000;
+    r[0x34]=1;r[0x3c]=0x30211100;r[0x4c]=0x100000;
+    r[0x4104]=0x142;r[0x4110]=heads*paddedPlane;r[0x4114]=rowBytes;
+    r[0x4118]=planeBytes;r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x400140;r[0x4150]=paddedRow;r[0x415c]=paddedPlane;
+    r[0x4904]=0x103c0c;r[0x4910]=0x3c00;
+    r[0x4d00]=0x10021;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=rowBytes;r[0x4d24]=planeBytes;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0030,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x4150,0x415c});record(task,{0x4904,0x4910});
+    record(task,{0x4d10,0x4d14},attentionBar(7));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|1;store(task.bytes,0,task.header[0]);
+    return task;
+}
+
+Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
+                            U32 stage,bool final) {
+    const bool shortSchedule=heads==6;
+    Task task;task.header={stage,0,final?0x04000000u:0u,0,
+        shortSchedule?0x28u:(final?0x00fff860u:0x00fff820u),0,0,
+        final?0u:(shortSchedule?0x0003ffffu:0x00ffffffu),
+        final?0x0005000bu:0x00050003u};
+    auto &r=task.registers;const U32 pairs=(heads+1)/2;
+    const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 paddedPlane=paddedRow*headDimension;
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=headDimension;r[0x14]=tokens;
+    r[0x18]=1;r[0x1c]=tokens;r[0x24]=pairs;r[0x34]=1;
+    r[0x3c]=0x20200000;r[0x4c]=0x100000;
+    if (!final) {r[0x4104]=0x120;r[0x4110]=heads*paddedPlane/2;}
+    r[0x4114]=paddedRow;r[0x4120]=paddedPlane;
+    r[0x4148]=0x14a;r[0x414c]=heads*paddedPlane;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x5100]=0x01000031|(stage<<16);
+    r[0x5108]=final?0:heads*scorePlane/2;r[0x510c]=0;
+    r[0x5114]=paddedRow;r[0x511c]=scorePlane;r[0x5138]=0x1302031;
+    r[0x5500]=final?0x402c0:0x30240;r[0x5510]=final?0:heads*paddedPlane/2;
+    r[0x5514]=0;r[0x5518]=paddedPlane;r[0x551c]=0x4000;
+    for(U32 lane=0;lane<15;++lane)r[0x5564+4*lane]=(lane+1)*0x400;
+    for(U32 lane=0;lane<16;++lane)r[0x55a0+4*lane]=0x400;
+    for(U32 lane=0;lane<16;++lane)
+        r[0x5520+4*lane]=(stage<<16)|(final?0x41:0xc1);
+    if(final){r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x300e0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;}
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);word(task.bytes,0);
+    record(task,{0x5500,0x5518,0x551c});
+    std::vector<U32> table;for(U32 a=0x5564;a<=0x55dc;a+=4)table.push_back(a);record(task,table);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0034,0x003c,0x004c});
+    if(!final)record(task,{0x4104,0x4110,0x4114,0x4120});
+    else record(task,{0x4114,0x4120,0x4148,0x414c});
+    if(!final)record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
+    if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x5108,0x510c},attentionBar(8));record(task,{0x5100},0x22000000);
+    for(U32 lane=0;lane<16;++lane)record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|stage;store(task.bytes,0,task.header[0]);
+    return task;
+}
+
+Task pvLoadTask(U32 tokens,U32 heads) {
+    Task task;task.header={0,0,0x68,0,0x68,0,0,0,0x00050001};
+    auto &r=task.registers;const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=tokens;r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x30]=0x14000;r[0x34]=1;r[0x3c]=0x200000;
+    r[0x40]=0;r[0x4c]=0x100000;
+    r[0x4104]=0x500172;r[0x4108]=0x500130;r[0x4114]=0x100;
+    r[0x4118]=tokens*0x100;r[0x411c]=tokens*0x100;r[0x4120]=tokens*0x100;
+    r[0x4148]=0x50087a;r[0x414c]=tokens*0x100;
+    r[0x4904]=0x103c0c;r[0x4910]=pvProbabilityStageScale;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=paddedRow;r[0x4d24]=scorePlane;r[0x4d68]=0x1002031;
+    r[0x5100]=0x10000f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=tokens*16;r[0x511c]=scorePlane;r[0x5138]=0x8302031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0024,0x0030,0x0034,0x003c,0x0040,0x004c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4904,0x4910});record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x5108,0x510c},attentionBar(3));
+    record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
+                bool fused=false) {
+    const bool final=stage==heads;const U32 rowBytes=2*headDimension;
+    const U32 taskIndex=fused?10+stage:stage;
+    const U32 planeBytes=tokens*rowBytes;const U32 paddedRow=attentionAlign64(2*tokens);
+    const U32 scorePlane=tokens*paddedRow;const U32 remaining=heads-stage;
+    Task task;task.header={taskIndex,0,final?0x04000000u:0u,0,
+        heads==6?0x28u:(final?0x00fff860u:0x00fff820u),0,0,0,
+        final?0x0005000bu:0x00050003u};auto &r=task.registers;
+    r[4]=headDimension;r[8]=1;r[12]=tokens;r[0x14]=headDimension;
+    r[0x18]=1;r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x20200004;r[0x4c]=0x100000;
+    r[0x4104]=0x142|(fused&&stage==1?0x100000:0);r[0x4114]=rowBytes;r[0x4118]=planeBytes;
+    r[0x411c]=planeBytes;r[0x4120]=planeBytes;
+    r[0x4148]=0x14a|(fused&&stage==1&&heads==8?0x100000:0);r[0x414c]=planeBytes;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;
+    r[0x4910]=fused ? 0x3c00 : pvResultScale;
+    r[0x4d00]=(taskIndex<<16)|0x21;r[0x4d08]=0xce;r[0x4d10]=remaining*planeBytes;
+    r[0x4d14]=0;r[0x4d1c]=rowBytes;r[0x4d68]=0x1002031;
+    r[0x5100]=0x01000031|(taskIndex<<16);r[0x5108]=remaining*planeBytes;
+    r[0x510c]=0;r[0x5114]=rowBytes;r[0x5138]=0x1302031;
+    r[0x5500]=((taskIndex+1)<<16)|(final?0x2c0:0x240);
+    r[0x5510]=remaining*scorePlane;r[0x5514]=0;r[0x551c]=2*planeBytes;
+    const U32 tileBytes=tokens*16;
+    for(U32 lane=0;lane<15;++lane)r[0x5564+4*lane]=(lane+1)*tileBytes;
+    for(U32 lane=0;lane<16;++lane)r[0x55a0+4*lane]=tileBytes;
+    for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=(taskIndex<<16)|(final?0x41:0xc1);
+    if(final){r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=(taskIndex<<16)|0xe0;
+        r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;}
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);word(task.bytes,fused?0x0a:0);
+    record(task,{0x5500,0x551c});std::vector<U32> table;
+    for(U32 a=0x5564;a<=0x55dc;a+=4)table.push_back(a);record(task,table);
+    record(task,{0x0004,0x0008,0x000c});
+    record(task,{0x0014,0x0018,0x001c,0x0034,0x003c,0x004c});
+    record(task,{0x4d08,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5114,0x5138});
+    if(final)record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x5510,0x5514},attentionBar(3));
+    record(task,{0x4d10,0x4d14},attentionBar(fused ? 8 : 7));
+    record(task,{0x5108,0x510c},attentionBar(fused ? 9 : 8));
+    record(task,{0x4d00},0x22000000);
+    record(task,{0x5100},0x22000000);for(U32 lane=0;lane<16;++lane)
+        record(task,{0x5520+4*lane},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|taskIndex;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedQKLoadTask(U32 tokens,U32 heads,U32 headDimension) {
+    Task task=qkLoadTask(tokens,heads,headDimension);auto &r=task.registers;
+    const U32 scorePlane=tokens*attentionAlign64(2*tokens);
+    task.header[4]=heads==6?0x68:0x00fff868;r[0x4508]=0x3e000000;
+    r[0x5108]=heads*scorePlane;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4108});record(task,{0x4114,0x4118,0x411c,0x4120,0x4148,0x414c});
+    record(task,{0x4508});record(task,{0x5114,0x511c,0x5138});
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x5108,0x510c},attentionBar(3));
+    record(task,{0x4d00},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedQKComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage) {
+    Task task=qkComputeTask(tokens,heads,headDimension,stage,false);auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    const U32 halfPaddedPlane=paddedRow*headDimension/2;
+    task.header[4]=heads==6?0x28:0x00fff820;
+    r[0x4148]=0x44a;r[0x5100]=0x010000f1|(stage<<16);
+    r[0x5114]=4*paddedRow;r[0x5138]=0x04302031;
+    r[0x5500]=((stage+1)<<16)|0x240;
+    r[0x5510]=heads*(scorePlane+(stage==1?halfPaddedPlane:0));
+    if(stage==2){r[0x4104]=0x142;r[0x4d10]=0;r[0x5108]=0;
+        for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=(stage<<16)|0x41;}
+    packQKCompute(task,false,attentionBar(3));return task;
+}
+
+Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
+    Task task;task.header={index,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};
+    auto &r=task.registers;const U32 channels=index==3?348:384;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=channels;r[0x14]=tokens;r[0x18]=1;r[0x1c]=channels;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
+    r[0x4100]=4;r[0x4104]=index==3?0x400442:0x442;r[0x4110]=heads*tokens*16;
+    r[0x4114]=1024;r[0x4118]=index==3?0x57000:0x60000;
+    r[0x411c]=r[0x4118];r[0x4120]=r[0x4118];
+    if(index==3)r[0x4148]=0x120;
+    if(index<=5)r[0x414c]=index==3?0x4800:index==4?0x3000:0x1800;
+    r[0x4150]=16;r[0x415c]=tokens*16;r[0x4500]=2;
+    const U32 begins[]={0,0,0,0x100300c1,0x11040021,0x12050021,0x130600e1};
+    const U32 offsets[]={0,0,0,0x34e000,0x234000,0x11a000,0};
+    r[0x4d00]=begins[index];r[0x4d08]=index==6?0xee:0xce;
+    r[0x4d10]=offsets[index];r[0x4d14]=0;r[0x4d1c]=4*paddedRow;
+    r[0x4d24]=scorePlane;r[0x4d68]=0x4002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4100,0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    std::vector<U32> l2;
+    if(r.count(0x4148))l2.push_back(0x4148);if(r.count(0x414c))l2.push_back(0x414c);
+    l2.push_back(0x4150);l2.push_back(0x415c);record(task,l2);record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxMaxTask(U32 tokens,U32 heads) {
+    Task task;task.header={7,0,0,0,heads==6?0x28u:0x00fff820u,0,0,0,0};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
+    r[0x34]=heads;r[0x3c]=0x30;r[0x44]=0x34;r[0x48]=16;r[0x4c]=0;
+    r[0x4104]=0x442;r[0x4108]=0x400100;r[0x4110]=heads*tokens*48;
+    r[0x4114]=32;r[0x4118]=tokens*32;r[0x411c]=tokens*32;r[0x4120]=tokens*32;
+    r[0x4128]=16;r[0x412c]=tokens*16;r[0x4148]=0x103;r[0x414c]=heads*tokens*16;
+    r[0x4150]=32;r[0x4154]=tokens*32;r[0x4158]=tokens*32;r[0x415c]=tokens*32;
+    r[0x4500]=0xc0000;r[0x4508]=0x3fb8a000;r[0x4d00]=0x14070041;
+    r[0x4d08]=0x4e;r[0x4d10]=0;r[0x4d14]=0;r[0x4d18]=scorePlane;
+    r[0x4d1c]=4*paddedRow;r[0x4d68]=0x4002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});record(task,{0x4500,0x4508});
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|7;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxExpTask(U32 tokens,U32 heads) {
+    Task task;task.header={8,0,0,0,heads==6?0x28u:0x00fff820u,0,0,
+        (1u<<(heads+1))-1,0x00050001};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
+    r[0x30]=0x14000;r[0x34]=heads;r[0x3c]=0x233300;r[0x40]=0;r[0x4c]=0x100000;
+    r[0x4104]=0x103;r[0x4110]=heads*tokens*16;r[0x4114]=32;
+    r[0x4118]=tokens*32;r[0x411c]=tokens*32;r[0x4120]=tokens*32;
+    r[0x4148]=0x142;r[0x414c]=heads*tokens*80;r[0x4150]=64;
+    r[0x4154]=tokens*64+16;r[0x4158]=tokens*64;r[0x415c]=tokens*64;
+    r[0x4900]=0x10082;r[0x4904]=0x123c0c;r[0x4910]=0x3c00;
+    r[0x5100]=0x800f1;r[0x5104]=0x2c000033;r[0x5108]=heads*scorePlane;
+    r[0x510c]=0;r[0x5110]=paddedRow;r[0x5114]=heads*paddedRow;r[0x5138]=0x1302031;
+    r[0x5500]=0x90240;for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=0x80020;
+    r[0x5610]=0x80021;r[0x5614]=128;r[0x5618]=0;r[0x561c]=0;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    std::vector<U32> first{0x5500};for(U32 a=0x5520;a<=0x5540;a+=4)first.push_back(a);record(task,first);
+    std::vector<U32> second;for(U32 a=0x5544;a<=0x555c;a+=4)second.push_back(a);record(task,second);
+    record(task,{0x5610,0x5614});record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x40,0x4c});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5104,0x5110,0x5114,0x5138});
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},attentionBar(10));
+    record(task,{0x5108,0x510c},attentionBar(3));record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|8;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxSumTask(U32 tokens,U32 heads) {
+    Task task;task.header={9,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
+    r[0x4104]=0x152;r[0x4110]=heads*tokens*16;r[0x4114]=1024;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4150]=16;r[0x415c]=heads*16;r[0x4500]=0x1000;
+    r[0x4d00]=0x10090021;r[0x4d08]=0xce;r[0x4d10]=heads*scorePlane;
+    r[0x4d14]=0;r[0x4d1c]=paddedRow;r[0x4d24]=heads*paddedRow;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|9;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task fusedSoftmaxNormalizeTask(U32 tokens,U32 heads) {
+    Task task;task.header={10,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=tokens;r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
+    r[0x24]=heads;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=1;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x162;r[0x4114]=heads*16;r[0x4120]=16;
+    r[0x4124]=heads*tokens*16;r[0x4128]=1024;r[0x412c]=tokens*1024;
+    r[0x4130]=tokens*1024;r[0x4134]=tokens*1024;r[0x4148]=0x84a;
+    r[0x414c]=tokens*1024+heads*tokens*16;r[0x4500]=0x80004;
+    r[0x4d04]=0x110a0041;r[0x4d0c]=0x4e;r[0x4d28]=heads*scorePlane;
+    r[0x4d2c]=0;r[0x4d34]=heads*paddedRow;r[0x4d3c]=paddedRow;r[0x4d6c]=0x1002031;
+    r[0x5100]=0x010a00f1;r[0x5104]=0x11000033;r[0x5108]=0;r[0x510c]=0;
+    r[0x5114]=tokens*16;r[0x511c]=scorePlane;r[0x5138]=0x8302031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c,0x4d34,0x4d3c});record(task,{0x4d6c});
+    record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4120,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
+    record(task,{0x4500});record(task,{0x5104,0x5114,0x511c,0x5138});
+    record(task,{0x4d28,0x4d2c},attentionBar(3));record(task,{0x5108,0x510c},attentionBar(3));
+    record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|10;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxSetupTask(U32 tokens,U32 heads) {
+    // The five-task standalone program keeps the captured serialized schedule
+    // for every head count.  The 0x68/0x28 form belongs to softmax inside the
+    // much larger fused/full-model schedule; using it here wedges EXECUTE.
+    Task task;task.header={0,0,0x68,0,0x00fff868,0,0,7,1};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
+    r[0x4100]=4;r[0x4104]=0x500172;r[0x4108]=0x500130;
+    r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4148]=0x500130;r[0x4150]=2*heads;r[0x415c]=16*heads;r[0x4500]=2;
+    r[0x4d00]=0x21;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d1c]=scorePlane;r[0x4d24]=paddedRow;r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d1c,0x4d24});record(task,{0x4d68});
+    record(task,{0x4100,0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4148,0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},attentionBar(6));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxMaxTask(U32 tokens,U32 heads) {
+    Task task;task.header={1,0,0,0,0x00fff820,0,0,0,0};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x34]=tokens;r[0x3c]=0x30;r[0x44]=0x44;r[0x48]=2*heads;r[0x4c]=0;
+    r[0x4104]=0x142;r[0x4108]=0x400100;r[0x4110]=heads*tokens*50;
+    r[0x4114]=8*heads;r[0x4118]=66*heads;r[0x411c]=64*heads;r[0x4120]=64*heads;
+    r[0x4128]=2*heads;r[0x412c]=16*heads;r[0x4148]=0x103;
+    r[0x414c]=heads*tokens*16;r[0x4150]=4*heads;r[0x4154]=34*heads;
+    r[0x4158]=32*heads;r[0x415c]=32*heads;r[0x4500]=heads*0x18000;
+    r[0x4508]=0x3fb8a000;r[0x4d00]=0x100c1;r[0x4d08]=0xce;
+    r[0x4d10]=0;r[0x4d14]=0;r[0x4d18]=paddedRow;r[0x4d1c]=scorePlane;
+    r[0x4d68]=0x1002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d08,0x4d18,0x4d1c});record(task,{0x4d68});
+    record(task,{0x4104,0x4108,0x4110,0x4114,0x4118,0x411c,0x4120,0x4128,0x412c});
+    record(task,{0x4148,0x414c,0x4150,0x4154,0x4158,0x415c});
+    record(task,{0x4500,0x4508});record(task,{0x4d10,0x4d14},attentionBar(6));
+    record(task,{0x4d00},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|1;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxExpTask(U32 tokens,U32 heads) {
+    // The captured H=8 dependency mask is 0x3ff: two fixed predecessors plus
+    // one completion per head.  Keeping that literal for H=6 waits for two
+    // completions which can never be produced and wedges EXECUTE.
+    const U32 dependencyMask=(U32(1)<<(heads+2))-1;
+    Task task;task.header={2,0,0,0,0x00fff820,0,0,
+        dependencyMask,0x00050001};auto &r=task.registers;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x30]=0x14000;r[0x34]=tokens;r[0x3c]=0x1c4400;r[0x40]=heads;r[0x4c]=0x100000;
+    r[0x4104]=0x103;r[0x4110]=heads*tokens*16;r[0x4114]=4*heads;
+    r[0x4118]=34*heads;r[0x411c]=32*heads;r[0x4120]=32*heads;
+    r[0x4148]=0x84a;r[0x414c]=heads*174000;
+    r[0x4900]=0x10082;r[0x4904]=0x123c0c;r[0x4910]=0x3c00;
+    r[0x5100]=0x010200f1;r[0x5108]=0;r[0x510c]=0;
+    r[0x5110]=tokens*16;r[0x5138]=0x8302031;
+    r[0x5500]=0x30240;for(U32 lane=0;lane<16;++lane)r[0x5520+4*lane]=0x20020;
+    r[0x5610]=0x20021;r[0x5614]=128;r[0x5618]=0;r[0x561c]=0;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    std::vector<U32> first{0x5500};for(U32 a=0x5520;a<=0x5540;a+=4)first.push_back(a);record(task,first);
+    std::vector<U32> second;for(U32 a=0x5544;a<=0x555c;a+=4)second.push_back(a);record(task,second);
+    record(task,{0x5610,0x5614});record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x40,0x4c});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});record(task,{0x4148,0x414c});
+    record(task,{0x4900,0x4904,0x4910});record(task,{0x5110,0x5138});
+    task.kernelRelocation=task.bytes.size()+4;record(task,{0x5618,0x561c},attentionBar(8));
+    record(task,{0x5108,0x510c},attentionBar(3));record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|2;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxSumTask(U32 tokens,U32 heads) {
+    Task task;task.header={3,0,0,0,0x00fff820,0,0,7,1};auto &r=task.registers;
+    r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
+    r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
+    r[0x4104]=0x852;r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
+    r[0x4118]=heads*1024;r[0x411c]=heads*1024;r[0x4120]=heads*1024;
+    r[0x4150]=2*heads;r[0x415c]=16*heads;r[0x4500]=0x1000;
+    r[0x4d00]=0x10030021;r[0x4d08]=0xce;r[0x4d10]=0;r[0x4d14]=0;
+    r[0x4d24]=tokens*16;r[0x4d68]=0x8002031;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
+    record(task,{0x4d08,0x4d24});record(task,{0x4d68});
+    record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    record(task,{0x4150,0x415c});record(task,{0x4500});
+    record(task,{0x4d10,0x4d14},attentionBar(3));record(task,{0x4d00},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|3;store(task.bytes,0,task.header[0]);return task;
+}
+
+Task softmaxNormalizeTask(U32 tokens,U32 heads) {
+    Task task;task.header={4,0,0x04000000,0,0x00fff860,0,0,0,9};auto &r=task.registers;
+    const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
+    r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
+    r[0x34]=4*heads;r[0x3c]=0x30;r[0x44]=heads+1;r[0x48]=1;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x842;r[0x4114]=2*heads;r[0x4118]=16*heads;
+    r[0x4124]=heads*tokens*16;r[0x4128]=heads*128;r[0x412c]=heads*1024;
+    r[0x4130]=heads*1024;r[0x4134]=heads*1024;r[0x4148]=0x14a;
+    r[0x414c]=heads*56768;r[0x4500]=0x80004;
+    r[0x4d04]=0x21040041;r[0x4d0c]=0x4e;r[0x4d28]=0;r[0x4d2c]=0;
+    r[0x4d30]=tokens*16;r[0x4d6c]=0x8002031;
+    r[0x5100]=0x01040031;r[0x5108]=0;r[0x510c]=0;r[0x5110]=paddedRow;
+    r[0x5114]=scorePlane;r[0x5138]=0x1302031;r[0x5500]=128;
+    r[0x5900]=0x12;r[0x5904]=0x00a000a0;r[0x5908]=0x400e0;
+    r[0x5918]=0;r[0x5928]=0x007f0000;r[0x592c]=0x20010701;
+    task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);record(task,{0x5500});
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c,0x4d30});record(task,{0x4d6c});record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
+    record(task,{0x4500});record(task,{0x5110,0x5114,0x5138});
+    record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
+    record(task,{0x4d28,0x4d2c},attentionBar(3));record(task,{0x5108,0x510c},attentionBar(7));
+    record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
+    task.header[0]=U32(task.bytes.size()/4)<<16|4;store(task.bytes,0,task.header[0]);return task;
+}
+}
+
+std::string attentionMatmulRefusal(U32 tokens,U32 heads,U32 headDimension,
+                                   AttentionMatmul operation) {
+    (void)operation;
+    if (auto why=attentionLayoutRefusal(tokens,heads,headDimension,
+        AttentionLayout::Split);!why.empty()) return why;
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionMatmul(
+    U32 tokens,U32 heads,U32 headDimension,AttentionMatmul operation) {
+    if (auto why=attentionMatmulRefusal(tokens,heads,headDimension,operation);
+        !why.empty()) throw std::invalid_argument(why);
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    Task load=operation==AttentionMatmul::PV ? pvLoadTask(tokens,heads)
+                                             : qkLoadTask(tokens,heads,headDimension);
+    appendAttentionTask(out.program.task,load);
+    if(operation==AttentionMatmul::QK){
+        Task compute=qkComputeTask(tokens,heads,headDimension,1,false);
+        Task store=qkComputeTask(tokens,heads,headDimension,2,true);
+        appendAttentionTask(out.program.task,compute);appendAttentionTask(out.program.task,store);
+        out.program.taskCount=3;out.programRecordCount=7;
+        out.programFormatCode=heads==6?209:heads==8?278:35*heads-1;
+    }else if(operation==AttentionMatmul::QKTransposeY){
+        if(heads==6){load.header[4]=0x68;store(load.bytes,16,0x68);}
+        out.program.task=streamPrologue(Generation::H16G);appendAttentionTask(out.program.task,load);
+        Task transpose=qkTransposeStageTask(tokens,heads,headDimension);
+        Task compute=qkTransposeComputeTask(tokens,heads,headDimension,2,false);
+        Task store=qkTransposeComputeTask(tokens,heads,headDimension,3,true);
+        appendAttentionTask(out.program.task,transpose);appendAttentionTask(out.program.task,compute);
+        appendAttentionTask(out.program.task,store);out.program.taskCount=4;
+        out.programRecordCount=9;out.programFormatCode=heads==6?200:heads==8?266:33*heads+2;
+    }else{
+        for(U32 stage=1;stage<=heads;++stage){Task head=pvHeadTask(tokens,heads,headDimension,stage);
+            appendAttentionTask(out.program.task,head);}
+        out.program.taskCount=heads+1;out.programRecordCount=2*heads+3;
+        out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
+    }
+    out.program.firstTaskBytes=load.bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.scratchAllocationBytes=operation==AttentionMatmul::PV
+        ? heads*tokens*attentionAlign64(2*tokens)
+        : heads*attentionAlign64(2*tokens)*headDimension;
+    out.scratchBytes=out.program.scratchAllocationBytes;
+    out.program.formulaBuilt=true;
+    out.revealed=tokens==1500&&headDimension==64&&(heads==6||heads==8);
+    return out;
+}
+
+std::string attentionSoftmaxRefusal(U32 tokens,U32 heads) {
+    if(tokens!=1500 || heads!=8)
+        return "standalone softmax requires the measured S=1500, H=8 form";
+    return {};
+}
+
+TransformerAttentionProgram encodeAttentionSoftmax(U32 tokens,U32 heads) {
+    if(auto why=attentionSoftmaxRefusal(tokens,heads);!why.empty())
+        throw std::invalid_argument(why);
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    Task tasks[]={softmaxSetupTask(tokens,heads),softmaxMaxTask(tokens,heads),
+        softmaxExpTask(tokens,heads),softmaxSumTask(tokens,heads),
+        softmaxNormalizeTask(tokens,heads)};
+    for(Task &task:tasks){const std::size_t start=appendAttentionTask(out.program.task,task);
+        if(task.kernelRelocation)out.program.kernelRelocations.push_back(start+task.kernelRelocation);}
+    out.program.taskCount=5;out.program.firstTaskBytes=tasks[0].bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    out.program.scratchAllocationBytes=std::uint64_t(heads)*tokens*tokens*2;
+    out.scratchBytes=out.program.scratchAllocationBytes;
+    out.program.formulaBuilt=true;out.programRecordCount=11;
+    out.programFormatCode=heads==8?1054:132*heads-1;
+    out.revealed=tokens==1500&&heads==8;return out;
+}
+
+TransformerAttentionProgram encodeFusedAttention(
+    U32 tokens,U32 heads,U32 headDimension) {
+    if(auto why=attentionMatmulRefusal(tokens,heads,headDimension,
+        AttentionMatmul::PV);!why.empty())throw std::invalid_argument(why);
+    if(tokens!=1500 || headDimension!=64 || (heads!=6 && heads!=8))
+        throw std::invalid_argument("fused attention is limited to measured Whisper geometry");
+    TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
+    std::vector<Task> tasks;tasks.push_back(fusedQKLoadTask(tokens,heads,headDimension));
+    tasks.push_back(fusedQKComputeTask(tokens,heads,headDimension,1));
+    tasks.push_back(fusedQKComputeTask(tokens,heads,headDimension,2));
+    for(U32 index=3;index<=6;++index)tasks.push_back(fusedSoftmaxTileTask(tokens,heads,index));
+    tasks.push_back(fusedSoftmaxMaxTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxExpTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxSumTask(tokens,heads));
+    tasks.push_back(fusedSoftmaxNormalizeTask(tokens,heads));
+    for(U32 stage=1;stage<=heads;++stage)
+        tasks.push_back(pvHeadTask(tokens,heads,headDimension,stage,true));
+    for(std::size_t index=0;index<tasks.size();++index) {
+        Task &task=tasks[index];const std::size_t start=appendAttentionTask(out.program.task,task);
+        if(index==8)out.program.kernelRelocations.push_back(start+task.kernelRelocation);
+    }
+    out.program.taskCount=U32(tasks.size());out.program.firstTaskBytes=tasks[0].bytes.size();
+    out.program.constantOffsetBytes=(out.program.task.size()+63)&~std::size_t(63);
+    // The operation exposes one padded score surface, while the captured
+    // fused program allocates two complete score surfaces for the engine's
+    // implicit ping-pong walk.  Q staging starts at the first surface's end
+    // and fits inside that second half.  Allocating only score+Q made the
+    // visible bases look bounded but left the implicit second score walk
+    // outside the mapped __DATA segment.
+    const std::uint64_t paddedRow=attentionAlign64(2*tokens);
+    out.scratchBytes=std::uint64_t(heads)*paddedRow*tokens;
+    out.program.scratchAllocationBytes=2*out.scratchBytes;
+    out.program.formulaBuilt=true;
+    out.programRecordCount=2*heads+23;out.programFormatCode=heads==6?791:heads==8?1054:132*heads-1;
+    out.revealed=headDimension==64&&(heads==6||heads==8);return out;
 }
 }

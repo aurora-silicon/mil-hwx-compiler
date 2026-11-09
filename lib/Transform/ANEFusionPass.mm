@@ -84,6 +84,20 @@ static NSUInteger peakLiveBytes(NSArray<ANEOperationNode *> *nodes,
     return peak;
 }
 
+static BOOL hasRank3FusedGELU(NSArray<ANEOperationNode *> *nodes) {
+    NSSet<ANEOperationNode *> *members=[NSSet setWithArray:nodes];
+    for (ANEOperationNode *node in nodes) {
+        if (![node.operationName isEqualToString:@"gelu"] ||
+            node.inputs.count!=1) continue;
+        ANEOperationNode *producer=node.inputs.firstObject;
+        if ([members containsObject:producer] &&
+            producer.outputType.shape.count==3 &&
+            (producer.kind==ANEOperationKindConv ||
+             [producer.operationName isEqualToString:@"linear"])) return YES;
+    }
+    return NO;
+}
+
 @implementation ANEFusionPass
 + (BOOL)runOnGraph:(ANEOperationGraph *)graph
              target:(H16GTarget *)target
@@ -117,7 +131,8 @@ static NSUInteger peakLiveBytes(NSArray<ANEOperationNode *> *nodes,
     for (NSNumber *root in roots) {
         NSArray<ANEOperationNode *> *members = groups[root];
         NSArray<NSArray<ANEOperationNode *> *> *pieces;
-        if (peakLiveBytes(members, outputs) <= target.workingSetBytes) {
+        if (peakLiveBytes(members, outputs) <= target.workingSetBytes ||
+            hasRank3FusedGELU(members)) {
             pieces = @[members];
         } else {
             NSMutableArray<NSArray<ANEOperationNode *> *> *singletons =
