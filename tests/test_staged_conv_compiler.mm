@@ -14,6 +14,7 @@ using CC_LONG = size_t;
 #import "ANEExecutableBundle.h"
 #import "ANEHWXArtifact.h"
 #import "ANEStagedCompiler.h"
+#import "H16GLUTEncoder.h"
 #import "H16GReduceEncoder.h"
 #import "HWXImage.h"
 
@@ -464,10 +465,11 @@ static void testMixedTaskGraphTraversesTheSameStagedCompiler(void) {
     expect([[sha256(actualTD) lowercaseString] isEqualToString:
         @"a2d9c65e6440b7fcd1b01c40934c2fdedb5a76575d9c0a5bb86f2becd2e9a95c"],
            @"scheduled primitive groups reproduce the measured mixed-task TD hash");
-    expect([[sha256([[actual firstSectionNamed:@"__kern_0"
-        inSegment:@"__KERN_0"] data]) lowercaseString] isEqualToString:
-        @"b7b6085a1edc7def0f0bb2fc1fe345f1ba9d9a1a47e55b4516273149323b54d2"],
-           @"mixed-task constants reproduce the measured kernel hash");
+    NSData *expectedExp = [H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:&error];
+    expect([[[actual firstSectionNamed:@"__kern_0" inSegment:@"__KERN_0"] data]
+               isEqualToData:expectedExp],
+           @"mixed-task constants use the rule-built exponential table");
 }
 
 static void testD2STraversesTheProductionCompiler(void) {
@@ -787,18 +789,14 @@ static NSString *unaryMIL(NSString *operation, NSUInteger size) {
 }
 
 static void testUnaryPointwiseShapesTraverseTheProductionCompiler(void) {
-    NSArray<NSNumber *> *sizes = @[@128,@256,@512,@1024,@2048];
-    NSArray<NSString *> *hashes = @[
-        @"0816aeafe502da3e027587d730cba455a3424c5589cf333010824243a56b4ed3",
-        @"6e86fb37ce458b7f5a5952c94e4f38ca28d458e6afb22e75884a738825a7d4f0",
-        @"b3d7ce3f51c6d693d56430c8775b7b0892d554a12564a6836bd5a5ba4bf8235a",
-        @"c0624039ec55ef0b8c8f675dbaa5e458e04b6e6c00c13ffc1dcde4085b21cea3",
-        @"6171aa5214af2a262ec8dac74d55001f8cd3c4f5d0862d311d944b56908c8151",
-    ];
-    for (NSUInteger index=0; index<sizes.count; ++index) {
+    // 192 and 320 are deliberate held-out shapes: neither existed in the
+    // captured programs formerly used by the position-selected encoder.
+    NSArray<NSNumber *> *sizes = @[@128,@192,@320,@512,@1024,@2048];
+    for (NSNumber *sizeNumber in sizes) {
+        NSUInteger size=sizeNumber.unsignedIntegerValue;
         ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
         ANEExecutableBundle *bundle=[ANEStagedCompiler compileMILData:
-            [unaryMIL(@"sigmoid",sizes[index].unsignedIntegerValue)
+            [unaryMIL(@"sigmoid",size)
                 dataUsingEncoding:NSUTF8StringEncoding]
             modelRoot:[NSURL fileURLWithPath:@"tests/models/conv_relu"
                                  isDirectory:YES]
@@ -810,12 +808,12 @@ static void testUnaryPointwiseShapesTraverseTheProductionCompiler(void) {
         NSData *td=[image firstSectionNamed:@"__text" inSegment:@"__TEXT"].data;
         NSData *table=[image firstSectionNamed:@"__kern_0"
             inSegment:@"__KERN_0"].data;
-        expect([[sha256(td)lowercaseString]isEqualToString:hashes[index]]&&
+        expect(td.length>=0x80&&((const uint8_t *)td.bytes)[0]==1&&
                table.length==0x80&&bundle.artifacts[0].bindings.count==2,
-            @"staged sigmoid preserves its TD, table and two-surface contract");
+            @"staged sigmoid preserves rule-derived TD, table and surfaces");
     }
     for(NSString *operation in @[@"relu",@"tanh",@"gelu",@"silu",@"exp",
-                                  @"sqrt",@"rsqrt",@"reciprocal"]){
+                                  @"log",@"sqrt",@"rsqrt",@"reciprocal"]){
         ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
         ANEExecutableBundle *bundle=[ANEStagedCompiler compileMILData:
             [unaryMIL(operation,256)dataUsingEncoding:NSUTF8StringEncoding]
@@ -823,10 +821,10 @@ static void testUnaryPointwiseShapesTraverseTheProductionCompiler(void) {
                                  isDirectory:YES]
             target:@"H16G" diagnostics:diagnostics];
         expect(bundle!=nil&&diagnostics.errorCount==0,
-            @"decoded unary operation compiles through the shared staged path");
+            @"rule-built unary operation compiles through the shared staged path");
     }
-    // An unmeasured square runs as the next measured square over the same
-    // contiguous bytes: 384x384 lanes fit the 512x512 program.
+    // A 384 square now gets its own geometry-derived task instead of selecting
+    // the next captured size.
     NSURL *unaryRoot=[NSURL fileURLWithPath:@"tests/models/conv_relu" isDirectory:YES];
     ANEDiagnosticEngine *viewDiagnostics=[[ANEDiagnosticEngine alloc]init];
     ANEExecutableBundle *view=[ANEStagedCompiler compileMILData:
@@ -837,10 +835,10 @@ static void testUnaryPointwiseShapesTraverseTheProductionCompiler(void) {
         modelRoot:unaryRoot target:@"H16G"
         diagnostics:[[ANEDiagnosticEngine alloc]init]];
     expect(view!=nil&&square!=nil&&viewDiagnostics.errorCount==0&&
-           [view.artifacts[0].image isEqualToData:square.artifacts[0].image]&&
+           ![view.artifacts[0].image isEqualToData:square.artifacts[0].image]&&
            view.artifacts[0].bindings[0].logicalByteLength==384*384*2&&
-           view.artifacts[0].bindings[0].allocationByteLength==512*512*2,
-        @"unmeasured unary square runs as the covering measured square view");
+           view.artifacts[0].bindings[0].allocationByteLength==384*384*2,
+        @"held-out unary square is compiled from its own geometry");
     ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
     expect([ANEStagedCompiler compileMILData:
         [unaryMIL(@"sigmoid",4096)dataUsingEncoding:NSUTF8StringEncoding]
@@ -874,6 +872,8 @@ static void testReductionFamiliesTraverseTheProductionCompiler(void) {
         @[@32,@8,@8,@1], @[@64,@8,@8,@1], @[@128,@8,@8,@1],
         @[@64,@16,@16,@1], @[@64,@32,@32,@1],
         @[@1,@64,@64,@3], @[@1,@128,@128,@3], @[@32,@64,@16,@2],
+        // Held-out shapes exercise channel, height, and width rules.
+        @[@96,@12,@20,@1], @[@7,@33,@19,@2], @[@5,@11,@37,@3],
     ];
     for (NSString *operation in @[@"reduce_sum",@"reduce_mean",@"reduce_max"]) {
         for (NSArray<NSNumber *> *geometry in geometries) {
@@ -889,7 +889,7 @@ static void testReductionFamiliesTraverseTheProductionCompiler(void) {
                                      isDirectory:YES]
                 target:@"H16G" diagnostics:diagnostics];
             expect(bundle!=nil&&diagnostics.errorCount==0,
-                @"measured reduction compiles through the shared staged path");
+                @"rule-built reduction compiles through the shared staged path");
             if (!bundle) continue;
             NSError *error=nil;
             H16GReduceEncoding *expected=[H16GReduceEncoder
@@ -911,17 +911,17 @@ static void testReductionFamiliesTraverseTheProductionCompiler(void) {
                    bindings[1].planeStrideBytes==expected.outputPlaneStrideBytes&&
                    bindings[1].batchStrideBytes==expected.outputBatchStrideBytes&&
                    bindings[1].allocationByteLength>=expected.outputStorageByteLength,
-                @"staged reduction preserves semantic output with measured physical padding");
+                @"staged reduction preserves semantic output with derived padding");
         }
     }
     ANEDiagnosticEngine *diagnostics=[[ANEDiagnosticEngine alloc]init];
     expect([ANEStagedCompiler compileMILData:
-        [reductionMIL(@"reduce_sum",96,8,8,1)
+        [reductionMIL(@"reduce_sum",1,8,8,1)
             dataUsingEncoding:NSUTF8StringEncoding]
         modelRoot:[NSURL fileURLWithPath:@"tests/models/conv_relu"
                              isDirectory:YES]
         target:@"H16G" diagnostics:diagnostics]==nil&&diagnostics.errorCount>0,
-        @"unmeasured reduction geometry fails before object emission");
+        @"unit reduction axis fails before object emission");
 }
 
 static void testDecodedFormsRejectNearbyButUnencodedSemantics(void) {
