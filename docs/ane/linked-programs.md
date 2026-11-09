@@ -1,5 +1,11 @@
 # H13 linked programs: a whole conv chain in one submit
 
+The H13 `linked-ring` schedule also recognizes basic and bottleneck residual
+DAGs; see [h13-resnet50.md](h13-resnet50.md). The public ResNet-50 is 80 tasks.
+Projection branches, pool/add/reduction tasks, 2 MiB ring placement, spills,
+and the classifier are emitted as one program with constants rebuilt from the
+MIL blob.
+
 This page describes `--schedule linked`, which compiles a straight-line chain
 of convolutions (each optionally followed by its relu) into one H13 program.
 It also records what a whole MobileNetV1 224 costs on the M1 Pro with it, how
