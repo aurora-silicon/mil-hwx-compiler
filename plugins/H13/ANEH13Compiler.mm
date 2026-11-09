@@ -9,10 +9,12 @@
 #include "H13Program.h"
 #include "H16ConvProgram.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <numeric>
 #include <stdexcept>
 // Scoped to a compilation invocation; zero preserves the H13 path.
 static thread_local int gConvGeneration = 0;
@@ -3034,6 +3036,257 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
     return YES;
 }
 
+namespace {
+
+struct H13ResolvedConv {
+    H13ConvPlan plan;
+    __unsafe_unretained ANEGraphOperation *operation;
+    __unsafe_unretained NSData *weights;
+    __unsafe_unretained NSData *bias;
+};
+
+static ANEGraphOperation *h13OperationNamed(
+    NSArray<ANEGraphOperation *> *operations, NSString *name) {
+    for (ANEGraphOperation *operation in operations) {
+        NSString *label = stringArgument(operation.attributes[@"name"]);
+        label = [label stringByTrimmingCharactersInSet:
+            [NSCharacterSet characterSetWithCharactersInString:@"\""]];
+        if ((operation.results.count == 1 &&
+             [operation.results[0].name isEqualToString:name]) ||
+            [label isEqualToString:name])
+            return operation;
+    }
+    return nil;
+}
+
+static NSInteger h13IndexedConv(ANEGraphOperation *operation) {
+    if (![operation.operationName isEqualToString:@"conv"] ||
+        operation.results.count != 1)
+        return -1;
+    NSString *name = operation.results[0].name;
+    if (![name hasPrefix:@"conv_"]) return -1;
+    NSString *suffix = [name substringFromIndex:5];
+    NSScanner *scanner = [NSScanner scannerWithString:suffix];
+    NSInteger index = -1;
+    if (![scanner scanInteger:&index] || !scanner.isAtEnd || index < 0)
+        return -1;
+    return index;
+}
+
+static BOOL isH13ResidualNetwork(ANEGraphFunction *function,
+                                 NSArray<ANEGraphOperation *> *operations) {
+    if (function.inputs.count != 1 || function.returnValues.count != 1)
+        return NO;
+    NSUInteger convs=0, adds=0, relus=0, pools=0, means=0, linears=0;
+    for (ANEGraphOperation *operation in operations) {
+        convs += [operation.operationName isEqualToString:@"conv"];
+        adds += [operation.operationName isEqualToString:@"add"];
+        relus += [operation.operationName isEqualToString:@"relu"];
+        pools += [operation.operationName isEqualToString:@"max_pool"];
+        means += [operation.operationName isEqualToString:@"reduce_mean"];
+        linears += [operation.operationName isEqualToString:@"linear"];
+    }
+    return convs >= 3 && adds >= 1 && relus >= adds && pools == 1 &&
+           means == 1 && linears == 1;
+}
+
+static BOOL writeH13ResidualNetwork(
+    ANEGraphFunction *function, NSArray<ANEGraphOperation *> *operations,
+    NSURL *modelRoot, BOOL hwx, NSString *format, NSURL *directory,
+    ANEDiagnosticEngine *diagnostics, NSError **error) {
+    NSMutableArray<NSData *> *storage = [NSMutableArray array];
+    NSInteger maximumIndex = -1;
+    NSUInteger convolutionCount = 0;
+    for (ANEGraphOperation *operation in operations) {
+        if (![operation.operationName isEqualToString:@"conv"]) continue;
+        const NSInteger index = h13IndexedConv(operation);
+        if (index < 0)
+            return reject(diagnostics,
+                @"H13 residual graph needs contiguous conv_N result names",
+                operation, @"h13.residual-shape");
+        maximumIndex = std::max(maximumIndex, index);
+        ++convolutionCount;
+    }
+    if (maximumIndex < 0 ||
+        static_cast<NSUInteger>(maximumIndex + 1) != convolutionCount)
+        return reject(diagnostics,
+            @"H13 residual graph needs contiguous unique conv_N results",
+            nil, @"h13.residual-shape");
+    std::vector<H13ResolvedConv> numeric(
+        static_cast<std::size_t>(maximumIndex + 1));
+    std::vector<bool> present(numeric.size(), false);
+    for (ANEGraphOperation *operation in operations) {
+        const NSInteger index = h13IndexedConv(operation);
+        if (index < 0) continue;
+        if (index >= static_cast<NSInteger>(numeric.size()) || present[index])
+            return reject(diagnostics,
+                @"H13 residual graph needs contiguous, unique conv_N results",
+                operation, @"h13.residual-shape");
+        H13ConvPlan plan{};
+        if (!convParityPlan(operation, &plan) || plan.shape.groups != 1 ||
+            !plan.shape.bias || plan.shape.kernel != plan.shape.kernelWidth)
+            return reject(diagnostics,
+                @"H13 residual graph needs biased dense square convolutions",
+                operation, @"h13.residual-shape");
+        const NSUInteger weightBytes =
+            static_cast<NSUInteger>(plan.shape.output.channels) *
+            plan.shape.input.channels * plan.shape.kernel *
+            plan.shape.kernelWidth * 2;
+        NSData *weights = [ANEBlobResolver
+            loadConstantForOperation:plan.weight.producer
+            expectedBytes:weightBytes modelRoot:modelRoot diagnostics:diagnostics];
+        NSData *bias = [ANEBlobResolver
+            loadConstantForOperation:plan.bias.producer
+            expectedBytes:plan.shape.output.channels * 2
+            modelRoot:modelRoot diagnostics:diagnostics];
+        if (!weights || !bias) return NO;
+        [storage addObject:weights];
+        [storage addObject:bias];
+        numeric[index] = {plan, operation, weights, bias};
+        present[index] = true;
+    }
+    for (const bool found : present)
+        if (!found)
+            return reject(diagnostics,
+                @"H13 residual graph needs contiguous conv_N results",
+                nil, @"h13.residual-shape");
+
+    // Preserve graph order here.  The geometry encoder discovers basic and
+    // bottleneck blocks and schedules each projection before its main branch.
+    std::vector<std::size_t> schedule(numeric.size());
+    std::iota(schedule.begin(), schedule.end(), 0);
+    std::vector<ane::h13::ResNet50ConvWeights> convolutions;
+    convolutions.reserve(schedule.size());
+    for (const auto index : schedule) {
+        const auto &conv = numeric[index];
+        convolutions.push_back({conv.plan.shape,
+            static_cast<const std::uint8_t *>(conv.weights.bytes),
+            conv.weights.length,
+            static_cast<const std::uint8_t *>(conv.bias.bytes),
+            conv.bias.length});
+    }
+    ANEGraphOperation *linear = h13OperationNamed(operations, @"linear_0");
+    if (!linear || ![linear.operationName isEqualToString:@"linear"] ||
+        linear.results.count != 1 || linear.results[0].type.shape.count != 2 ||
+        linear.results[0].type.shape[0].unsignedIntegerValue != 1)
+        return reject(diagnostics,
+            @"H13 residual network needs a rank-2 batch-one linear_0",
+            linear, @"h13.residual-shape");
+    ANEGraphValue *headWeight = linear.operands[@"weight"].value;
+    ANEGraphValue *headBias = linear.operands[@"bias"].value;
+    const NSUInteger headOutputs =
+        linear.results[0].type.shape[1].unsignedIntegerValue;
+    if (!headWeight || !headBias || !headOutputs ||
+        headWeight.type.shape.count != 2 || headBias.type.shape.count != 1 ||
+        headWeight.type.shape[0].unsignedIntegerValue != headOutputs ||
+        headBias.type.shape[0].unsignedIntegerValue != headOutputs)
+        return reject(diagnostics,
+            @"H13 residual classifier constants have incompatible shapes",
+            linear, @"h13.residual-shape");
+    const NSUInteger headInputs =
+        headWeight.type.shape[1].unsignedIntegerValue;
+    NSData *headWeights = [ANEBlobResolver
+        loadConstantForOperation:headWeight.producer
+        expectedBytes:headOutputs * headInputs * 2
+        modelRoot:modelRoot diagnostics:diagnostics];
+    NSData *headBiasData = [ANEBlobResolver
+        loadConstantForOperation:headBias.producer expectedBytes:headOutputs*2
+        modelRoot:modelRoot diagnostics:diagnostics];
+    if (!headWeights || !headBiasData) return NO;
+
+    ane::h13::Program program;
+    try {
+        program = ane::h13::encodeResNet50(convolutions,
+            static_cast<const std::uint8_t *>(headWeights.bytes), headWeights.length,
+            static_cast<const std::uint8_t *>(headBiasData.bytes), headBiasData.length);
+    } catch (const std::exception &exception) {
+        return reject(diagnostics,
+            [NSString stringWithUTF8String:exception.what()], linear,
+            @"h13.residual-fields");
+    }
+    std::vector<std::uint8_t> anec = ane::h13::encodeANEC(program);
+    NSData *payload = hwx
+        ? encodeHWX(program, anec, error, true)
+        : [NSData dataWithBytes:anec.data() length:anec.size()];
+    if (!payload) return NO;
+
+    ANEGraphValue *input = function.inputs[0];
+    NSMutableDictionary *inputRecord =
+        [binding(input, input.type.shape, program.inputs[0]) mutableCopy];
+    NSMutableDictionary *outputRecord =
+        [binding(linear.results[0], linear.results[0].type.shape,
+                 program.output) mutableCopy];
+    NSString *file = [NSString stringWithFormat:@"program-0.%@", format];
+    NSDictionary *programRecord = @{
+        @"file": file, @"bytes": @(payload.length),
+        @"taskDescriptors": @(program.taskCount),
+        @"encoder": @"h13-residual-linked-ring",
+        @"operation": @"residual-network", @"inputs": @[inputRecord],
+        @"constantInputs": @{}, @"outputs": @[outputRecord],
+        @"constantOffset": @(program.constantOffsetBytes),
+        @"constantBytes": @(program.constants.size()),
+        @"scratchBytes": @(program.scratchAllocationBytes),
+    };
+    NSMutableArray *taskRecords =
+        [NSMutableArray arrayWithCapacity:program.taskCount];
+    for (NSUInteger index=0; index<program.taskCount; ++index)
+        [taskRecords addObject:@{@"index": @(index),
+            @"operation": @"residual-network"}];
+    NSUInteger inputElements = 0, outputElements = 0;
+    tensorElementCount(input, &inputElements);
+    tensorElementCount(linear.results[0], &outputElements);
+    NSDictionary *inputTensor = @{ @"shape": input.type.shape,
+        @"logicalBytes": @(2 * inputElements), @"role": @"input" };
+    NSDictionary *outputTensor = @{ @"shape": linear.results[0].type.shape,
+        @"logicalBytes": @(2 * outputElements), @"role": @"output" };
+    NSDictionary *manifest = @{
+        @"schema": @"mil-hwxc.h13-anec-package.v2", @"target": @"H13",
+        @"artifactFormat": format, @"schedule": @"linked-ring",
+        @"programs": @[programRecord], @"dispatchPlan": @[@0],
+        @"taskDescriptors": @(program.taskCount), @"tasks": taskRecords,
+        @"encoder": @"h13-residual-linked-ring",
+        @"inputs": @[inputRecord], @"outputs": @[outputRecord],
+        @"constantBytes": @(program.constants.size()),
+        @"constantOffset": @(program.constantOffsetBytes),
+        @"scratchBytes": @(program.scratchAllocationBytes),
+        @"scratch": @{@"bytes": @(program.scratchAllocationBytes),
+                       @"channel": @3, @"regions": @{}},
+        @"intermediates": @[],
+        @"tensors": @{input.name: inputTensor,
+                       linear.results[0].name: outputTensor},
+        @"physicalOutputs": @[@{@"tensor": linear.results[0].name,
+            @"dtype": @"float16", @"shape": linear.results[0].type.shape,
+            @"logicalBytes": @2000}],
+        @"logicalResults": @[@{@"name": linear.results[0].name,
+            @"dtype": @"float16", @"shape": linear.results[0].type.shape,
+            @"conversion": @"identity", @"physical": @{
+                @"tensor": linear.results[0].name, @"elementOffset": @0,
+                @"elementCount": @1000}}],
+    };
+    NSData *metadata = [NSJSONSerialization dataWithJSONObject:manifest
+        options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:error];
+    if (!metadata) return NO;
+    NSFileManager *manager = NSFileManager.defaultManager;
+    if ([manager fileExistsAtPath:directory.path]) {
+        NSArray *existing = [manager contentsOfDirectoryAtPath:directory.path error:error];
+        if (!existing) return NO;
+        if (existing.count) {
+            if (error) *error = [NSError errorWithDomain:@"dev.maderix.H13"
+                code:1 userInfo:@{NSLocalizedDescriptionKey:
+                    @"H13 output directory must be empty"}];
+            return NO;
+        }
+    } else if (![manager createDirectoryAtURL:directory
+        withIntermediateDirectories:YES attributes:nil error:error]) return NO;
+    if (![payload writeToURL:[directory URLByAppendingPathComponent:file]
+        options:NSDataWritingAtomic error:error]) return NO;
+    return [metadata writeToURL:
+        [directory URLByAppendingPathComponent:@"manifest.json"]
+        options:NSDataWritingAtomic error:error];
+}
+
+} // namespace
+
 @implementation ANEH13Compiler
 + (BOOL)compileConvMILData:(NSData *)milData
                  modelRoot:(NSURL *)modelRoot
@@ -3173,6 +3426,13 @@ static BOOL lowerOperation(ANEGraphOperation *operation, NSURL *modelRoot,
             [sourceOperations addObject:candidate];
     if (!sourceOperations.count)
         return reject(diagnostics, @"H13 requires at least one operation");
+
+    // ResNet is a residual DAG, not a straight-line convolution chain.  Its
+    // decoded H13 schedule has a dedicated clean-room encoder. Geometry
+    // discovers basic/bottleneck blocks and their projection branches.
+    if (linkedRing && isH13ResidualNetwork(function, sourceOperations))
+        return writeH13ResidualNetwork(function, sourceOperations, modelRoot, hwx,
+            format, directory, diagnostics, error);
 
     if (gConvGeneration) {
         NSHashTable<ANEGraphOperation *> *fused = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];

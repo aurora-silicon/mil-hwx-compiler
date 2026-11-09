@@ -1,13 +1,160 @@
 #include "H13Program.h"
+#include "../H16G/Encoding/H16ConvProgram.h"
 
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <limits>
+#include <numeric>
 #include <stdexcept>
 
 namespace ane::h13 {
 
 namespace {
+
+std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment);
+bool nonzeroHalfword(const std::uint8_t *value);
+void appendHalfword(std::vector<std::uint8_t> &out,
+                    const std::uint8_t *value);
+
+using ResidualH13TapGroup = std::vector<unsigned>;
+const std::array<ResidualH13TapGroup, 8> residualH133x3Phases = {{
+    {0,2}, {6,8}, {1}, {7}, {3,5}, {}, {4}, {},
+}};
+const std::array<ResidualH13TapGroup, 16> residualH137x7Phases = {{
+    {0,2,4,6}, {14,16,18,20}, {28,30,32,34}, {42,44,46,48},
+    {1,3,5}, {15,17,19}, {29,31,33}, {43,45,47},
+    {7,9,11,13}, {21,23,25,27}, {35,37,39,41}, {},
+    {8,10,12}, {22,24,26}, {36,38,40}, {},
+}};
+
+std::vector<unsigned> residualH13LaneChunks(unsigned outputs, unsigned cap) {
+    unsigned lanes = outputs / 16;
+    std::vector<unsigned> chunks;
+    while (lanes > cap) { chunks.push_back(cap); lanes -= cap; }
+    if (lanes) chunks.push_back(lanes);
+    return chunks;
+}
+
+template <std::size_t N>
+void appendResidualH13PhasePlane(
+    std::vector<std::uint8_t> &out,
+    const std::array<ResidualH13TapGroup, N> &groups, unsigned cin,
+    unsigned lanes, unsigned first, unsigned taps,
+    const std::uint8_t *weights, const std::uint8_t *bias,
+    unsigned perInputPadding) {
+    if (bias)
+        out.insert(out.end(), bias + 2 * first, bias + 2 * (first + lanes));
+    const std::size_t lengthAt = out.size();
+    out.insert(out.end(), 3, 0);
+    const unsigned maxTaps = std::max_element(
+        groups.begin(), groups.end(), [](const auto &left, const auto &right) {
+            return left.size() < right.size();
+        })->size();
+    const std::size_t bodyAt = out.size();
+    for (unsigned input = 0; input != cin; ++input) {
+        unsigned structural = 0;
+        if constexpr (N == 1) {
+            // H13's k1 sparse form, like its phase form, places each mask
+            // immediately before the eight lanes it selects.
+            for (unsigned begin = 0; begin < lanes; begin += 8) {
+                const unsigned width = std::min(8u, lanes - begin);
+                std::uint8_t mask = 0;
+                std::vector<std::uint8_t> values;
+                for (unsigned lane = 0; lane != width; ++lane) {
+                    const auto *value = weights + 2 *
+                        ((static_cast<std::size_t>(first + begin + lane) * cin +
+                          input) * taps);
+                    if (!nonzeroHalfword(value)) continue;
+                    mask |= static_cast<std::uint8_t>(1u << lane);
+                    appendHalfword(values, value);
+                }
+                out.push_back(mask);
+                out.insert(out.end(), values.begin(), values.end());
+            }
+        } else {
+            const unsigned evenLanes = (lanes + 1) & ~1u;
+            std::vector<const std::uint8_t *> slots;
+            for (const auto &group : groups)
+                for (unsigned tapIndex = 0; tapIndex != maxTaps; ++tapIndex)
+                    for (unsigned lane = 0; lane != evenLanes; ++lane)
+                        slots.push_back(tapIndex < group.size() && lane < lanes
+                            ? weights + 2 *
+                                ((static_cast<std::size_t>(first + lane) * cin +
+                                  input) * taps + group[tapIndex])
+                            : nullptr);
+            if (slots.size() % 16)
+                throw std::logic_error(
+                    "H13 ResNet phase slots are not a whole mask vector");
+            for (std::size_t at = 0; at != slots.size(); at += 16) {
+                // H13 serializes each 8-bit mask immediately before the
+                // values it selects; H16G writes the two masks first.
+                for (unsigned half = 0; half != 2; ++half) {
+                    std::uint8_t mask = 0;
+                    std::vector<std::uint8_t> values;
+                    for (unsigned bit = 0; bit != 8; ++bit) {
+                        const auto *value = slots[at + half * 8 + bit];
+                        if (!value || !nonzeroHalfword(value)) continue;
+                        mask |= static_cast<std::uint8_t>(1u << bit);
+                        appendHalfword(values, value);
+                    }
+                    out.push_back(mask);
+                    out.insert(out.end(), values.begin(), values.end());
+                }
+            }
+        }
+        unsigned trailing = perInputPadding;
+        if constexpr (N == 1)
+            if (structural) --trailing;
+        out.insert(out.end(), trailing, 0);
+    }
+    const std::size_t bytes = out.size() - bodyAt;
+    if (bytes > 0xffffff)
+        throw std::invalid_argument(
+            "H13 ResNet sparse plane exceeds a 24-bit body count");
+    out[lengthAt] = static_cast<std::uint8_t>(bytes);
+    out[lengthAt + 1] = static_cast<std::uint8_t>(bytes >> 8);
+    out[lengthAt + 2] = static_cast<std::uint8_t>(bytes >> 16);
+}
+
+std::vector<std::uint8_t> packResidualH13Stride2(
+    ConvShape shape, const std::uint8_t *weights, const std::uint8_t *bias,
+    std::array<std::uint32_t, 16> &chunkBytes) {
+    if (shape.groups != 1 || shape.stride != 2 || !shape.bias ||
+        !weights || !bias || !shape.output.channels ||
+        shape.output.channels % 16 ||
+        (shape.kernel != 1 && shape.kernel != 3 && shape.kernel != 7))
+        throw std::invalid_argument("invalid H13 ResNet stride-2 convolution");
+    const unsigned cap = std::max(shape.output.width, shape.output.height) <= 8
+        ? 32 : 16;
+    const auto chunks = residualH13LaneChunks(shape.output.channels, cap);
+    std::vector<std::uint8_t> out;
+    for (unsigned region = 0; region != 16; ++region) {
+        const auto start = out.size();
+        unsigned base = 0;
+        for (unsigned lanes : chunks) {
+            const unsigned first = base + region * lanes;
+            if (shape.kernel == 7) {
+                appendResidualH13PhasePlane(out, residualH137x7Phases,
+                    shape.input.channels, lanes, first, 49, weights, bias, 0);
+            } else if (shape.kernel == 3) {
+                appendResidualH13PhasePlane(out, residualH133x3Phases,
+                    shape.input.channels, lanes, first, 9, weights, bias, 0);
+            } else {
+                const std::array<ResidualH13TapGroup, 1> one = {{{0}}};
+                const unsigned masks = (lanes + 7) / 8;
+                appendResidualH13PhasePlane(out, one, shape.input.channels,
+                    lanes, first, 1, weights, bias,
+                    lanes / 2 > masks ? lanes / 2 - masks : 0);
+            }
+            base += 16 * lanes;
+        }
+        out.resize(alignUp(out.size(), 64), 0);
+        chunkBytes[region] = static_cast<std::uint32_t>(out.size() - start);
+    }
+    return out;
+}
+
 
 // Field values follow allbilly/ane e159e2d examples/elementwise.py and
 // examples/gemm.py. Constants use the aligned 0x280 KDMA-base representation.
@@ -2622,7 +2769,7 @@ const OracleConvTemplate *convFamilyBase(const ConvShape &shape,
             candidate.kernelWidth == shape.kernelWidth &&
             candidate.stride == shape.stride;
         const bool ringStemBase = linkedRing && convKind(shape) == ConvKind::Dense &&
-            shape.kernel == 3 && shape.stride == 2 &&
+            (shape.kernel == 3 || shape.kernel == 7) && shape.stride == 2 &&
             candidate.kernel == 1 && candidate.kernelWidth == 1 &&
             candidate.stride == 2;
         const bool ringDepthwiseBase = linkedRing &&
@@ -2685,8 +2832,12 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     plan.kind = convKind(shape);
     if (plan.kind == ConvKind::Other)
         return "grouped convolutions other than depthwise have no generic form";
+    const bool resnetStem = linkedRing && plan.kind == ConvKind::Dense &&
+        shape.kernel == 7 && shape.kernelWidth == 7 && shape.stride == 2 &&
+        shape.input.channels == 3 && shape.output.channels == 64 &&
+        shape.input.height == 224 && shape.input.width == 224;
     if (shape.kernel != shape.kernelWidth ||
-        (shape.kernel != 1 && shape.kernel != 3))
+        (shape.kernel != 1 && shape.kernel != 3 && !resnetStem))
         return "the generic form covers square 1x1 and 3x3 kernels";
     if (shape.stride != 1 && shape.stride != 2)
         return "the generic form covers stride 1 and 2";
@@ -2700,8 +2851,9 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     if (!in.channels || !out.channels || !in.height || !in.width ||
         !out.height || !out.width)
         return "convolution surfaces must be nonempty";
-    const bool nativeStem = linkedRing && shape.kernel == 3 && shape.stride == 2 &&
-        plan.kind == ConvKind::Dense && in.channels == 3 && out.channels == 32;
+    const bool nativeStem = linkedRing && shape.stride == 2 &&
+        plan.kind == ConvKind::Dense && in.channels == 3 &&
+        ((shape.kernel == 3 && out.channels == 32) || resnetStem);
     if ((!nativeStem && in.channels % 16) || out.channels % 16)
         return "the generic form needs channel counts that are multiples of 16";
     if (in.width > 4096 || in.height > 16384)
@@ -2739,10 +2891,11 @@ std::string planConvGeneric(const ConvShape &shape, ConvGenericPlan &plan,
     if (plan.kind == ConvKind::Dense &&
         slice * perChannel > kGenericKernelBudget &&
         (!linkedRing || largeKernelNeedsSplit)) {
-        if (shape.stride != 1)
+        if (shape.stride != 1 && !linkedRing)
             return "a strided convolution above the per-task kernel budget has no generic split";
         std::uint64_t fit = kGenericKernelBudget / perChannel;
-        slice = static_cast<std::uint32_t>(fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
+        slice = static_cast<std::uint32_t>(
+            fit >= 256 ? fit / 256 * 256 : fit / 16 * 16);
         if (!slice) return "one output channel exceeds the per-task kernel budget";
     }
     if (plan.kind == ConvKind::Dense) {
@@ -4227,6 +4380,1112 @@ void fuseElementwisePostOperation(Program &program, PostOperation operation) {
             "h13.chain-unrepresentable-edge: elementwise PE word is not the "
             "decoded no-post-operation form 0x00080000");
     storeLE32(program.task, word, value | 0x20u);
+}
+
+namespace {
+
+std::uint64_t residualStride2RegionBytes(const ConvShape &shape,
+                                         std::uint32_t outputs) {
+    const std::uint32_t laneCap = shape.output.width <= 8 ? 32 : 16;
+    std::uint32_t lanes = outputs / 16;
+    std::uint64_t bytes = 0;
+    while (lanes) {
+        const std::uint32_t width = std::min(lanes, laneCap);
+        const std::uint32_t even = (width + 1) & ~1u;
+        std::uint64_t perInput = 0;
+        if (shape.kernel == 1) {
+            const auto masks = (width + 7) / 8;
+            perInput = masks + 2 * width +
+                (width / 2 > masks ? width / 2 - masks : 0);
+        } else if (shape.kernel == 3) {
+            perInput = 2 * even + 2 * width * 9;
+        } else {
+            perInput = 8 * even + 2 * width * 49;
+        }
+        bytes += 2 * width + 3 + perInput * shape.input.channels;
+        lanes -= width;
+    }
+    return alignUp(bytes, 64);
+}
+
+std::vector<std::pair<std::uint32_t, std::uint32_t>>
+residualSlices(const ConvShape &shape) {
+    // A task has a 1 MiB kernel-DMA window and sixteen output lanes.  Dense
+    // reductions are also bounded by the 256 KiB per-input-channel window.
+    // Deriving the split from those two hardware capacities makes the public
+    // 224 ResNet-50 land on four split layers without naming any layer.
+    constexpr std::uint64_t baseKernelWindow = 1u << 20;
+    constexpr std::uint64_t channelWindow = 1u << 18;
+    const std::uint64_t reduction = static_cast<std::uint64_t>(
+        shape.input.channels) * shape.kernel * shape.kernelWidth;
+    if (!reduction || shape.output.channels < 16)
+        return {{0, shape.output.channels}};
+    const std::uint64_t smallSpatialScale = shape.output.width < 14
+        ? std::uint64_t(14 / shape.output.width) *
+              (14 / shape.output.width) * (14 / shape.output.width)
+        : 1;
+    std::uint64_t byKernel = baseKernelWindow * smallSpatialScale /
+                             (2 * reduction);
+    std::uint64_t byChannel = UINT32_MAX;
+    if (shape.stride == 2) {
+        // Each lane's KDMA region has a 0xfe00-byte usable window at the
+        // 14-wide class. Smaller spatial classes expose proportionally more
+        // region capacity. Compute the largest whole 16-output group whose
+        // worst-case nonzero sparse planes fit; this yields the split without
+        // naming a layer or channel count.
+        const std::uint64_t regionWindow = 0xfe00ull * smallSpatialScale;
+        std::uint32_t sparseCap = 16;
+        for (std::uint32_t outputs = 16;
+             outputs <= shape.output.channels; outputs += 16) {
+            if (residualStride2RegionBytes(shape, outputs) > regionWindow)
+                break;
+            sparseCap = outputs;
+        }
+        byKernel = sparseCap;
+    } else if (shape.kernel == 1 && shape.output.width <= 14) {
+        const std::uint64_t spatialScale =
+            (14ull * 14ull) /
+            (static_cast<std::uint64_t>(shape.output.width) *
+             shape.output.width);
+        byChannel = channelWindow * std::max<std::uint64_t>(1, spatialScale) /
+                    shape.input.channels;
+    }
+    std::uint32_t cap = static_cast<std::uint32_t>(
+        std::max<std::uint64_t>(16, std::min(byKernel, byChannel)));
+    cap = std::max(16u, cap & ~15u);
+    if (shape.output.channels <= cap)
+        return {{0, shape.output.channels}};
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> slices;
+    const std::uint32_t tail = shape.output.channels % cap;
+    std::uint32_t high = shape.output.channels;
+    if (tail) {
+        high -= tail;
+        slices.push_back({high, tail});
+    }
+    while (high) {
+        const std::uint32_t count = std::min(cap, high);
+        high -= count;
+        slices.push_back({high, count});
+    }
+    return slices;
+}
+
+void appendWord(std::vector<std::uint8_t> &bytes, std::uint32_t value) {
+    const auto at = bytes.size();
+    bytes.resize(at + 4);
+    storeLE32(bytes, at, value);
+}
+
+void appendRecord(std::vector<std::uint8_t> &bytes, std::uint32_t address,
+                  const std::vector<std::uint32_t> &values) {
+    appendWord(bytes, streamHeader(address,
+        static_cast<std::uint32_t>(values.size())));
+    for (const auto value : values) appendWord(bytes, value);
+}
+
+enum class ResidualRole {
+    Stem,
+    Pool,
+    Projection,
+    Main1,
+    Main2,
+    Main3,
+    Basic1,
+    Basic2,
+    Add,
+    Mean,
+    Linear,
+};
+
+struct ResidualTask {
+    ResidualRole role;
+    std::uint32_t slice = 0;
+    std::uint32_t sliceCount = 1;
+    std::uint32_t firstOutput = 0;
+    std::uint32_t fullOutputs = 0;
+    ConvShape shape{};
+    Program encoded;
+};
+
+Program residualConvTask(const ResNet50ConvWeights &conv,
+                         std::uint32_t first, std::uint32_t count,
+                         bool relu) {
+    ConvShape shape = conv.shape;
+    shape.output.channels = count;
+    const auto reduction = static_cast<std::size_t>(shape.input.channels) *
+        shape.kernel * shape.kernelWidth;
+    const auto *weights = conv.weights + 2 * first * reduction;
+    const auto *bias = conv.bias + 2 * first;
+    ConvShape baseShape = shape;
+    std::vector<std::uint8_t> fakeWeights;
+    std::vector<std::uint8_t> fakeBias;
+    const auto denseChunks = laneChunks(count, 16);
+    const bool mixedDense = shape.stride == 1 &&
+        std::any_of(denseChunks.begin(), denseChunks.end(),
+                    [&](auto lanes) { return lanes != denseChunks.front(); });
+    if (shape.stride == 2 || mixedDense) {
+        if (shape.stride == 2)
+            baseShape.kernel = baseShape.kernelWidth = 1;
+        if (shape.stride == 2 && baseShape.input.channels % 16)
+            baseShape.input.channels = 16;
+        baseShape.output.channels = 16;
+        fakeWeights.assign(static_cast<std::size_t>(16) *
+                           baseShape.input.channels * baseShape.kernel *
+                           baseShape.kernelWidth * 2, 1);
+        fakeBias.assign(32, 1);
+    }
+    Program task = encodeConvLinkedRing(
+        baseShape,
+        fakeWeights.empty() ? weights : fakeWeights.data(),
+        fakeWeights.empty() ? count * reduction * 2 : fakeWeights.size(),
+        fakeBias.empty() ? bias : fakeBias.data(),
+        fakeBias.empty() ? count * 2 : fakeBias.size());
+    if (task.taskCount != 1)
+        throw std::logic_error(
+            "H13 residual split rule did not produce one descriptor");
+    if (shape.stride == 2) {
+        std::array<std::uint32_t, 16> chunkBytes{};
+        task.constants = packResidualH13Stride2(shape, weights, bias,
+                                                chunkBytes);
+        std::uint32_t chunkAt = 0;
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            putRegister(task.task, 0, task.firstTaskBytes,
+                        0x1f848 + 4 * lane, chunkAt);
+            putRegister(task.task, 0, task.firstTaskBytes,
+                        0x1f888 + 4 * lane, chunkBytes[lane]);
+            chunkAt += chunkBytes[lane];
+        }
+        auto cfg = loadLE32(task.task,
+            h13RegisterOffset(task.task, 0, task.firstTaskBytes, 0x0001c));
+        cfg &= ~((31u << 0) | (31u << 5) | (7u << 10) |
+                 (3u << 13) | (3u << 15) |
+                 (31u << 17) | (31u << 22));
+        const auto cap = shape.output.width <= 8 ? 32u : 16u;
+        const auto lanes = std::min(cap, conv.shape.output.channels / 16);
+        cfg |= shape.kernelWidth | (shape.kernel << 5) |
+               (floorLog2(lanes) << 10) |
+               (shape.stride << 13) | (shape.stride << 15);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x0001c, cfg);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x00000,
+                    (shape.input.height << 16) | shape.input.width);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x0000c,
+                    shape.input.channels);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x00010, count);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x00014,
+                    (shape.output.height << 16) | shape.output.width);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x00028,
+                    shape.output.height);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x0c800, 0x182);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x1f800, 0x60);
+    } else if (mixedDense) {
+        task.constants = packConvDense(static_cast<std::uint32_t>(reduction),
+                                      denseChunks, weights, bias, false);
+        if (task.constants.size() % 16)
+            throw std::logic_error(
+                "H13 residual dense section is not sixteen regions");
+        const auto region = static_cast<std::uint32_t>(task.constants.size() / 16);
+        for (std::uint32_t lane = 0; lane != 16; ++lane) {
+            putRegister(task.task, 0, task.firstTaskBytes,
+                        0x1f848 + 4 * lane, lane * region);
+            putRegister(task.task, 0, task.firstTaskBytes,
+                        0x1f888 + 4 * lane, region);
+        }
+        auto cfg = loadLE32(task.task,
+            h13RegisterOffset(task.task, 0, task.firstTaskBytes, 0x0001c));
+        const auto ocg = count == 224 ? 4u : floorLog2(denseChunks.front());
+        cfg = (cfg & ~(7u << 10)) | (ocg << 10);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x0001c, cfg);
+        putRegister(task.task, 0, task.firstTaskBytes, 0x00010, count);
+    }
+    if (relu) fuseConvPostOperation(task, PostOperation::Relu);
+    return task;
+}
+
+Program residualPETask(ResidualRole role, ElementwiseShape input,
+                       ElementwiseShape output) {
+    const bool pool = role == ResidualRole::Pool;
+    const bool add = role == ResidualRole::Add;
+    const bool mean = role == ResidualRole::Mean;
+    if (!pool && !add && !mean)
+        throw std::logic_error("invalid H13 residual PE task role");
+    Program task;
+    task.task.resize(40, 0);
+    std::vector<std::uint32_t> kernel0(18, 0x80);
+    kernel0[0] = kernel0[1] = 0;
+    std::vector<std::uint32_t> kernel1(12, 0);
+    for (std::size_t i = 0; i != 4; ++i) kernel1[i] = 0x80;
+    for (std::size_t i = 8; i != 12; ++i) kernel1[i] = 0x40;
+    appendRecord(task.task, 0x1f800, kernel0);
+    appendRecord(task.task, 0x1f8c8, kernel1);
+    std::vector<std::uint32_t> common(16, 0);
+    common[0] = (input.height << 16) | input.width;
+    common[1] = 1;
+    common[2] = pool || mean ? 0x22 : 0x2a;
+    common[3] = input.channels;
+    common[4] = output.channels;
+    common[5] = ((mean ? input.height : output.height) << 16) |
+                (mean ? input.width : output.width);
+    common[6] = 1;
+    common[7] = pool ? 0x50014063u : 0x5000a021u;
+    common[8] = 0x2041;
+    common[9] = 0x10001;
+    common[10] = mean ? input.height : output.height;
+    common[11] = pool ? 0x44u : add ? 0x44u : 0x34u;
+    common[13] = pool ? 0x11u : add ? 0x31u : 0x51u;
+    appendRecord(task.task, 0x00000, common);
+    std::vector<std::uint32_t> source(28, 0);
+    source[0] = source[1] = 0x8880;
+    source[14] = 0x01000000;
+    source[16] = 0x100;
+    appendRecord(task.task, 0x13800, source);
+    std::vector<std::uint32_t> l2(18, 0);
+    appendRecord(task.task, 0x04800, l2);
+    appendRecord(task.task, 0x08800,
+        {pool ? 2u : add ? 0x80020u : 0u,
+         0x3c000000u, 0x3c000000u,
+         mean ? 0x3ca72f05u : 0x3f800000u});
+    appendRecord(task.task, 0x0c800,
+        {mean ? 0x4080u : 0x80u, 0x100000u, 0, 0, 0});
+    std::vector<std::uint32_t> destination(7, 0);
+    destination[0] = 0xc0;
+    destination[6] = 0x01000000;
+    appendRecord(task.task, 0x17800, destination);
+    if (task.task.size() != 504)
+        throw std::logic_error("H13 compact PE task is not 504 bytes");
+    task.firstTaskBytes = task.task.size();
+    task.taskCount = 1;
+    task.formulaBuilt = true;
+    return task;
+}
+
+struct ResidualL2Layout {
+    std::uint32_t channel, row, plane, depth;
+};
+
+void residualL2Source(std::vector<std::uint8_t> &stream, std::size_t at,
+                      std::size_t bytes, std::uint32_t cfg,
+                      std::uint32_t base, ResidualL2Layout layout) {
+    putRegister(stream, at, bytes, 0x04804, cfg);
+    putRegister(stream, at, bytes, 0x04808, base);
+    putRegister(stream, at, bytes, 0x0480c, layout.channel);
+    putRegister(stream, at, bytes, 0x04810, layout.row);
+    putRegister(stream, at, bytes, 0x04814, layout.plane);
+    putRegister(stream, at, bytes, 0x04818, layout.depth);
+}
+
+void residualL2Second(std::vector<std::uint8_t> &stream, std::size_t at,
+                      std::size_t bytes, std::uint32_t base,
+                      ResidualL2Layout layout) {
+    putRegister(stream, at, bytes, 0x0481c, base);
+    putRegister(stream, at, bytes, 0x04820, layout.channel);
+    putRegister(stream, at, bytes, 0x04824, layout.row);
+    putRegister(stream, at, bytes, 0x04828, layout.plane);
+    putRegister(stream, at, bytes, 0x0482c, layout.depth);
+}
+
+void residualL2Result(std::vector<std::uint8_t> &stream, std::size_t at,
+                      std::size_t bytes, std::uint32_t cfg,
+                      std::uint32_t base, ResidualL2Layout layout) {
+    putRegister(stream, at, bytes, 0x04830, cfg);
+    putRegister(stream, at, bytes, 0x04834, base);
+    putRegister(stream, at, bytes, 0x04838, layout.channel);
+    putRegister(stream, at, bytes, 0x0483c, layout.row);
+    putRegister(stream, at, bytes, 0x04840, layout.plane);
+    putRegister(stream, at, bytes, 0x04844, layout.depth);
+}
+
+void residualTileSource(std::vector<std::uint8_t> &stream, std::size_t at,
+                        std::size_t bytes, std::uint32_t cfg,
+                        std::uint32_t base, std::uint32_t row,
+                        std::uint32_t plane, std::uint32_t depth,
+                        std::uint32_t format) {
+    putRegister(stream, at, bytes, 0x13800, cfg);
+    putRegister(stream, at, bytes, 0x13804, 0x8880);
+    putRegister(stream, at, bytes, 0x13808, base);
+    putRegister(stream, at, bytes, 0x1380c, row);
+    putRegister(stream, at, bytes, 0x13810, plane);
+    putRegister(stream, at, bytes, 0x13814, depth);
+    putRegister(stream, at, bytes, 0x13818, depth);
+    for (std::uint32_t address = 0x1381c; address <= 0x13834; address += 4)
+        putRegister(stream, at, bytes, address, 0);
+    putRegister(stream, at, bytes, 0x13838, format);
+    putRegister(stream, at, bytes, 0x1383c, 0);
+    putRegister(stream, at, bytes, 0x13840, 0x100);
+}
+
+[[maybe_unused]] void residualTileSecond(std::vector<std::uint8_t> &stream, std::size_t at,
+                        std::size_t bytes, std::uint32_t cfg,
+                        std::uint32_t row, std::uint32_t plane,
+                        std::uint32_t depth, std::uint32_t format,
+                        std::uint32_t extension) {
+    putRegister(stream, at, bytes, 0x13804, cfg);
+    putRegister(stream, at, bytes, 0x13820, row);
+    putRegister(stream, at, bytes, 0x13824, plane);
+    putRegister(stream, at, bytes, 0x13828, depth);
+    putRegister(stream, at, bytes, 0x1382c, depth);
+    putRegister(stream, at, bytes, 0x13838, format);
+    putRegister(stream, at, bytes, 0x1383c, extension);
+}
+
+void residualTileDestination(std::vector<std::uint8_t> &stream,
+                             std::size_t at, std::size_t bytes,
+                             std::uint32_t cfg, std::uint32_t base,
+                             std::uint32_t row, std::uint32_t plane,
+                             std::uint32_t depth, std::uint32_t format) {
+    putRegister(stream, at, bytes, 0x17800, cfg);
+    putRegister(stream, at, bytes, 0x17804, base);
+    putRegister(stream, at, bytes, 0x17808, row);
+    putRegister(stream, at, bytes, 0x1780c, plane);
+    putRegister(stream, at, bytes, 0x17810, depth);
+    putRegister(stream, at, bytes, 0x17814, depth);
+    putRegister(stream, at, bytes, 0x17818, format);
+}
+
+} // namespace
+
+
+namespace {
+
+constexpr std::size_t kNoConvolution = std::numeric_limits<std::size_t>::max();
+
+struct ResidualBlockPlan {
+    std::vector<std::size_t> main;
+    std::size_t projection = kNoConvolution;
+};
+
+bool sameResidualTensor(ElementwiseShape a, ElementwiseShape b) {
+    return a.channels == b.channels && a.height == b.height &&
+           a.width == b.width;
+}
+
+bool residualMainChain(const std::vector<ResNet50ConvWeights> &convolutions,
+                       const std::vector<std::size_t> &indices,
+                       ElementwiseShape input) {
+    if (indices.size() != 2 && indices.size() != 3) return false;
+    if (!sameResidualTensor(convolutions[indices.front()].shape.input, input))
+        return false;
+    if (indices.size() == 2) {
+        if (convolutions[indices[0]].shape.kernel != 3 ||
+            convolutions[indices[1]].shape.kernel != 3)
+            return false;
+    } else if (convolutions[indices[0]].shape.kernel != 1 ||
+               convolutions[indices[1]].shape.kernel != 3 ||
+               convolutions[indices[2]].shape.kernel != 1) {
+        return false;
+    }
+    for (std::size_t index = 1; index != indices.size(); ++index)
+        if (!sameResidualTensor(
+                convolutions[indices[index - 1]].shape.output,
+                convolutions[indices[index]].shape.input))
+            return false;
+    return true;
+}
+
+bool residualProjection(const ConvShape &shape, ElementwiseShape input,
+                        ElementwiseShape output) {
+    return shape.kernel == 1 && shape.kernelWidth == 1 &&
+           sameResidualTensor(shape.input, input) &&
+           sameResidualTensor(shape.output, output);
+}
+
+std::vector<ResidualBlockPlan> discoverResidualBlocks(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    ElementwiseShape input) {
+    std::vector<ResidualBlockPlan> blocks;
+    std::size_t cursor = 1;
+    while (cursor < convolutions.size()) {
+        bool found = false;
+        ResidualBlockPlan chosen;
+        std::size_t consumed = 0;
+        for (std::size_t count = 4; count >= 2 && !found; --count) {
+            if (cursor + count > convolutions.size()) continue;
+            std::vector<std::size_t> order(count);
+            std::iota(order.begin(), order.end(), cursor);
+            do {
+                for (const std::size_t mainCount : {std::size_t(3),
+                                                    std::size_t(2)}) {
+                    if (mainCount > count) continue;
+                    std::vector<std::size_t> main(order.begin(),
+                                                  order.begin() + mainCount);
+                    if (!residualMainChain(convolutions, main, input))
+                        continue;
+                    const auto output =
+                        convolutions[main.back()].shape.output;
+                    const bool changed = !sameResidualTensor(input, output);
+                    if (count == mainCount) {
+                        if (changed) continue;
+                        chosen = {main, kNoConvolution};
+                    } else if (count == mainCount + 1 &&
+                               residualProjection(
+                                   convolutions[order.back()].shape,
+                                   input, output)) {
+                        chosen = {main, order.back()};
+                    } else {
+                        continue;
+                    }
+                    consumed = count;
+                    found = true;
+                    break;
+                }
+                if (found) break;
+            } while (std::next_permutation(order.begin(), order.end()));
+        }
+        if (!found)
+            throw std::invalid_argument(
+                "h13.residual-shape: convolution sequence is not a basic "
+                "or bottleneck block");
+        input = convolutions[chosen.main.back()].shape.output;
+        blocks.push_back(std::move(chosen));
+        cursor += consumed;
+    }
+    return blocks;
+}
+
+struct ResidualTensorLayout {
+    ResidualL2Layout words;
+    std::uint32_t bytes;
+};
+
+ResidualTensorLayout residualTensorLayout(ElementwiseShape shape) {
+    const std::uint64_t channel = align16(2ull * shape.width);
+    const std::uint64_t plane = channel * shape.channels;
+    // The row guard is a hardware prefetch line, not network data.
+    const std::uint64_t row = align16(plane + std::max<std::uint64_t>(16, channel));
+    const std::uint64_t bytes = row * shape.height;
+    if (!shape.channels || !shape.height || !shape.width ||
+        bytes >= kL2Bytes || row > UINT32_MAX || plane > UINT32_MAX)
+        throw std::invalid_argument(
+            "h13.residual-allocation: tensor does not fit one 2 MiB L2 range");
+    return {ResidualL2Layout{static_cast<std::uint32_t>(channel),
+                             static_cast<std::uint32_t>(row),
+                             static_cast<std::uint32_t>(plane), 0},
+            static_cast<std::uint32_t>(bytes)};
+}
+
+struct ResidualRange {
+    std::uint32_t base;
+    std::uint32_t bytes;
+};
+
+bool residualOverlap(ResidualRange a, ResidualRange b) {
+    return a.base < static_cast<std::uint64_t>(b.base) + b.bytes &&
+           b.base < static_cast<std::uint64_t>(a.base) + a.bytes;
+}
+
+class ResidualRingAllocator {
+public:
+    bool allocate(std::uint32_t bytes, const std::vector<ResidualRange> &live,
+                  std::uint32_t *result) {
+        const std::uint32_t aligned = static_cast<std::uint32_t>(align16(bytes));
+        if (!aligned || aligned >= kL2Bytes) return false;
+        // First-fit from the circular cursor.  The second pass implements the
+        // wrap; live ranges are linear because no allocated tensor straddles
+        // the physical end of the ring.
+        for (unsigned pass = 0; pass != 2; ++pass) {
+            std::uint32_t base = pass ? 0 : cursor_;
+            const std::uint32_t limit = pass ? cursor_ :
+                static_cast<std::uint32_t>(kL2Bytes);
+            for (; static_cast<std::uint64_t>(base) + aligned <= limit;
+                 base += 16) {
+                const ResidualRange candidate{base, aligned};
+                if (std::none_of(live.begin(), live.end(),
+                    [&](ResidualRange range) {
+                        return residualOverlap(candidate, range);
+                    })) {
+                    *result = base;
+                    cursor_ = static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(base) + aligned) %
+                        kL2Bytes);
+                    return true;
+                }
+            }
+        }
+        // Cursor can sit inside a live range after that range is reused for
+        // an in-place result.  A complete linear fallback keeps first-fit
+        // total without making placement depend on task identity.
+        for (std::uint32_t base = 0;
+             static_cast<std::uint64_t>(base) + aligned <= kL2Bytes;
+             base += 16) {
+            const ResidualRange candidate{base, aligned};
+            if (std::none_of(live.begin(), live.end(),
+                [&](ResidualRange range) {
+                    return residualOverlap(candidate, range);
+                })) {
+                *result = base;
+                cursor_ = static_cast<std::uint32_t>(
+                    (static_cast<std::uint64_t>(base) + aligned) % kL2Bytes);
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    std::uint32_t cursor_ = 0;
+};
+
+enum class ResidualStorage { Ring, Scratch, External };
+
+struct ResidualValue {
+    ElementwiseShape shape{};
+    ResidualTensorLayout layout{};
+    ResidualStorage storage = ResidualStorage::Ring;
+    std::uint32_t base = 0;
+    std::uint32_t scratchOffset = 0;
+};
+
+struct ResidualRoute {
+    ResidualValue source;
+    ResidualValue result;
+    ResidualValue second;
+    bool hasSecond = false;
+    std::uint32_t sourceStage = 0;
+    std::uint32_t resultStage = 0;
+    std::uint32_t secondStage = 0;
+};
+
+struct PlannedResidualTask {
+    ResidualTask task;
+    ResidualRoute route;
+};
+
+std::uint32_t residualScratchBytes(ElementwiseShape shape) {
+    const std::uint64_t row = align16(16ull * shape.width);
+    const std::uint64_t plane = row * shape.height;
+    const std::uint64_t bytes = plane * ((shape.channels + 7) / 8);
+    if (bytes > UINT32_MAX)
+        throw std::invalid_argument(
+            "h13.residual-allocation: scratch tensor exceeds 32-bit DMA extent");
+    return static_cast<std::uint32_t>(bytes);
+}
+
+ResidualRange ringRange(const ResidualValue &value) {
+    return {value.base, value.layout.bytes};
+}
+
+std::vector<ResidualRange> ringRanges(
+    std::initializer_list<const ResidualValue *> values) {
+    std::vector<ResidualRange> ranges;
+    for (const auto *value : values)
+        if (value && value->storage == ResidualStorage::Ring)
+            ranges.push_back(ringRange(*value));
+    return ranges;
+}
+
+ResidualValue allocateResidualValue(ElementwiseShape shape,
+                                    ResidualRingAllocator &ring,
+                                    std::uint32_t &scratchCursor,
+                                    const std::vector<ResidualRange> &live,
+                                    bool allowScratch = true) {
+    ResidualValue value;
+    value.shape = shape;
+    value.layout = residualTensorLayout(shape);
+    if (ring.allocate(value.layout.bytes, live, &value.base)) return value;
+    if (!allowScratch)
+        throw std::invalid_argument(
+            "h13.residual-allocation: live tensors exceed the 2 MiB L2 ring");
+    value.storage = ResidualStorage::Scratch;
+    value.scratchOffset = static_cast<std::uint32_t>(
+        alignUp(scratchCursor, 0x4000));
+    const auto bytes = residualScratchBytes(shape);
+    if (value.scratchOffset > UINT32_MAX - bytes)
+        throw std::invalid_argument(
+            "h13.residual-allocation: scratch arena exceeds 32 bits");
+    scratchCursor = static_cast<std::uint32_t>(
+        alignUp(static_cast<std::uint64_t>(value.scratchOffset) + bytes,
+                0x4000));
+    return value;
+}
+
+std::uint32_t allocateResidualStage(ResidualRingAllocator &ring,
+                                    const ResidualValue &value,
+                                    const std::vector<ResidualRange> &live) {
+    if (value.storage == ResidualStorage::Ring) return value.base;
+    // Tile DMA stages at most one quarter-ring at a time.  The task's tensor
+    // geometry determines the smaller bound.
+    auto bytes = std::min<std::uint32_t>(
+        value.layout.bytes, static_cast<std::uint32_t>(kL2Bytes / 4));
+    std::uint32_t base = 0;
+    while (bytes >= 16) {
+        if (ring.allocate(bytes, live, &base)) return base;
+        bytes = static_cast<std::uint32_t>(align16(bytes / 2));
+    }
+    std::uint64_t occupied = 0;
+    for (const auto range : live) occupied += range.bytes;
+    throw std::invalid_argument(
+        "h13.residual-allocation: no non-overlapping L2 DMA staging tile for " +
+        std::to_string(value.shape.channels) + "x" +
+        std::to_string(value.shape.height) + "x" +
+        std::to_string(value.shape.width) + " with live bytes " +
+        std::to_string(occupied));
+}
+
+std::uint32_t residualCost(const PlannedResidualTask &planned) {
+    const auto &task = planned.task;
+    std::uint64_t work = static_cast<std::uint64_t>(task.shape.output.height) *
+        task.shape.output.width * std::max(1u, task.shape.output.channels);
+    if (task.role != ResidualRole::Pool && task.role != ResidualRole::Add &&
+        task.role != ResidualRole::Mean)
+        work *= static_cast<std::uint64_t>(task.shape.input.channels) *
+                task.shape.kernel * task.shape.kernelWidth;
+    // CostHint is a saturated count of 2^23 work units.
+    return static_cast<std::uint32_t>(std::max<std::uint64_t>(
+        1, std::min<std::uint64_t>(0x7f, (work + (1u << 23) - 1) >> 23)));
+}
+
+std::uint32_t residualScheduleWord(const ResidualTask &task) {
+    if (task.role == ResidualRole::Linear)
+        return 0x10200001u; // linear schedule enable and one output tile
+    const auto width = std::max(1u, task.shape.output.width);
+    const auto scale = std::max(1u, width / 7);
+    const auto digit = std::max(1u, 4u - std::min(3u, floorLog2(scale)));
+    // Three 4-bit tile-group fields plus schedule/enable fields.
+    std::uint32_t word = 0x00200001u | digit * 0x00011100u;
+    if ((task.role == ResidualRole::Main3 ||
+         task.role == ResidualRole::Projection) &&
+        task.shape.output.channels >= 4 * task.shape.input.channels)
+        word |= 0x00800000u; // expanded-output schedule class
+    return word;
+}
+
+void disableResidualSourceDMA(std::vector<std::uint8_t> &stream,
+                              std::size_t at, std::size_t bytes) {
+    // TileDMA Disabled and neutral format fields.
+    residualTileSource(stream, at, bytes, 0x8880, 0, 0, 0, 0,
+                       0x01000000);
+}
+
+void disableResidualDestinationDMA(std::vector<std::uint8_t> &stream,
+                                   std::size_t at, std::size_t bytes) {
+    // TileDMA Disabled and neutral format fields.
+    residualTileDestination(stream, at, bytes, 0xc0, 0, 0, 0, 0,
+                            0x01000000);
+}
+
+void configureResidualSource(std::vector<std::uint8_t> &stream,
+                             std::size_t at, std::size_t bytes,
+                             const ResidualValue &value,
+                             std::uint32_t stage) {
+    if (value.storage == ResidualStorage::Ring) {
+        residualL2Source(stream, at, bytes, 0x104, value.base,
+                         value.layout.words); // L2 resident source
+        disableResidualSourceDMA(stream, at, bytes);
+        return;
+    }
+    residualL2Source(stream, at, bytes,
+                     value.storage == ResidualStorage::External
+                         ? 0x500172u : 0x842u,
+                     stage, value.layout.words);
+    const bool external = value.storage == ResidualStorage::External;
+    const std::uint32_t row = external
+        ? static_cast<std::uint32_t>(align16(2ull * value.shape.width))
+        : static_cast<std::uint32_t>(align16(16ull * value.shape.width));
+    const std::uint32_t plane = row * value.shape.height;
+    const std::uint32_t depth = external
+        ? plane * value.shape.channels
+        : plane * ((value.shape.channels + 7) / 8);
+    residualTileSource(stream, at, bytes,
+        external ? 0x33881u : 0x53901u, value.scratchOffset,
+        row, plane, depth, external ? 0x01002031u : 0x08002031u);
+}
+
+void configureResidualResult(std::vector<std::uint8_t> &stream,
+                             std::size_t at, std::size_t bytes,
+                             const ResidualValue &value,
+                             std::uint32_t stage,
+                             std::uint32_t channelOffset) {
+    if (value.storage == ResidualStorage::Ring) {
+        residualL2Result(stream, at, bytes, 0x140,
+                         value.base + channelOffset * value.layout.words.channel,
+                         value.layout.words); // L2 resident result
+        disableResidualDestinationDMA(stream, at, bytes);
+        return;
+    }
+    residualL2Result(stream, at, bytes,
+                     value.storage == ResidualStorage::External
+                         ? 0x14au : 0x84au,
+                     stage, {0, 0, 0, 0});
+    const bool external = value.storage == ResidualStorage::External;
+    const std::uint32_t row = external
+        ? static_cast<std::uint32_t>(align16(2ull * value.shape.channels))
+        : static_cast<std::uint32_t>(align16(16ull * value.shape.width));
+    const std::uint32_t plane = external ? row : row * value.shape.height;
+    const std::uint32_t depth = external ? row
+        : plane * ((value.shape.channels + 7) / 8);
+    residualTileDestination(stream, at, bytes,
+        external ? 0x040000c1u : 0x040003c1u,
+        value.scratchOffset, row, plane, depth,
+        external ? 0x01302031u : 0x08302031u);
+}
+
+void configureResidualSecond(std::vector<std::uint8_t> &stream,
+                             std::size_t at, std::size_t bytes,
+                             const ResidualValue &value,
+                             std::uint32_t stage) {
+    residualL2Second(stream, at, bytes,
+                     value.storage == ResidualStorage::Ring ? value.base : stage,
+                     value.layout.words);
+    if (value.storage == ResidualStorage::Ring) return;
+    const std::uint32_t row = static_cast<std::uint32_t>(
+        align16(16ull * value.shape.width));
+    const std::uint32_t plane = row * value.shape.height;
+    const std::uint32_t depth = plane * ((value.shape.channels + 7) / 8);
+    putRegister(stream, at, bytes, 0x13804, 0x13900u); // second-source DMA
+    putRegister(stream, at, bytes, 0x1381c, value.scratchOffset);
+    putRegister(stream, at, bytes, 0x13820, row);
+    putRegister(stream, at, bytes, 0x13824, plane);
+    putRegister(stream, at, bytes, 0x13828, depth);
+    putRegister(stream, at, bytes, 0x1382c, depth);
+    putRegister(stream, at, bytes, 0x13838, 0x08000001u);
+    putRegister(stream, at, bytes, 0x1383c, 0x2030u);
+}
+
+void routeResidualTask(Program &program, PlannedResidualTask &planned,
+                       std::size_t at, bool last) {
+    auto &task = planned.task;
+    const auto bytes = task.encoded.firstTaskBytes;
+    configureResidualSource(program.task, at, bytes, planned.route.source,
+                            planned.route.sourceStage);
+    configureResidualResult(program.task, at, bytes, planned.route.result,
+                            planned.route.resultStage, task.firstOutput);
+    if (planned.route.hasSecond)
+        configureResidualSecond(program.task, at, bytes, planned.route.second,
+                                planned.route.secondStage);
+
+    // Header control is assembled from semantic locations.  These are the
+    // generation-wide SrcLoc, DstLoc, SPL, TSE and TSR bits.
+    std::uint32_t control = 0;
+    if (planned.route.source.storage != ResidualStorage::Ring)
+        control |= 0x10000000u | 0x800u;
+    if (planned.route.result.storage != ResidualStorage::Ring)
+        control |= 0x20000000u | 0x9000u;
+    std::uint32_t selectors = last ? 0u : 1u << 23; // task-buffer enable
+    const auto sourceChannel = planned.route.source.storage ==
+            ResidualStorage::External ? 5u : 3u;
+    if (planned.route.source.storage != ResidualStorage::Ring)
+        selectors |= sourceChannel | 1u << 5;
+    if (planned.route.hasSecond && planned.route.second.storage !=
+            ResidualStorage::Ring)
+        selectors |= 3u << 6; // scratch second-source channel
+    const auto resultChannel = planned.route.result.storage ==
+            ResidualStorage::External ? 4u : 3u;
+    if (planned.route.result.storage != ResidualStorage::Ring)
+        selectors |= (resultChannel | 1u << 5) << 12;
+    storeLE32(program.task, at + 24, control);
+    storeLE32(program.task, at + 32, selectors);
+}
+
+} // namespace
+
+Program encodeResidualNetwork(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes) {
+    if (convolutions.size() < 3)
+        throw std::invalid_argument(
+            "h13.residual-shape: network needs a stem and one block");
+    for (const auto &conv : convolutions) {
+        const std::size_t reduction = static_cast<std::size_t>(
+            conv.shape.input.channels) * conv.shape.kernel *
+            conv.shape.kernelWidth;
+        if (conv.shape.groups != 1 || !conv.shape.bias || !conv.weights ||
+            !conv.bias || conv.weightBytes !=
+                static_cast<std::size_t>(conv.shape.output.channels) *
+                    reduction * 2 ||
+            conv.biasBytes !=
+                static_cast<std::size_t>(conv.shape.output.channels) * 2)
+            throw std::invalid_argument(
+                "h13.residual-shape: convolution constants disagree with geometry");
+    }
+    const auto stemOutput = convolutions.front().shape.output;
+    const ElementwiseShape pooled{
+        stemOutput.channels, (stemOutput.height + 1) / 2,
+        (stemOutput.width + 1) / 2};
+    const auto blocks = discoverResidualBlocks(convolutions, pooled);
+    const auto finalShape =
+        convolutions[blocks.back().main.back()].shape.output;
+    const std::uint32_t headOutputs =
+        static_cast<std::uint32_t>(headBiasBytes / 2);
+    if (!headWeights || !headBias || !headOutputs ||
+        headBiasBytes != static_cast<std::size_t>(headOutputs) * 2 ||
+        headWeightBytes != static_cast<std::size_t>(finalShape.channels) *
+                               headOutputs * 2)
+        throw std::invalid_argument(
+            "h13.residual-shape: classifier constants disagree with final channels");
+
+    std::uint32_t taskCount = 3 + static_cast<std::uint32_t>(blocks.size());
+    for (const auto &conv : convolutions)
+        taskCount += static_cast<std::uint32_t>(
+            residualSlices(conv.shape).size());
+
+    ResidualRingAllocator ring;
+    std::uint32_t scratchCursor = 0;
+    std::vector<PlannedResidualTask> planned;
+    planned.reserve(taskCount);
+
+    auto stageRoute = [&](ResidualRoute &route,
+                          const std::vector<ResidualRange> &live) {
+        auto occupied = live;
+        if (route.result.storage == ResidualStorage::Ring)
+            occupied.push_back(ringRange(route.result));
+        route.sourceStage = allocateResidualStage(ring, route.source,
+                                                  occupied);
+        if (route.result.storage != ResidualStorage::Ring)
+            route.resultStage = allocateResidualStage(ring, route.result,
+                                                       occupied);
+        if (route.hasSecond &&
+            route.second.storage != ResidualStorage::Ring)
+            route.secondStage = allocateResidualStage(ring, route.second,
+                                                       occupied);
+    };
+
+    auto emitConv = [&](std::size_t index, ResidualRole role,
+                        const ResidualValue &source,
+                        const ResidualValue &result, bool relu,
+                        const std::vector<ResidualRange> &live) {
+        const auto slices = residualSlices(convolutions[index].shape);
+        for (std::size_t slice = 0; slice != slices.size(); ++slice) {
+            const auto [first, count] = slices[slice];
+            PlannedResidualTask entry;
+            entry.task.role = role;
+            entry.task.slice = static_cast<std::uint32_t>(slice);
+            entry.task.sliceCount = static_cast<std::uint32_t>(slices.size());
+            entry.task.firstOutput = first;
+            entry.task.fullOutputs = convolutions[index].shape.output.channels;
+            entry.task.shape = convolutions[index].shape;
+            entry.task.shape.output.channels = count;
+            entry.task.encoded = residualConvTask(convolutions[index], first,
+                                                  count, relu);
+            entry.route.source = source;
+            entry.route.result = result;
+            stageRoute(entry.route, live);
+            planned.push_back(std::move(entry));
+        }
+    };
+
+    ResidualValue externalInput;
+    externalInput.shape = convolutions.front().shape.input;
+    externalInput.layout = residualTensorLayout(externalInput.shape);
+    externalInput.storage = ResidualStorage::External;
+    const auto stem = allocateResidualValue(stemOutput, ring, scratchCursor,
+                                            {});
+    emitConv(0, ResidualRole::Stem, externalInput, stem, true,
+             ringRanges({&stem}));
+
+    auto current = allocateResidualValue(pooled, ring, scratchCursor,
+                                         ringRanges({&stem}));
+    PlannedResidualTask pool;
+    pool.task.role = ResidualRole::Pool;
+    pool.task.shape = {3, 3, 2, 1, false, stemOutput, pooled};
+    pool.task.encoded = residualPETask(ResidualRole::Pool, stemOutput, pooled);
+    pool.route.source = stem;
+    pool.route.result = current;
+    stageRoute(pool.route, ringRanges({&stem, &current}));
+    planned.push_back(std::move(pool));
+
+    for (const auto &block : blocks) {
+        const auto blockInput = current;
+        ResidualValue shortcut = blockInput;
+        if (block.projection != kNoConvolution) {
+            const auto output = convolutions[block.projection].shape.output;
+            shortcut = allocateResidualValue(output, ring, scratchCursor,
+                                              ringRanges({&blockInput}));
+            emitConv(block.projection, ResidualRole::Projection, blockInput,
+                     shortcut, false, ringRanges({&blockInput, &shortcut}));
+        }
+
+        ResidualValue main = blockInput;
+        for (std::size_t position = 0; position != block.main.size();
+             ++position) {
+            const auto index = block.main[position];
+            const auto output = convolutions[index].shape.output;
+            auto live = ringRanges({&shortcut, &main});
+            auto next = allocateResidualValue(output, ring, scratchCursor,
+                                              live);
+            const auto role = block.main.size() == 2
+                ? (position ? ResidualRole::Basic2 : ResidualRole::Basic1)
+                : position == 0 ? ResidualRole::Main1
+                : position == 1 ? ResidualRole::Main2
+                                : ResidualRole::Main3;
+            emitConv(index, role, main, next,
+                     position + 1 != block.main.size(),
+                     ringRanges({&shortcut, &main, &next}));
+            main = next;
+        }
+
+        ResidualValue sum = main;
+        if (sum.storage != ResidualStorage::Ring) {
+            sum = allocateResidualValue(main.shape, ring, scratchCursor,
+                                        ringRanges({&shortcut}));
+        }
+        PlannedResidualTask add;
+        add.task.role = ResidualRole::Add;
+        add.task.shape = {1, 1, 1, 1, false, main.shape, main.shape};
+        add.task.encoded = residualPETask(ResidualRole::Add, main.shape,
+                                          main.shape);
+        add.route.source = main;
+        add.route.second = shortcut;
+        add.route.hasSecond = true;
+        add.route.result = sum;
+        stageRoute(add.route, ringRanges({&main, &shortcut, &sum}));
+        planned.push_back(std::move(add));
+        current = sum;
+    }
+
+    const ElementwiseShape meanShape{finalShape.channels, 1, 1};
+    auto meanValue = allocateResidualValue(meanShape, ring, scratchCursor,
+                                           ringRanges({&current}));
+    PlannedResidualTask mean;
+    mean.task.role = ResidualRole::Mean;
+    mean.task.shape = {1, 1, 1, 1, false, finalShape, meanShape};
+    mean.task.encoded = residualPETask(ResidualRole::Mean, finalShape,
+                                       meanShape);
+    mean.route.source = current;
+    mean.route.result = meanValue;
+    stageRoute(mean.route, ringRanges({&current, &meanValue}));
+    planned.push_back(std::move(mean));
+
+    ResidualValue externalOutput;
+    externalOutput.shape = {headOutputs, 1, 1};
+    externalOutput.layout = residualTensorLayout(externalOutput.shape);
+    externalOutput.storage = ResidualStorage::External;
+    ConvShape headShape{1, 1, 1, 1, true, meanShape,
+                        externalOutput.shape};
+    ConvShape encodedHeadShape = headShape;
+    std::uint32_t encodedHeadOutputs = 16;
+    while (encodedHeadOutputs < headOutputs) encodedHeadOutputs <<= 1;
+    encodedHeadShape.output.channels = encodedHeadOutputs;
+    std::vector<std::uint8_t> fakeWeights(
+        static_cast<std::size_t>(finalShape.channels) * encodedHeadOutputs * 2,
+        1);
+    std::vector<std::uint8_t> fakeBias(encodedHeadOutputs * 2, 1);
+    PlannedResidualTask linear;
+    linear.task.role = ResidualRole::Linear;
+    linear.task.firstOutput = 0;
+    linear.task.fullOutputs = headOutputs;
+    linear.task.shape = headShape;
+    linear.task.encoded = encodeConvLinkedRing(
+        encodedHeadShape, fakeWeights.data(), fakeWeights.size(),
+        fakeBias.data(), fakeBias.size());
+    if (linear.task.encoded.taskCount != 1)
+        throw std::invalid_argument(
+            "h13.residual-fields: classifier template split unexpectedly");
+    std::array<std::uint32_t, 16> headChunks{};
+    linear.task.encoded.constants = ane::h16::packResNetLinearHead(
+        finalShape.channels, headOutputs, headWeights, headBias, headChunks);
+    std::uint32_t headAt = 0;
+    for (std::uint32_t lane = 0; lane != 16; ++lane) {
+        putRegister(linear.task.encoded.task, 0,
+                    linear.task.encoded.firstTaskBytes, 0x1f848 + 4 * lane,
+                    headAt);
+        putRegister(linear.task.encoded.task, 0,
+                    linear.task.encoded.firstTaskBytes, 0x1f888 + 4 * lane,
+                    headChunks[lane]);
+        headAt += headChunks[lane];
+    }
+    putRegister(linear.task.encoded.task, 0,
+                linear.task.encoded.firstTaskBytes, 0x00010, headOutputs);
+    linear.route.source = meanValue;
+    linear.route.result = externalOutput;
+    stageRoute(linear.route, ringRanges({&meanValue}));
+    planned.push_back(std::move(linear));
+
+    if (planned.size() != taskCount)
+        throw std::logic_error(
+            "h13.residual-fields: topology task count changed while encoding");
+
+    Program program;
+    program.taskSurfaceChannels = {4, 5, 6, 7};
+    program.formulaBuilt = true;
+    program.scratchAllocationBytes = scratchCursor;
+    std::vector<std::size_t> offsets(planned.size());
+    for (std::size_t index = 0; index != planned.size(); ++index) {
+        std::size_t at = static_cast<std::size_t>(
+            alignUp(program.task.size(), 0x100));
+        const auto bytes = planned[index].task.encoded.firstTaskBytes;
+        if ((at & 0x3fffu) + bytes > 0x4000u)
+            at = static_cast<std::size_t>(alignUp(at, 0x4000));
+        program.task.resize(at + bytes, 0);
+        offsets[index] = at;
+        std::copy_n(planned[index].task.encoded.task.begin(), bytes,
+                    program.task.begin() + static_cast<std::ptrdiff_t>(at));
+    }
+
+    for (std::size_t index = 0; index != planned.size(); ++index) {
+        auto &entry = planned[index];
+        const auto at = offsets[index];
+        const bool last = index + 1 == planned.size();
+        const auto nextBytes = last ? 0
+            : planned[index + 1].task.encoded.firstTaskBytes;
+        std::uint32_t word0 = static_cast<std::uint32_t>(index);
+        if (index) word0 |= 1u << 24;
+        if (last) word0 |= 1u << 25;
+        storeLE32(program.task, at, word0);
+        storeLE32(program.task, at + 4, residualCost(entry) |
+            (last ? 0u :
+             (static_cast<std::uint32_t>(nextBytes / 4 - 1) << 16)));
+        storeLE32(program.task, at + 8,
+                  0x400u | (index == 0 ? 8u : 0u) |
+                  (last ? 0x22u : 0u));
+        storeLE32(program.task, at + 16,
+                  last ? 0x00fff86au : index ? 0x00fff800u : 0x00fff868u);
+        storeLE32(program.task, at + 28,
+                  last ? 0u : static_cast<std::uint32_t>(offsets[index + 1]));
+        if (entry.task.role != ResidualRole::Pool &&
+            entry.task.role != ResidualRole::Add &&
+            entry.task.role != ResidualRole::Mean) {
+            putRegister(program.task, at, entry.task.encoded.firstTaskBytes,
+                        0x00034, residualScheduleWord(entry.task));
+            if (entry.task.role == ResidualRole::Stem) {
+                const auto word = h13RegisterOffset(
+                    program.task, at, entry.task.encoded.firstTaskBytes,
+                    0x0001c);
+                storeLE32(program.task, word,
+                          loadLE32(program.task, word) | 0x00840000u);
+            }
+        }
+        routeResidualTask(program, entry, at, last);
+        if (entry.task.role != ResidualRole::Pool &&
+            entry.task.role != ResidualRole::Add &&
+            entry.task.role != ResidualRole::Mean) {
+            const auto constantBase = static_cast<std::uint32_t>(
+                program.constants.size());
+            for (std::uint32_t lane = 0; lane != 16; ++lane) {
+                const auto word = h13RegisterOffset(
+                    program.task, at, entry.task.encoded.firstTaskBytes,
+                    0x1f848 + 4 * lane);
+                storeLE32(program.task, word,
+                          loadLE32(program.task, word) + constantBase);
+            }
+            program.constants.insert(program.constants.end(),
+                entry.task.encoded.constants.begin(),
+                entry.task.encoded.constants.end());
+            program.constants.resize(alignUp(program.constants.size(), 64), 0);
+        }
+    }
+
+    program.taskCount = static_cast<std::uint32_t>(planned.size());
+    program.firstTaskBytes = planned.front().task.encoded.firstTaskBytes;
+    program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
+    const auto input = convolutions.front().shape.input;
+    const std::uint64_t inputRow = align16(2ull * input.width);
+    const std::uint64_t inputPlane = inputRow * input.height;
+    program.inputs = {{5, {1, input.channels, input.height, input.width,
+                           inputPlane, inputRow},
+                       alignUp(inputPlane * input.channels, 0x4000)}};
+    const std::uint64_t outputRow = align16(2ull * headOutputs);
+    program.output = {4, {1, 1, 1, headOutputs, outputRow, outputRow},
+                      alignUp(2ull * headOutputs, 0x4000)};
+    return program;
+}
+
+Program encodeResNet50(
+    const std::vector<ResNet50ConvWeights> &convolutions,
+    const std::uint8_t *headWeights, std::size_t headWeightBytes,
+    const std::uint8_t *headBias, std::size_t headBiasBytes) {
+    return encodeResidualNetwork(convolutions, headWeights, headWeightBytes,
+                                 headBias, headBiasBytes);
 }
 
 } // namespace ane::h13

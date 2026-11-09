@@ -133,6 +133,36 @@ struct Program {
     bool depthwiseConv = false;
 };
 
+/// One biased convolution in an H13 residual schedule.  The
+/// caller supplies dense MIL weights in [Cout,Cin,Kh,Kw] order; the encoder
+/// derives every packed kernel chunk and never imports a compiler payload.
+struct ResNet50ConvWeights {
+    ConvShape shape;
+    const std::uint8_t *weights = nullptr;
+    std::size_t weightBytes = 0;
+    const std::uint8_t *bias = nullptr;
+    std::size_t biasBytes = 0;
+};
+
+/// Build a clean-room H13 residual program from tensor geometry.  The block
+/// discovery accepts bottleneck (1x1,3x3,1x1) and basic (3x3,3x3) blocks,
+/// schedules every projection before its main branch, and allocates live
+/// tensors from the 2 MiB L2 ring with bind-safe scratch spills.  The head
+/// dimensions are inferred from the final block and bias length.
+Program encodeResidualNetwork(
+                       const std::vector<ResNet50ConvWeights> &convolutions,
+                       const std::uint8_t *headWeights,
+                       std::size_t headWeightBytes,
+                       const std::uint8_t *headBias,
+                       std::size_t headBiasBytes);
+
+/// Compatibility name retained for the public ResNet-50 path.
+Program encodeResNet50(const std::vector<ResNet50ConvWeights> &convolutions,
+                       const std::uint8_t *headWeights,
+                       std::size_t headWeightBytes,
+                       const std::uint8_t *headBias,
+                       std::size_t headBiasBytes);
+
 Program encodeBinary(BinaryOperation operation);
 bool supportsElementwise(BinaryOperation operation, ElementwiseShape shape,
                          bool scalarConstant = false);
