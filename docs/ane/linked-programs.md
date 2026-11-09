@@ -338,7 +338,7 @@ the kernel; that is an estimate.
 
 ## Native MobileNet ring (`--schedule linked-ring`)
 
-`linked-ring` is the H13 native-frame MobileNetV1 schedule.  It is separate
+`linked-ring` is the native-frame MobileNetV1 schedule on H13 and H14. It is separate
 from `linked` and `linked-l2`, whose emitted bytes remain unchanged.  The
 schedule admits the direct 3x3-s2 3-to-32 stem and direct stride-2 depthwise
 tasks, keeps every pointwise convolution in one task through 2,099,200
@@ -358,6 +358,13 @@ reference computes the same asymmetric padding.  Fused finite-fp16 conv clips
 from the H13 ReLU6 path are accepted unchanged; MobileNetV1 with clip(0, 6)
 therefore remains one task per convolution (28 tasks including the padded
 classifier).
+
+H14 keeps the same coefficient phase selection but serializes both mask bytes
+before their selected values. Its task records are packed; the named Common
+TileHeight field and named L2 source/result geometry fields live at the
+addresses declared in `H14Fields.h`. Resident tasks carry no TileDMA record.
+The H14 implementation constructs those records from allocator roles; it does
+not translate a checked-in table of H13 or H14 task words.
 
 Coefficient streams above 1 MiB are allowed only for a whole-output tile in
 the decoded 7x7 class (`TileHeight == output height`).  ANECOMP fleet44 ran
@@ -388,4 +395,5 @@ Build the standard unmirrored network and its ANECOMP device ladder with:
 ```sh
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/mobilenet.py out/mn --frame native --no-perop
 MILC=build/mil-hwxc python3 tools/h13-mobilenet/ring_kit.py out/h13-ring
+MILC=build/mil-hwxc python3 tools/h14-mobilenet/ring_kit.py out/h14-ring
 ```

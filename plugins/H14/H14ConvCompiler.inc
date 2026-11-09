@@ -3,7 +3,8 @@
 static BOOL emitConvGraph(ANEGraphFunction *function,
                           NSArray<ANEGraphOperation *> *operations,
                           NSURL *modelRoot, NSURL *directory,
-                          NSString *format, BOOL linked,
+                          NSString *format, BOOL linked, BOOL linkedRing,
+                          NSString *researchCompactTaskMinimumBytes,
                           ANEDiagnosticEngine *diagnostics, NSError **error) {
     if (![format isEqualToString:@"anec"])
         return reject(diagnostics, @"H14 formula-built convolution currently emits ANEC; HWX descriptor cost fields remain unresolved",
@@ -51,7 +52,7 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                 continue;
             }
             H14ConvPlan plan{};
-            if (!convParityPlan(operation, &plan, YES))
+            if (!convParityPlan(operation, &plan, YES, linkedRing))
                 return reject(diagnostics, @"H14 formula-built convolution is outside its dense/depthwise 1x1/3x3 envelope",
                               operation, @"h14.conv-outside-envelope");
             const auto reduction = plan.shape.input.channels / plan.shape.groups *
@@ -67,9 +68,15 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                     modelRoot:modelRoot diagnostics:diagnostics];
                 if (!bias) return NO;
             }
-            layers.push_back(ane::h14::encodeConvGeneric(plan.shape,
-                static_cast<const std::uint8_t *>(weights.bytes), weights.length,
-                static_cast<const std::uint8_t *>(bias.bytes), bias.length));
+            layers.push_back(linkedRing
+                ? ane::h14::encodeConvLinkedRing(plan.shape,
+                    static_cast<const std::uint8_t *>(weights.bytes),
+                    weights.length,
+                    static_cast<const std::uint8_t *>(bias.bytes), bias.length)
+                : ane::h14::encodeConvGeneric(plan.shape,
+                    static_cast<const std::uint8_t *>(weights.bytes),
+                    weights.length,
+                    static_cast<const std::uint8_t *>(bias.bytes), bias.length));
             [layerOperations addObject:@"conv"];
             [inputs addObject:current];
             current = operation.results[0];
@@ -80,7 +87,16 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                           nil, @"h14.linked-outside-envelope");
         std::vector<ane::h14::LinkedLayer> layout;
         std::vector<ane::h14::Program> programs;
-        if (linked) programs.push_back(ane::h14::linkConvChain(layers, &layout));
+        if (linkedRing) {
+            ane::h14::LinkedRingResearchOptions options;
+            if (researchCompactTaskMinimumBytes)
+                options.compactTaskMinimumBytes =
+                    researchCompactTaskMinimumBytes.longLongValue;
+            programs.push_back(ane::h14::linkMobileNetRing(
+                layers, &layout, options));
+        }
+        else if (linked)
+            programs.push_back(ane::h14::linkConvChain(layers, &layout));
         else programs = layers;
         NSMutableArray *records = [NSMutableArray array];
         NSMutableArray *payloads = [NSMutableArray array];
@@ -97,7 +113,8 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
             NSDictionary *record = @{
                 @"file": [NSString stringWithFormat:@"program-%lu.%@", (unsigned long)i, format],
                 @"bytes": @(payload.length), @"taskDescriptors": @(p.taskCount),
-                @"encoder": linked ? @"h14-linked-conv-chain" : @"h14-generic-conv",
+                @"encoder": linkedRing ? @"h14-mobilenet-linked-ring"
+                    : (linked ? @"h14-linked-conv-chain" : @"h14-generic-conv"),
                 @"operation": linked ? @"conv_chain" : layerOperations[i],
                 @"inputs": @[binding(linked ? function.inputs[0] : inputs[i], p.inputs[0])],
                 @"outputs": @[binding(linked ? current : results[i], p.output)],
@@ -110,15 +127,22 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
             for (unsigned j = 0; j < l.taskCount; ++j)
                 [tasks addObject:@{@"index": @(l.firstTask + j), @"layer": @(i),
                     @"operation": layerOperations[i], @"result": results[i].name}];
-            if (i + 1 < layout.size()) regions[results[i].name] = @{
-                @"offset": @(l.outputOffset), @"bytes": @(layers[i].output.allocationBytes)};
+            if (l.writesScratch) regions[results[i].name] = @{
+                @"offset": @(l.outputOffset),
+                @"bytes": @(programs[0].scratchAllocationBytes)};
+            else if (!linkedRing && i + 1 < layout.size())
+                regions[results[i].name] = @{
+                    @"offset": @(l.outputOffset),
+                    @"bytes": @(layers[i].output.allocationBytes)};
         }
         if (!linked) for (NSUInteger i = 0; i + 1 < results.count; ++i)
             [intermediates addObject:results[i].name];
         NSMutableDictionary *manifest = [@{
             @"schema": @"mil-hwxc.h14-anec-package.v1", @"target": @"H14",
             @"artifactFormat": format, @"programs": records, @"dispatchPlan": dispatch,
-            @"intermediates": intermediates, @"schedule": linked ? @"linked" : @"per-op",
+            @"intermediates": intermediates,
+            @"schedule": linkedRing ? @"linked-ring"
+                : (linked ? @"linked" : @"per-op"),
             @"scratch": @{@"bytes": @(linked ? programs[0].scratchAllocationBytes : 0),
                           @"regions": regions}, @"tasks": tasks} mutableCopy];
         if (records.count == 1) [manifest addEntriesFromDictionary:records[0]];

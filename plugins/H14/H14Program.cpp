@@ -1,6 +1,7 @@
 #include "H14Program.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <stdexcept>

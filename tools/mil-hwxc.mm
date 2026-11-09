@@ -13,7 +13,8 @@ static void printUsage(const char *program) {
     fprintf(stderr,
         "usage: %s --mil FILE --model-root DIR "
         "--output DIR [--target H16G|H13|H14|H17|H18] [--format anec|hwx] "
-        "[--schedule per-op|chain|spatial|linked|linked-l2|linked-ring|linked-l2-schedule|linked-l2-header|linked-l2-prefix-{1,2,4,8,26}|linked-l2-baseline-spill|linked-l2-hybrid-{legacy-terminal,linear-kernel,sentinel-geometry}]\n", program);
+        "[--schedule per-op|chain|spatial|linked|linked-l2|linked-ring|linked-l2-schedule|linked-l2-header|linked-l2-prefix-{1,2,4,8,26}|linked-l2-baseline-spill|linked-l2-hybrid-{legacy-terminal,linear-kernel,sentinel-geometry}] "
+        "[--h14-research-compact-task-minimum-bytes 0|128|256|312]\n", program);
 }
 
 static NSString *severityName(ANEDiagnosticSeverity severity) {
@@ -63,9 +64,11 @@ int main(int argc, const char *argv[]) {
              ([target isEqualToString:@"H16G"] && arguments[@"--schedule"])
                  ? @"hwx" : @"anec");
         NSString *schedule = arguments[@"--schedule"] ?: @"per-op";
+        NSString *researchCompactTaskMinimum =
+            arguments[@"--h14-research-compact-task-minimum-bytes"];
         NSSet<NSString *> *accepted = [NSSet setWithArray:@[
             @"--mil", @"--model-root", @"--output", @"--target", @"--format",
-            @"--schedule",
+            @"--schedule", @"--h14-research-compact-task-minimum-bytes",
         ]];
         for (NSString *key in arguments) {
             if (![accepted containsObject:key]) {
@@ -79,6 +82,17 @@ int main(int argc, const char *argv[]) {
             ![target isEqualToString:@"H16G"] && ![target isEqualToString:@"H17"]) {
             fprintf(stderr, "--schedule requires target H13, H14, H16G or H17\n");
             return 64;
+        }
+        if (researchCompactTaskMinimum) {
+            NSSet<NSString *> *allowed = [NSSet setWithArray:
+                @[@"0", @"128", @"256", @"312"]];
+            if (![target isEqualToString:@"H14"] ||
+                ![schedule isEqualToString:@"linked-ring"] ||
+                ![allowed containsObject:researchCompactTaskMinimum]) {
+                fprintf(stderr, "--h14-research-compact-task-minimum-bytes "
+                    "requires H14 linked-ring and 0, 128, 256, or 312\n");
+                return 64;
+            }
         }
         if (!milPath || !modelRoot || !output) {
             printUsage(argv[0]);
@@ -110,7 +124,9 @@ int main(int argc, const char *argv[]) {
                 : parityTarget
                 ? [ANEH14Compiler compileMILData:milData modelRoot:root
                     target:target format:format outputDirectory:outputURL
-                    schedule:schedule diagnostics:diagnostics error:&error]
+                    schedule:schedule
+                    researchCompactTaskMinimumBytes:researchCompactTaskMinimum
+                    diagnostics:diagnostics error:&error]
                 : [ANEH13Compiler compileMILData:milData modelRoot:root
                     format:format outputDirectory:outputURL schedule:schedule
                     diagnostics:diagnostics error:&error];
