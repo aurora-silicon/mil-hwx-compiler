@@ -636,7 +636,9 @@ void reuseLayerInput(Program &p, std::size_t off, std::size_t &bytes) {
 
 Program linkConvChain(const std::vector<Program> &layers,
                       std::vector<LinkedLayer> *layout) {
-    if (layers.size() < 2) throw std::invalid_argument("h14.linked-outside-envelope: need at least two conv layers");
+    if (layers.empty())
+        throw std::invalid_argument(
+            "h14.linked-outside-envelope: need at least one conv layer");
     Program result;
     result.taskCount = 0;
     result.formulaBuilt = true;
@@ -818,6 +820,43 @@ struct MobileGeometry {
     std::uint32_t sourceRow = 0;
     std::uint64_t sourceSpan = 0;
 };
+
+// The single-task boundary form stages both complete external surfaces in the
+// circular arena.  Keep every contributor named: a later, proven tiled form
+// can reduce the surface spans without silently dropping scratch traffic or
+// the largest simultaneously prefetched coefficient lane from its budget.
+struct MobileTaskWorkingSpan {
+    std::uint64_t source = 0;
+    std::uint64_t result = 0;
+    std::uint64_t scratch = 0;
+    std::uint64_t coefficientPrefetch = 0;
+
+    std::uint64_t total() const {
+        const auto surface = source + result;
+        if (surface < source || surface + scratch < surface ||
+            surface + scratch + coefficientPrefetch < surface + scratch)
+            throw std::overflow_error("H14 linked-ring working span overflows");
+        return surface + scratch + coefficientPrefetch;
+    }
+};
+
+std::uint64_t mobileCoefficientPrefetchSpan(const Program &layer) {
+    return *std::max_element(layer.mobileRingKernelSizes.begin(),
+                             layer.mobileRingKernelSizes.end());
+}
+
+void requireStandaloneArena(const MobileTaskWorkingSpan &span) {
+    if (span.total() <= mobileL2Bytes) return;
+    throw std::invalid_argument(
+        "h14.linked-ring-outside-arena: standalone task needs " +
+        std::to_string(span.total()) + " bytes (source=" +
+        std::to_string(span.source) + ", result=" +
+        std::to_string(span.result) + ", scratch=" +
+        std::to_string(span.scratch) + ", coefficient-prefetch=" +
+        std::to_string(span.coefficientPrefetch) + ") in the " +
+        std::to_string(mobileL2Bytes) +
+        "-byte ring arena; use --schedule linked");
+}
 
 std::uint32_t mobileCommonClass(const MobileGeometry &g) {
     // Issue class is the enabled issue-pipe mask.  The widest spatial stage
@@ -1355,7 +1394,12 @@ Program linkMobileNetRing(const std::vector<Program> &layers,
                        static_cast<std::uint32_t>(channel));
         return static_cast<std::uint64_t>(geometry[i].shape.output.height) * row;
     };
-    if (n == 1) sourceBase[0] = align16(standaloneResultSpan(0));
+    if (n == 1) {
+        const auto standaloneResult = standaloneResultSpan(0);
+        requireStandaloneArena({geometry[0].sourceSpan, standaloneResult, 0,
+                                mobileCoefficientPrefetchSpan(layers[0])});
+        sourceBase[0] = align16(standaloneResult);
+    }
     if (n >= 2) {
         outputResident[0] = true;
         resultCfg[0] = l2Config(L2Role::ProgramInputResult);

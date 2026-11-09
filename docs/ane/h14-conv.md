@@ -196,12 +196,20 @@ section.
 On the base M2 the fused ReLU6 MobileNetV1 ring matches the float64
 reference (relative L2 1.5e-3, same top-5 as the reference), as does every
 ReLU6 prefix from one to 28 tasks, at a p50 of about 587 us per inference.
-A standalone pointwise 32-to-64 layer at 112x112 is still inaccurate and not
+A standalone pointwise 32-to-64 layer at 112x112 was inaccurate and not
 repeatable, with or without the clip: its complete input and result spans
 exceed the 2 MiB ring arena. Inside the MobileNet chain the same layer works
 because its input is already resident. The ring schedule is for the
-MobileNetV1 chain; standalone layers whose working spans exceed the arena
-belong on `--schedule linked`.
+MobileNetV1 chain. For a standalone boundary task the compiler now derives a
+working-span budget with four named contributors: the source surface, result
+surface, external scratch traffic, and largest simultaneous coefficient-lane
+prefetch. It refuses the task with `h14.linked-ring-outside-arena` when their
+sum exceeds `mobileL2Bytes`, and directs the caller to `--schedule linked`.
+The ordinary linked schedule accepts this one-layer generic fallback.
+The rejected 32-to-64 form needs 802,816 source bytes plus 1,609,216 result
+bytes before the small coefficient prefetch, already exceeding the arena.
+Resident chain tasks retain their device-proven streaming allocation and byte
+stream; they do not stage two complete external boundary surfaces at once.
 
 For ReLU and no-post-operation ring tasks, header word 1 is a scheduler hint
 derived from geometry. The compiler counts multiply-accumulates as

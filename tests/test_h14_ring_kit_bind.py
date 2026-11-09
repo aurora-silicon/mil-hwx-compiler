@@ -25,7 +25,9 @@ def main():
                        env=dict(os.environ, MILC=str(COMPILER)),
                        timeout=scaled_timeout(1200))
         manifest = json.loads((out / 'kit.json').read_text())
-        assert manifest['libaneBindOverrunProgramsChecked'] == 73
+        assert manifest['libaneBindOverrunProgramsChecked'] == 72
+        assert manifest['refusedCases'] == {
+            'singles/r6-L02': 'h14.linked-ring-outside-arena'}
         programs = {str(path.relative_to(out))
                     for path in out.rglob('program-0.anec')}
         expected = {
@@ -43,13 +45,18 @@ def main():
             *(f'singles/dw-k3-s2-{size}/linked/program-0.anec'
               for size in (14, 28, 56, 112)),
             *(f'singles/r6-L{index:02d}/linked/program-0.anec'
-              for index in (0, 1, 2, 3, 5, 7, 13, 25, 26, 27)),
+              for index in (0, 1, 3, 5, 7, 13, 25, 26, 27)),
         })
         assert programs == expected
+        refusal = (out / 'singles/r6-L02/refusal.txt').read_text()
+        assert 'h14.linked-ring-outside-arena' in refusal
+        assert '--schedule linked' in refusal
+        assert (out / 'singles/r6-L02/refs.npz').exists()
         assert all((out / name).exists()
                    for name in ('run.c', 'run.py', 'run_kit.py',
                                 'relu6-field-changes.json'))
-    print('PASS H14 linked-ring kit: 73 ANEC programs are bind-safe')
+    print('PASS H14 linked-ring kit: 72 ANEC programs are bind-safe; '
+          'one over-arena standalone is refused')
 
 
 if __name__ == '__main__':
