@@ -4,6 +4,7 @@ import json
 import struct
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 
@@ -85,6 +86,29 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='h14-linked-ring-') as directory:
         root = Path(directory)
+        layers = M.ane_layers('ane', 'native', relu6=True)
+        params = M.to_ane_params(M.random_tf_weights(5983), 'ane', 'native')
+        refused = root / 'standalone-L02'
+        mil, _, _ = conv_mil([layers[2]], (32, 112, 112), refused / 'src',
+                             weights=[params[2]])
+        ring_out = refused / 'ring'
+        run = subprocess.run([
+            str(COMPILER), '--target', 'H14', '--schedule', 'linked-ring',
+            '--mil', str(mil), '--model-root', str(refused / 'src'),
+            '--output', str(ring_out)], text=True, capture_output=True,
+            env=dict(os.environ, MILHWXC_H14_CONV_GENERIC='1'))
+        assert run.returncode != 0
+        assert 'h14.linked-ring-outside-arena' in run.stderr
+        assert 'source=802816' in run.stderr
+        assert 'result=1609216' in run.stderr
+        assert 'scratch=0' in run.stderr
+        assert 'coefficient-prefetch=' in run.stderr
+        assert '--schedule linked' in run.stderr
+        assert not ring_out.exists()
+        linked = compile_chain(str(COMPILER), mil, refused / 'src',
+                               refused / 'linked', 'linked')
+        assert linked['schedule'] == 'linked'
+
         references = []
         for size in (224, 192):
             layers, params, output = compile_size(

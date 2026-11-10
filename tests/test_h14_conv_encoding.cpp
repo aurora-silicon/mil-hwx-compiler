@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 using namespace ane::h14;
 using namespace ane::h14::fields;
 
@@ -508,6 +509,24 @@ int main() {
         const auto linkedReference=linkedMobileReference(true);
         constexpr unsigned forms[] = {0,1,2,3,5,7,13,25,26,27};
         for(const auto index:forms) {
+            if(index==2) {
+                bool refused=false;
+                try {
+                    (void)linkMobileNetRing({clippedLayers[index]});
+                } catch(const std::invalid_argument &error) {
+                    const std::string diagnostic=error.what();
+                    refused=diagnostic.find(
+                        "h14.linked-ring-outside-arena")!=std::string::npos&&
+                        diagnostic.find("source=802816")!=std::string::npos&&
+                        diagnostic.find("result=1609216")!=std::string::npos&&
+                        diagnostic.find("scratch=0")!=std::string::npos&&
+                        diagnostic.find("coefficient-prefetch=")!=
+                            std::string::npos&&
+                        diagnostic.find("--schedule linked")!=std::string::npos;
+                }
+                assert(refused);
+                continue;
+            }
             const auto single=linkMobileNetRing({clippedLayers[index]});
             const auto &linked=linkedReference[index];
             const auto singleMac=reg(single,16,registers::macConfig);
@@ -553,9 +572,10 @@ int main() {
                 // Where the linked reference uses the identical one-task
                 // geometry, pin the whole descriptor+coefficient lane rather
                 // than only its descriptor prefix.
-                // L02 and L05 are the two failing standalone forms.  Their
-                // native and mirrored linked geometries are identical.
-                const bool exactGeometry=index==2 || index==5;
+                // L05's native and mirrored linked geometries are identical.
+                // L02 is refused above because its complete boundary working
+                // span does not fit the ring arena.
+                const bool exactGeometry=index==5;
                 if(linked.taskCount==1 && exactGeometry) {
                     for(unsigned lane=0;lane<kernelLaneCount;++lane) {
                         const auto address=sizeof(std::uint32_t)*lane;

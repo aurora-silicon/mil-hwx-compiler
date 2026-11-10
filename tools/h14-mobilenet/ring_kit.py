@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 import numpy as np
@@ -32,11 +33,27 @@ def references(case, layers, params, inshape, count):
              outputs_float64=np.asarray(outputs, dtype=np.float64))
 
 
-def single(root, name, layer, param, inshape, count, compiler):
+def single(root, name, layer, param, inshape, count, compiler,
+           expect_arena_refusal=False):
     case = root / 'singles' / name
     mil, _, _ = conv_mil([layer], inshape, case / 'src', weights=[param])
     save_params(case / 'params.npz', [layer], [param], inshape)
-    compile_chain(compiler, mil, case / 'src', case / 'linked', 'linked-ring')
+    if expect_arena_refusal:
+        run = subprocess.run([
+            compiler, '--target', 'H14', '--schedule', 'linked-ring',
+            '--mil', str(mil), '--model-root', str(case / 'src'),
+            '--output', str(case / 'linked')], text=True, capture_output=True,
+            env=dict(os.environ, MILHWXC_H14_CONV_GENERIC='1'))
+        diagnostic = run.stderr.strip()
+        if (run.returncode == 0 or
+                'h14.linked-ring-outside-arena' not in diagnostic or
+                '--schedule linked' not in diagnostic):
+            raise RuntimeError('expected linked-ring arena refusal: ' +
+                               diagnostic[-600:])
+        (case / 'refusal.txt').write_text(diagnostic + '\n')
+    else:
+        compile_chain(compiler, mil, case / 'src', case / 'linked',
+                      'linked-ring')
     references(case, [layer], [param], inshape, count)
 
 
@@ -122,6 +139,7 @@ def write_relu6_field_changes(root, layers):
         'clippedLayers': [index] if layers[index].get('relu6') else [],
         'changedFields': fields if layers[index].get('relu6') else [],
         'unchangedFields': unchanged,
+        'refusedOutsideArena': index == 2,
         'rkR7ChangedTasks': [], 'rkR7ChangedFields': [],
     } for index in RELU6_SINGLE_FORMS)
     (root / 'relu6-field-changes.json').write_text(json.dumps({
@@ -166,7 +184,8 @@ def main():
     shapes = input_shapes(relu6)
     for index in RELU6_SINGLE_FORMS:
         single(out, f'r6-L{index:02d}', relu6[index], params[index],
-               shapes[index], args.refs, compiler)
+               shapes[index], args.refs, compiler,
+               expect_arena_refusal=index == 2)
     write_relu6_field_changes(out, relu6)
 
     checked = verify(out)
@@ -180,12 +199,14 @@ def main():
     write_hash_list(out / 'sha256-relu.txt', out, relu_programs)
     order = [f'singles/dw-k3-s2-{size}' for size in (14, 28, 56, 112)] + [
         'singles/stem-k3-s2-224', 'prefixes/p01..p28', 'full-relu',
-        'singles/r6-L02', 'singles/r6-L05', 'prefixes6/p04',
+        'singles/r6-L05', 'prefixes6/p04',
         'prefixes6/p01..p28', 'full-relu6']
     (out / 'kit.json').write_text(json.dumps({
         'target': 'H14', 'schedule': 'linked-ring', 'tasks': 28,
         'executionOrder': order,
         'reference': 'float64 convolution with fp16 boundaries',
+        'refusedCases': {
+            'singles/r6-L02': 'h14.linked-ring-outside-arena'},
         'libaneBindOverrunProgramsChecked': checked,
     }, indent=2) + '\n')
     shutil.copy2(HERE / 'run.c', out / 'run.c')
