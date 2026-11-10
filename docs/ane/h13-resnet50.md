@@ -53,8 +53,9 @@ geometry and producer control, while the pool carries the matching source
 configuration, consumer control, and channel-3 selectors. A host test decodes
 every task of the 224/192 bottleneck programs, ResNet-18, the two-task pool
 rung, and the first-block rung; it also checks that the stem result base and
-channel/row/plane strides equal the pool source fields and that the terminal
-pool DMA row/plane strides equal the package layout.
+channel/row/plane strides equal the pool source fields, while the terminal
+pool plane/depth fields and the separate PE piece-advance word follow their
+respective package and output-shape rules.
 It additionally checks all sixteen stem kernel-DMA spans, the native sparse
 kernel fields, the leading two-cell TensorFlow-SAME padding of the 7x7 stem,
 and the exact external-source layout shared with the proven 3x3 linked-ring
@@ -70,40 +71,47 @@ hard guard also remains: Common `0x34` is the executing PE pipeline form with
 named enable and pool stage fields.  Substituting the convolution schedule
 there hangs the pool.
 
-The corrected host model uses eight-column pieces, 16 bytes per fp16 piece,
-and the package's 128-byte physical row.  The round-10 destination path starts
-at source piece four.  It writes source pieces four and five to destination
-byte bases 64 and 80, making columns 32 through 47 correct, then advances the
-third piece to byte base 128.  That last write is the next physical row's
-columns zero through seven, so a logical row observes columns 48 through 55
-from its predecessor.  No write reaches columns 8 through 31 or 48 through
-55.  The unit model constructs those exact piece bases and reproduces all four
-parts of the measured map.  The external linear path instead starts at byte
-zero and advances all seven pieces by 16 bytes, covering columns zero through
-55 while leaving only the eight physical padding columns untouched.
+Round 11 proves that Common `0x2c` sets the PE output piece width.  The normal
+class emits 16-column fp16 pieces; setting the whole word to zero emits
+one-column pieces and is much slower.  The result writer groups pieces in
+32-column tiles.  It walks one piece across every row before the next piece,
+and later tiles can overwrite the same physical slot.
 
-The predicted controller is TileDMA Destination Cfg's scratch/interleave
-writer-enable field.  Round 10 set it on an external NCHW result; the public
-linked-ring depthwise terminal clears it.  The main shape rule now enables
-that path only for scratch/interleaved destinations and clears it for external
-results.  This is derived from storage semantics, so the same constructor is
-tested on 224 and 192 ResNet-50 and the ResNet-18-shaped program.  The
-`destination-path` sweep changes only this field and is the direct test of the
-prediction.  `destination-dma` tests the broader result record in case the
-piece progression is coupled to its strides, extents, or format.
+The host model names TileDMA destination `0x17808` as the PE destination
+piece-advance word.  On this PE path the hardware decodes half of the stored
+word as bytes.  Round 10 put the ordinary 128-byte physical row there, so a
+piece advanced 64 bytes even though one 16-column fp16 piece is only 32 bytes.
+For width 28, the two pieces consequently land at byte bases 0 and 64, exactly
+matching source columns 0 through 15 in place and source columns 16 through 27
+at physical columns 32 through 43.  For width 56, tile zero's second piece and
+tile one's first piece collide at byte 64; the latter wins, explaining correct
+columns 32 through 47.  Tile one's tail lands at byte 128 and overwrites the
+next row's 16-column slot: its first eight values are the preceding row's
+columns 48 through 55 and its padded half clears columns 8 through 15.
+The zero `0x2c` diagnostic emits extra one-column pieces into the second slot;
+the last writers leave only column 32 and the preceding row's column 55.  The
+unit model reproduces all three measured maps, including write ordering and
+the 128-byte row wrap.
 
-Every other plausible field group has a compiler-built negative control.  The
-scratch-fed two-task control is followed by source TileDMA, L2 source, Common
-traversal, GroupCfg, Common `0x2c`, output-size, halo/padding, and PE-Cfg
-variants.  Except for the explicitly documented traversal and trailing-halo
-geometry candidates, each group is taken by name from the public formula-built
-3x3/s2 112-to-56 linked-ring depthwise task.  Width-only variants set the Common output width
-to 28 and 16 while keeping the 56-column output allocation, revealing whether
-the three-piece window has a fixed base or moves with logical width.  Each
-variant is compared byte-for-byte with the round-10 control; tests reject a
-change outside its named register group.  All variants retain the 504-byte
-KernelDMA grammar and the guarded PE pipeline word.  No packaged byte is
-patched.
+The shape rule programs twice the byte size of `min(width, 16)` fp16 columns
+into destination `0x17808`.  For the 56-column pool that stored word is 64 and
+decodes to the required 32-byte advance.  The model then places tile-zero
+pieces at physical columns 0 and 16 and tile-one pieces at 32 and 48, covering
+the complete logical row without touching its eight padding columns.  The
+same rule is host-tested for 224- and 192-input ResNet-50 and the ResNet-18
+shape.
+
+Round 11's separate attempt to clear destination Cfg writer bit 26 is fully
+reverted: it timed out with no finish lines and poisoned all subsequent jobs
+until reboot.  The round-10 executing writer remains selected for both
+external and scratch results.  The new sweep keeps that control and changes
+one word per variant: every destination record word has its own candidate,
+`0x2c` gets high-nibble classes 5 and 4 plus the low-nibble issue alternative,
+and widths 28 and 16 remain explicit.  The best-guess and destination
+piece-advance variants change only `0x17808`; the known hanging writer-bit
+variant is last in `sweepOrder`.  Tests compare every variant byte-for-byte
+with the control, retain the 504-byte KernelDMA grammar and guarded PE pipeline
+word, and reject changes outside the named word.  No packaged byte is patched.
 
 The full-stream timeout remains localized to index 1, class pool.  Once it is
 correct, the next descriptor is index 2, the first-block projection class.

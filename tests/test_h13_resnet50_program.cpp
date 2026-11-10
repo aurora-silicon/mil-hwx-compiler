@@ -302,7 +302,8 @@ static ane::h13::Program linkedRingPoolGeometryReference(
 }
 
 struct ColumnWrite {
-    std::uint32_t source;
+    std::uint32_t sourceRow;
+    std::uint32_t sourceColumn;
     std::uint32_t destinationByte;
 };
 
@@ -313,30 +314,39 @@ static std::uint32_t ceilLog2(std::uint32_t value) {
     return result;
 }
 
-static std::vector<ColumnWrite> modelPoolColumnPieces(
-    std::uint32_t width, bool scratchWriter) {
-    constexpr std::uint32_t pieceColumns = 8;
+static std::vector<ColumnWrite> modelPoolResultWriter(
+    std::uint32_t width, std::uint32_t columnConfig,
+    std::uint32_t destinationPieceWord, std::uint32_t rows = 3) {
+    constexpr std::uint32_t tileColumns = 32;
     constexpr std::uint32_t halfwordBytes = 2;
-    constexpr std::uint32_t pieceBytes = pieceColumns * halfwordBytes;
     constexpr std::uint32_t rowBytes = 128;
-    const auto pieces = (width + pieceColumns - 1) / pieceColumns;
+    const auto pieceClass = (columnConfig >> 4) & 15u;
+    const auto pieceColumns = pieceClass > 2
+        ? std::min(16u, 1u << (pieceClass - 2)) : 1u;
+    // The destination word is decoded in half-byte units on this PE path.
+    const auto destinationAdvanceBytes = destinationPieceWord / 2;
     std::vector<ColumnWrite> writes;
-    const auto firstPiece = scratchWriter ? 4u : 0u;
-    const auto activePieces = scratchWriter ? std::min(3u, pieces) : pieces;
-    for (std::uint32_t index = 0; index != activePieces; ++index) {
-        const auto sourcePiece = firstPiece + index;
-        if (sourcePiece >= pieces) break;
-        // The misclassified scratch writer emits two adjacent pieces, then
-        // advances to the next 128-byte bank row.  The external writer emits
-        // all seven logical pieces linearly into the padded physical row.
-        const auto destinationByte = scratchWriter && index >= 2
-            ? rowBytes + (index - 2) * pieceBytes
-            : (firstPiece + index) * pieceBytes;
-        for (std::uint32_t within = 0;
-             within != pieceColumns && sourcePiece * pieceColumns + within < width;
-             ++within)
-            writes.push_back({sourcePiece * pieceColumns + within,
-                              destinationByte + within * halfwordBytes});
+    // The PE walks one piece across every row before advancing to the next.
+    // There are two destination piece slots per 32-column tile; narrowing
+    // Common +0x2c emits more source pieces into the second slot, so the last
+    // source piece wins.  A partial final piece zero-fills the unused columns
+    // of its complete destination slot.
+    for (std::uint32_t tile = 0; tile < width; tile += tileColumns) {
+        const auto tileWidth = std::min(tileColumns, width - tile);
+        const auto pieces = (tileWidth + pieceColumns - 1) / pieceColumns;
+        for (std::uint32_t piece = 0; piece != pieces; ++piece) {
+            const auto sourceBase = tile + piece * pieceColumns;
+            const auto destinationBase = tile * halfwordBytes +
+                std::min(piece, 1u) * destinationAdvanceBytes;
+            for (std::uint32_t row = 0; row != rows; ++row)
+                for (std::uint32_t within = 0;
+                     within != pieceColumns; ++within)
+                    writes.push_back({row,
+                        sourceBase + within < tile + tileWidth
+                            ? sourceBase + within : UINT32_MAX,
+                        row * rowBytes + destinationBase +
+                            within * halfwordBytes});
+        }
     }
     return writes;
 }
@@ -344,35 +354,65 @@ static std::vector<ColumnWrite> modelPoolColumnPieces(
 static void validateMeasuredPoolColumnModel() {
     constexpr std::uint32_t logicalWidth = 56;
     constexpr std::uint32_t physicalWidth = 64;
-    const auto oldWrites = modelPoolColumnPieces(logicalWidth, true);
-    std::vector<int> oldDestination(2 * physicalWidth, -1);
-    for (const auto write : oldWrites) {
-        const auto halfword = write.destinationByte / 2;
-        oldDestination[halfword] = static_cast<int>(write.source);
-    }
+    constexpr std::uint32_t measuredColumnConfig = 0x64;
+    constexpr std::uint32_t round10DestinationWord = 128;
+    constexpr std::uint32_t correctedDestinationWord = 64;
+    const auto map = [](const std::vector<ColumnWrite> &writes) {
+        std::vector<std::pair<int, int>> result(
+            3 * physicalWidth, {-1, -1});
+        for (const auto &write : writes)
+            if (write.destinationByte / 2 < result.size())
+                result[write.destinationByte / 2] =
+                    write.sourceColumn == UINT32_MAX
+                    ? std::make_pair(-1, -1)
+                    : std::make_pair(static_cast<int>(write.sourceRow),
+                                     static_cast<int>(write.sourceColumn));
+        return result;
+    };
+    const auto at = [&](const auto &mapping, std::uint32_t row,
+                        std::uint32_t column) -> const auto & {
+        return mapping[row * physicalWidth + column];
+    };
+    const auto oldDestination = map(modelPoolResultWriter(
+        logicalWidth, measuredColumnConfig, round10DestinationWord));
     for (std::uint32_t column = 8; column != 32; ++column)
-        expect(oldDestination[column] < 0,
-               "old pool model does not leave columns 8..31 unwritten");
+        expect(at(oldDestination, 1, column).first < 0,
+               "round-10 model does not leave columns 8..31 unwritten");
     for (std::uint32_t column = 32; column != 48; ++column)
-        expect(oldDestination[column] == static_cast<int>(column),
-               "old pool model does not make columns 32..47 correct");
+        expect(at(oldDestination, 1, column) ==
+                   std::make_pair(1, static_cast<int>(column)),
+               "round-10 model does not preserve columns 32..47");
     for (std::uint32_t column = 48; column != 56; ++column)
-        expect(oldDestination[column] < 0,
-               "old pool model does not leave columns 48..55 unwritten");
+        expect(at(oldDestination, 1, column).first < 0,
+               "round-10 model does not leave columns 48..55 unwritten");
     for (std::uint32_t column = 0; column != 8; ++column)
-        expect(oldDestination[physicalWidth + column] ==
-                   static_cast<int>(48 + column),
-               "old pool model does not wrap the last piece one physical row");
+        expect(at(oldDestination, 1, column) ==
+                   std::make_pair(0, static_cast<int>(48 + column)),
+               "round-10 model does not wrap the previous-row tail");
 
-    const auto fixedWrites = modelPoolColumnPieces(logicalWidth, false);
-    std::vector<int> fixedDestination(logicalWidth, -1);
-    for (const auto write : fixedWrites)
-        if (write.destinationByte / 2 < fixedDestination.size())
-            fixedDestination[write.destinationByte / 2] =
-                static_cast<int>(write.source);
+    const auto width28 = map(modelPoolResultWriter(
+        28, measuredColumnConfig, round10DestinationWord));
+    for (std::uint32_t column = 0; column != 16; ++column)
+        expect(at(width28, 1, column) ==
+                   std::make_pair(1, static_cast<int>(column)),
+               "width-28 model does not keep piece zero in place");
+    for (std::uint32_t column = 0; column != 12; ++column)
+        expect(at(width28, 1, 32 + column) ==
+                   std::make_pair(1, static_cast<int>(16 + column)),
+               "width-28 model does not place piece one 32 columns late");
+
+    const auto oneColumn = map(modelPoolResultWriter(
+        logicalWidth, 0, round10DestinationWord));
+    expect(at(oneColumn, 1, 32) == std::make_pair(1, 32) &&
+               at(oneColumn, 1, 0) == std::make_pair(0, 55),
+           "zero +0x2c model does not retain column 32 and wrapped tail 55");
+
+    const auto fixedDestination = map(modelPoolResultWriter(
+        logicalWidth, measuredColumnConfig, correctedDestinationWord));
     for (std::uint32_t column = 0; column != logicalWidth; ++column)
-        expect(fixedDestination[column] == static_cast<int>(column),
-               "fixed pool model does not cover every logical output column");
+        expect(at(fixedDestination, 1, column) ==
+                   std::make_pair(1, static_cast<int>(column)),
+               "corrected pool model does not cover every output column");
 }
 
 static void validatePoolTilingFields(const ane::h13::Program &program) {
@@ -604,14 +644,15 @@ static void validatePoolBoundaryLayout(const ane::h13::Program &program) {
     const auto depth = program.output.nchw[4] * program.output.nchw[1];
     const auto externalNCHW = 1u | (3u << 4) | (2u << 12) |
                               (3u << 20) | (1u << 24);
-    expect((reg(program, terminal, 0x17800) & (1u << 26)) == 0 &&
-               program.output.nchw[5] == reg(program, terminal, 0x17808) &&
+    expect((reg(program, terminal, 0x17800) & (1u << 26)) != 0 &&
+               reg(program, terminal, 0x17808) == 64 &&
+               program.output.nchw[5] == 128 &&
                program.output.nchw[4] == reg(program, terminal, 0x1780c) &&
                depth == reg(program, terminal, 0x17810) &&
                depth == reg(program, terminal, 0x17814) &&
                externalNCHW == reg(program, terminal, 0x17818) &&
                program.output.allocationBytes >= depth,
-           "pool terminal DMA row/channel/depth/format differs from manifest NCHW");
+           "pool terminal piece advance or plane/depth/format is inconsistent");
 }
 
 static void expectOnlyRegisterChanges(
@@ -661,26 +702,24 @@ static void validatePoolSweeps(
     const auto controlPool = taskSpans(control).at(1);
     expect(reg(control, controlPool, 0x17800) & (1u << 26),
            "pool sweep control does not reproduce the round-10 writer path");
-    expectOnlyRegisterChanges(control, fixed, {0x17800}, "main fix");
+    expectOnlyRegisterChanges(control, fixed, {0x17808}, "main fix");
 
     struct Sweep {
         const char *name;
         std::vector<std::uint32_t> fields;
     };
     const std::vector<Sweep> sweeps = {
-        {"destination-path", {0x17800}},
-        {"destination-dma", {0x17800, 0x17804, 0x17808, 0x1780c,
-                             0x17810, 0x17814, 0x17818}},
-        {"source-dma", {0x13800, 0x13808, 0x1380c, 0x13810,
-                        0x13814, 0x13818, 0x13838, 0x13840}},
-        {"l2-source", {0x04804, 0x04808, 0x0480c, 0x04810,
-                       0x04814, 0x04818}},
-        {"common-traversal", {0x00020}},
-        {"group-config", {0x00024}},
-        {"column-tile", {0x0002c}},
-        {"output-size", {0x00010, 0x00014, 0x00028}},
-        {"halo-padding", {0x0001c}},
-        {"pe-config", {0x08800}},
+        {"best-guess", {0x17808}},
+        {"dst-config", {0x17800}},
+        {"dst-base", {0x17804}},
+        {"dst-piece-advance", {0x17808}},
+        {"dst-plane-advance", {0x1780c}},
+        {"dst-extent", {0x17810}},
+        {"dst-group-extent", {0x17814}},
+        {"dst-format", {0x17818}},
+        {"column-high-5", {0x0002c}},
+        {"column-high-4", {0x0002c}},
+        {"column-low-2", {0x0002c}},
         {"width-28", {0x00014}},
         {"width-16", {0x00014}},
     };
@@ -802,6 +841,15 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
     validateKernelDMASpans(program);
     validatePoolTilingFields(program);
     validateResidualPETasks(program);
+    const auto poolBoundary = ane::h13::encodeResidualNetwork(
+        network.convs, head.first.data(), head.first.size(),
+        head.second.data(), head.second.size(), "pool-via-dram");
+    const auto poolSpan = taskSpans(poolBoundary).at(1);
+    const auto poolWidth = reg(poolBoundary, poolSpan, 0x00014) & 0xffffu;
+    expect((reg(poolBoundary, poolSpan, 0x17800) & (1u << 26)) != 0 &&
+               reg(poolBoundary, poolSpan, 0x17808) ==
+                   4u * std::min(16u, poolWidth),
+           "external pool result lost its writer or shape-derived piece advance");
     return {std::move(program), std::move(logits)};
 }
 

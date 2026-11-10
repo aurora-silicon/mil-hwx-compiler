@@ -27,8 +27,10 @@ The `rungs` and `qualificationOrder` arrays remain the original 21-rung
 smallest-first ladder. `next_stall` is a separate three-task
 stem/pool/projection diagnostic for the descriptor expected immediately after
 the pool is repaired. `sweep` contains a round-10 control and compiler-built
-single-field-group variants of the scratch-fed pool. Each entry names the
-changed field and describes it in one line; `sweepOrder` is the recommended
-device order. The 28- and 16-column variants change only the pool's Common
-output-width word while retaining the ordinary 56-column output allocation so
-the moving piece window remains visible in a full-width dump.
+single-word variants of the scratch-fed pool. It isolates every destination
+record word, the predicted destination piece advance, and three Common
+`0x2c` nibble alternatives. Each entry names the changed word and describes it
+in one line; `sweepOrder` places the known hanging writer-bit experiment last.
+The 28- and 16-column variants change only the pool's Common output-width word
+while retaining the ordinary 56-column output allocation so the moving piece
+window remains visible in a full-width dump.
