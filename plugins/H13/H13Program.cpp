@@ -4555,6 +4555,53 @@ enum class ResidualRole {
     Linear,
 };
 
+enum class ResidualPoolSweep {
+    None,
+    Control,
+    DestinationPath,
+    DestinationDMA,
+    SourceDMA,
+    L2Source,
+    CommonTraversal,
+    GroupConfig,
+    ColumnTile,
+    OutputSize,
+    HaloPadding,
+    PEConfig,
+    Width28,
+    Width16,
+};
+
+ResidualPoolSweep residualPoolSweep(const std::string &boundary) {
+    if (boundary == "pool-sweep-control")
+        return ResidualPoolSweep::Control;
+    if (boundary == "pool-sweep-destination-path")
+        return ResidualPoolSweep::DestinationPath;
+    if (boundary == "pool-sweep-destination-dma")
+        return ResidualPoolSweep::DestinationDMA;
+    if (boundary == "pool-sweep-source-dma")
+        return ResidualPoolSweep::SourceDMA;
+    if (boundary == "pool-sweep-l2-source")
+        return ResidualPoolSweep::L2Source;
+    if (boundary == "pool-sweep-common-traversal")
+        return ResidualPoolSweep::CommonTraversal;
+    if (boundary == "pool-sweep-group-config")
+        return ResidualPoolSweep::GroupConfig;
+    if (boundary == "pool-sweep-column-tile")
+        return ResidualPoolSweep::ColumnTile;
+    if (boundary == "pool-sweep-output-size")
+        return ResidualPoolSweep::OutputSize;
+    if (boundary == "pool-sweep-halo-padding")
+        return ResidualPoolSweep::HaloPadding;
+    if (boundary == "pool-sweep-pe-config")
+        return ResidualPoolSweep::PEConfig;
+    if (boundary == "pool-sweep-width-28")
+        return ResidualPoolSweep::Width28;
+    if (boundary == "pool-sweep-width-16")
+        return ResidualPoolSweep::Width16;
+    return ResidualPoolSweep::None;
+}
+
 ResidualRole residualMainRole(std::size_t count, std::size_t position) {
     if (count == 2)
         return position ? ResidualRole::Basic2 : ResidualRole::Basic1;
@@ -4863,8 +4910,19 @@ constexpr std::uint32_t residualSourceFormat(bool external) {
 
 constexpr std::uint32_t residualDestinationDMAConfig(bool external) {
     // TileDMA destination Cfg: enable, cache hint 12, scratch data-set 3,
-    // and the external/scratch write-path enable at bit 26.
-    return 1u | (12u << 4) | (external ? 0u : 3u << 8) | (1u << 26);
+    // and the scratch/interleave write-path enable at bit 26.  External NCHW
+    // results use the linear writer, matching the linked-ring depthwise
+    // terminal; selecting the scratch writer on an external result advances
+    // its eight-column pieces through the wrong bank geometry.
+    return 1u | (12u << 4) |
+           (external ? 0u : (3u << 8) | (1u << 26));
+}
+
+constexpr std::uint32_t residualRound10DestinationDMAConfig(bool external) {
+    // Round-10 control: the external result incorrectly selected the same
+    // interleave writer-enable bit as scratch.  Sweep programs restore this
+    // one old field before changing exactly their named candidate group.
+    return residualDestinationDMAConfig(external) | (1u << 26);
 }
 
 constexpr std::uint32_t residualDestinationFormat(bool external) {
@@ -5065,6 +5123,134 @@ void residualTileDestination(std::vector<std::uint8_t> &stream,
     putRegister(stream, at, bytes, 0x17810, depth);
     putRegister(stream, at, bytes, 0x17814, depth);
     putRegister(stream, at, bytes, 0x17818, format);
+}
+
+const Program &residualPoolFieldReference() {
+    // Public formula-built reference used by the #26 linked-ring path: a
+    // native 3x3/s2 stem followed by a 3x3/s2 depthwise 112-to-56 task.  The
+    // sweep reads named registers from this constructor; it never imports a
+    // program or patches a packaged artifact.
+    static const Program reference = [] {
+        const ConvShape stemShape{3, 3, 2, 1, true,
+            ElementwiseShape{3, 224, 224}, ElementwiseShape{32, 112, 112}};
+        const ConvShape depthwiseShape{3, 3, 2, 32, true,
+            stemShape.output, ElementwiseShape{32, 56, 56}};
+        const auto encode = [](const ConvShape &shape) {
+            const auto reduction = static_cast<std::size_t>(
+                shape.input.channels / shape.groups) * shape.kernel *
+                shape.kernelWidth;
+            std::vector<std::uint8_t> weights(
+                2 * static_cast<std::size_t>(shape.output.channels) *
+                    reduction, 0);
+            std::vector<std::uint8_t> bias(2 * shape.output.channels, 0);
+            return encodeConvLinkedRing(shape, weights.data(), weights.size(),
+                                        bias.data(), bias.size());
+        };
+        return linkMobileNetRing({encode(stemShape),
+                                  encode(depthwiseShape)});
+    }();
+    return reference;
+}
+
+std::uint32_t residualPoolReferenceRegister(std::uint32_t address) {
+    const auto &reference = residualPoolFieldReference();
+    const auto span = taskSpans(reference).at(1);
+    return loadLE32(reference.task, h13RegisterOffset(
+        reference.task, span.offset, span.bytes, address));
+}
+
+std::uint32_t residualPoolPieceTraversal(std::uint32_t width) {
+    // Common traversal candidate: bits 11:8 carry the last eight-column
+    // piece for this diagnostic.  The proven task's base traversal equals
+    // the round-10 value, so the sweep supplies the geometry alternative
+    // instead of emitting a byte-identical no-op.
+    const auto pieces = (width + 7) / 8;
+    return residualCommonTraversal() |
+           ((pieces ? pieces - 1 : 0) << 8);
+}
+
+void applyResidualPoolSweep(std::vector<std::uint8_t> &stream,
+                            std::size_t at, std::size_t bytes,
+                            ResidualPoolSweep sweep) {
+    if (sweep == ResidualPoolSweep::None) return;
+
+    // Every sweep starts at the exact round-10 pool control.  The main path
+    // uses the corrected external writer; sweep variants change only the
+    // named group below so the device result is a real one-field bisect.
+    putRegister(stream, at, bytes, 0x17800,
+                residualRound10DestinationDMAConfig(true));
+    if (sweep == ResidualPoolSweep::Control) return;
+
+    const auto copyReference = [&](std::initializer_list<std::uint32_t> fields) {
+        for (const auto address : fields)
+            putRegister(stream, at, bytes, address,
+                        residualPoolReferenceRegister(address));
+    };
+    switch (sweep) {
+    case ResidualPoolSweep::DestinationPath:
+        putRegister(stream, at, bytes, 0x17800,
+                    residualDestinationDMAConfig(true));
+        break;
+    case ResidualPoolSweep::DestinationDMA:
+        copyReference({0x17800, 0x17804, 0x17808, 0x1780c,
+                       0x17810, 0x17814, 0x17818});
+        break;
+    case ResidualPoolSweep::SourceDMA:
+        copyReference({0x13800, 0x13808, 0x1380c, 0x13810,
+                       0x13814, 0x13818, 0x13838, 0x13840});
+        break;
+    case ResidualPoolSweep::L2Source:
+        copyReference({0x04804, 0x04808, 0x0480c, 0x04810,
+                       0x04814, 0x04818});
+        break;
+    case ResidualPoolSweep::CommonTraversal:
+        putRegister(stream, at, bytes, 0x00020,
+                    residualPoolPieceTraversal(56));
+        break;
+    case ResidualPoolSweep::GroupConfig:
+        copyReference({0x00024});
+        break;
+    case ResidualPoolSweep::ColumnTile:
+        copyReference({0x0002c});
+        break;
+    case ResidualPoolSweep::OutputSize:
+        copyReference({0x00010, 0x00014, 0x00028});
+        break;
+    case ResidualPoolSweep::HaloPadding: {
+        constexpr std::uint32_t paddingMask =
+            (31u << 17) | (31u << 22);
+        const auto current = loadLE32(stream, h13RegisterOffset(
+            stream, at, bytes, 0x0001c));
+        // The proven task's leading-pad fields are the same zero values as
+        // the control.  This diagnostic instead places TF-SAME's one trailing
+        // cell in both fields, testing the competing symmetric-halo decode.
+        constexpr std::uint32_t trailingHalo = 1u;
+        putRegister(stream, at, bytes, 0x0001c,
+                    (current & ~paddingMask) |
+                    (trailingHalo << 17) | (trailingHalo << 22));
+        break;
+    }
+    case ResidualPoolSweep::PEConfig:
+        copyReference({0x08800});
+        break;
+    case ResidualPoolSweep::Width28: {
+        const auto size = loadLE32(stream, h13RegisterOffset(
+            stream, at, bytes, 0x00014));
+        putRegister(stream, at, bytes, 0x00014,
+                    size - (size & UINT16_MAX) + 28u);
+        break;
+    }
+    case ResidualPoolSweep::Width16: {
+        const auto size = loadLE32(stream, h13RegisterOffset(
+            stream, at, bytes, 0x00014));
+        putRegister(stream, at, bytes, 0x00014,
+                    size - (size & UINT16_MAX) + 16u);
+        break;
+    }
+    case ResidualPoolSweep::None:
+    case ResidualPoolSweep::Control:
+        break;
+    }
 }
 
 } // namespace
@@ -5682,7 +5868,9 @@ Program encodeResidualNetwork(
     externalInput.storage = ResidualStorage::External;
     auto stem = allocateResidualValue(stemOutput, ring, scratchCursor, {},
                                       true, 2);
-    const bool poolViaDRAM = terminateAfter == "pool-via-dram";
+    const auto poolSweep = residualPoolSweep(terminateAfter);
+    const bool poolViaDRAM = terminateAfter == "pool-via-dram" ||
+        poolSweep != ResidualPoolSweep::None;
     if (poolViaDRAM) {
         stem.storage = ResidualStorage::Scratch;
         stem.scratchOffset = static_cast<std::uint32_t>(
@@ -5723,6 +5911,8 @@ Program encodeResidualNetwork(
             emitConv(block.projection, ResidualRole::Projection,
                      blockName, "projection", blockInput,
                      shortcut, false, ringRanges({&blockInput, &shortcut}));
+            if (blockIndex == 0)
+                planned.back().boundary = "projection01";
         }
 
         ResidualValue main = blockInput;
@@ -5921,6 +6111,10 @@ Program encodeResidualNetwork(
             }
         }
         routeResidualTask(program, entry, at, last);
+        if (entry.task.role == ResidualRole::Pool)
+            applyResidualPoolSweep(program.task, at,
+                                   entry.task.encoded.firstTaskBytes,
+                                   poolSweep);
         if (entry.task.role != ResidualRole::Pool &&
             entry.task.role != ResidualRole::Add &&
             entry.task.role != ResidualRole::Mean) {

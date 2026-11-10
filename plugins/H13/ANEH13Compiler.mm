@@ -3226,6 +3226,15 @@ static BOOL writeH13ResidualNetwork(
                          (unsigned long)index + 1];
         boundaryValues[key] = blockValues[index];
     }
+    ANEGraphValue *poolValue = boundaryValues[@"pool"];
+    for (const auto &candidate : numeric) {
+        if (candidate.operation.operands[@"x"].value == poolValue &&
+            candidate.plan.shape.output.channels !=
+                candidate.plan.shape.input.channels) {
+            boundaryValues[@"projection01"] = candidate.operation.results[0];
+            break;
+        }
+    }
     boundaryValues[@"logits"] = linear.results[0];
     if (!boundaryValues[@"pool"] || !boundaryValues[@"mean"] ||
         !blockValues.count)
@@ -3234,8 +3243,9 @@ static BOOL writeH13ResidualNetwork(
             nil, @"h13.residual-boundary");
     NSString *terminateKey = nil;
     if (terminateAfter.length) {
-        if ([terminateAfter isEqualToString:@"pool-via-dram"])
-            terminateKey = @"pool-via-dram";
+        if ([terminateAfter isEqualToString:@"pool-via-dram"] ||
+            [terminateAfter hasPrefix:@"pool-sweep-"])
+            terminateKey = terminateAfter;
         else
             for (NSString *key in boundaryValues)
                 if ([boundaryValues[key].name isEqualToString:terminateAfter]) {
@@ -3269,7 +3279,9 @@ static BOOL writeH13ResidualNetwork(
     ANEGraphValue *input = function.inputs[0];
     NSString *outputKey = [NSString stringWithUTF8String:
         program.outputBoundary.c_str()];
-    ANEGraphValue *selectedOutput = [outputKey isEqualToString:@"pool-via-dram"]
+    ANEGraphValue *selectedOutput =
+        [outputKey isEqualToString:@"pool-via-dram"] ||
+        [outputKey hasPrefix:@"pool-sweep-"]
         ? boundaryValues[@"pool"] : boundaryValues[outputKey];
     if (!selectedOutput || program.taskRecords.size() != program.taskCount)
         return reject(diagnostics,

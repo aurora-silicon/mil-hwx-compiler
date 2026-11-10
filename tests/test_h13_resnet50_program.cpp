@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -203,6 +205,20 @@ static std::uint32_t reg(const ane::h13::Program &program,
     throw std::runtime_error("residual task register is absent");
 }
 
+static std::size_t regOffset(const ane::h13::Program &program,
+                             TaskSpan span, std::uint32_t address) {
+    std::size_t cursor = span.offset + 40;
+    while (cursor < span.offset + span.bytes) {
+        const auto header = word(program.task, cursor);
+        const auto count = (header >> 26) + 1;
+        const auto base = header & 0x03ffffffu;
+        if (base <= address && address < base + 4 * count)
+            return cursor + 4 + address - base;
+        cursor += 4 * (count + 1);
+    }
+    throw std::runtime_error("residual task register is absent");
+}
+
 static bool hasReg(const ane::h13::Program &program,
                    TaskSpan span, std::uint32_t address) {
     std::size_t cursor = span.offset + 40;
@@ -287,7 +303,7 @@ static ane::h13::Program linkedRingPoolGeometryReference(
 
 struct ColumnWrite {
     std::uint32_t source;
-    std::uint32_t destination;
+    std::uint32_t destinationByte;
 };
 
 static std::uint32_t ceilLog2(std::uint32_t value) {
@@ -297,45 +313,43 @@ static std::uint32_t ceilLog2(std::uint32_t value) {
     return result;
 }
 
-static std::vector<ColumnWrite> modelPEColumnTiles(
-    std::uint32_t width, std::uint32_t tileConfig) {
-    constexpr std::uint32_t pieceColumns = 16;
+static std::vector<ColumnWrite> modelPoolColumnPieces(
+    std::uint32_t width, bool scratchWriter) {
+    constexpr std::uint32_t pieceColumns = 8;
+    constexpr std::uint32_t halfwordBytes = 2;
+    constexpr std::uint32_t pieceBytes = pieceColumns * halfwordBytes;
+    constexpr std::uint32_t rowBytes = 128;
     const auto pieces = (width + pieceColumns - 1) / pieceColumns;
-    constexpr std::uint32_t columnClassShift = 4;
-    constexpr std::uint32_t columnClassMask = 15;
-    const auto encodedClass =
-        (tileConfig >> columnClassShift) & columnClassMask;
-    const auto requiredClass = ceilLog2(width);
-    // Device observation pins the under-classed PE behavior: class 4 on a
-    // class-6 surface starts two pieces late and advances destinations two
-    // pieces per source piece.  A complete class starts at zero and advances
-    // once.  This model is deliberately limited to that measured rule.
-    const auto shortfall = requiredClass > encodedClass
-        ? requiredClass - encodedClass : 0;
-    const auto firstPiece = std::min(shortfall, pieces);
-    const auto advance = shortfall ? shortfall : 1u;
     std::vector<ColumnWrite> writes;
-    for (std::uint32_t sourcePiece = firstPiece;
-         sourcePiece < pieces; ++sourcePiece) {
-        const auto destinationPiece = firstPiece +
-            (sourcePiece - firstPiece) * advance;
+    const auto firstPiece = scratchWriter ? 4u : 0u;
+    const auto activePieces = scratchWriter ? std::min(3u, pieces) : pieces;
+    for (std::uint32_t index = 0; index != activePieces; ++index) {
+        const auto sourcePiece = firstPiece + index;
+        if (sourcePiece >= pieces) break;
+        // The misclassified scratch writer emits two adjacent pieces, then
+        // advances to the next 128-byte bank row.  The external writer emits
+        // all seven logical pieces linearly into the padded physical row.
+        const auto destinationByte = scratchWriter && index >= 2
+            ? rowBytes + (index - 2) * pieceBytes
+            : (firstPiece + index) * pieceBytes;
         for (std::uint32_t within = 0;
              within != pieceColumns && sourcePiece * pieceColumns + within < width;
              ++within)
             writes.push_back({sourcePiece * pieceColumns + within,
-                              destinationPiece * pieceColumns + within});
+                              destinationByte + within * halfwordBytes});
     }
     return writes;
 }
 
 static void validateMeasuredPoolColumnModel() {
-    constexpr std::uint32_t fourLaneIssue = 4;
-    constexpr std::uint32_t columnClassShift = 4;
-    const auto oldTileConfig = fourLaneIssue | (4u << columnClassShift);
-    const auto oldWrites = modelPEColumnTiles(56, oldTileConfig);
-    std::vector<int> oldDestination(72, -1);
-    for (const auto write : oldWrites)
-        oldDestination[write.destination] = static_cast<int>(write.source);
+    constexpr std::uint32_t logicalWidth = 56;
+    constexpr std::uint32_t physicalWidth = 64;
+    const auto oldWrites = modelPoolColumnPieces(logicalWidth, true);
+    std::vector<int> oldDestination(2 * physicalWidth, -1);
+    for (const auto write : oldWrites) {
+        const auto halfword = write.destinationByte / 2;
+        oldDestination[halfword] = static_cast<int>(write.source);
+    }
     for (std::uint32_t column = 8; column != 32; ++column)
         expect(oldDestination[column] < 0,
                "old pool model does not leave columns 8..31 unwritten");
@@ -346,16 +360,17 @@ static void validateMeasuredPoolColumnModel() {
         expect(oldDestination[column] < 0,
                "old pool model does not leave columns 48..55 unwritten");
     for (std::uint32_t column = 0; column != 8; ++column)
-        expect(oldDestination[64 + column] == static_cast<int>(48 + column),
+        expect(oldDestination[physicalWidth + column] ==
+                   static_cast<int>(48 + column),
                "old pool model does not wrap the last piece one physical row");
 
-    const auto fixedTileConfig = fourLaneIssue | (6u << columnClassShift);
-    const auto fixedWrites = modelPEColumnTiles(56, fixedTileConfig);
-    std::vector<int> fixedDestination(56, -1);
+    const auto fixedWrites = modelPoolColumnPieces(logicalWidth, false);
+    std::vector<int> fixedDestination(logicalWidth, -1);
     for (const auto write : fixedWrites)
-        if (write.destination < fixedDestination.size())
-            fixedDestination[write.destination] = static_cast<int>(write.source);
-    for (std::uint32_t column = 0; column != 56; ++column)
+        if (write.destinationByte / 2 < fixedDestination.size())
+            fixedDestination[write.destinationByte / 2] =
+                static_cast<int>(write.source);
+    for (std::uint32_t column = 0; column != logicalWidth; ++column)
         expect(fixedDestination[column] == static_cast<int>(column),
                "fixed pool model does not cover every logical output column");
 }
@@ -589,13 +604,90 @@ static void validatePoolBoundaryLayout(const ane::h13::Program &program) {
     const auto depth = program.output.nchw[4] * program.output.nchw[1];
     const auto externalNCHW = 1u | (3u << 4) | (2u << 12) |
                               (3u << 20) | (1u << 24);
-    expect(program.output.nchw[5] == reg(program, terminal, 0x17808) &&
+    expect((reg(program, terminal, 0x17800) & (1u << 26)) == 0 &&
+               program.output.nchw[5] == reg(program, terminal, 0x17808) &&
                program.output.nchw[4] == reg(program, terminal, 0x1780c) &&
                depth == reg(program, terminal, 0x17810) &&
                depth == reg(program, terminal, 0x17814) &&
                externalNCHW == reg(program, terminal, 0x17818) &&
                program.output.allocationBytes >= depth,
            "pool terminal DMA row/channel/depth/format differs from manifest NCHW");
+}
+
+static void expectOnlyRegisterChanges(
+    const ane::h13::Program &control, const ane::h13::Program &variant,
+    const std::vector<std::uint32_t> &addresses, const std::string &name) {
+    const auto controlSpan = taskSpans(control).at(1);
+    const auto variantSpan = taskSpans(variant).at(1);
+    expect(controlSpan.bytes == variantSpan.bytes,
+           "pool sweep changed the descriptor grammar");
+    std::set<std::size_t> allowed;
+    for (const auto address : addresses) {
+        const auto offset = regOffset(control, controlSpan, address) -
+                            controlSpan.offset;
+        for (std::size_t byte = 0; byte != 4; ++byte)
+            allowed.insert(offset + byte);
+    }
+    bool changed = false;
+    for (std::size_t byte = 0; byte != controlSpan.bytes; ++byte) {
+        if (control.task[controlSpan.offset + byte] ==
+            variant.task[variantSpan.offset + byte])
+            continue;
+        changed = true;
+        expect(allowed.count(byte),
+               "pool sweep changed a field outside its named group");
+    }
+    if (!changed)
+        throw std::runtime_error("pool sweep " + name +
+                                 " is byte-identical to its control");
+    expect(variantSpan.bytes == 504 &&
+               hasReg(variant, variantSpan, 0x1f800) &&
+               hasReg(variant, variantSpan, 0x1f8c8) &&
+               reg(variant, variantSpan, 0x00034) == (1u | (2u << 3)),
+           "pool sweep lost the round-10 PE grammar or pipeline guard");
+}
+
+static void validatePoolSweeps(
+    const OwnedNetwork &network,
+    const std::pair<std::vector<std::uint8_t>,
+                    std::vector<std::uint8_t>> &head,
+    const ane::h13::Program &fixed) {
+    const auto encode = [&](const std::string &boundary) {
+        return ane::h13::encodeResidualNetwork(
+            network.convs, head.first.data(), head.first.size(),
+            head.second.data(), head.second.size(), boundary);
+    };
+    const auto control = encode("pool-sweep-control");
+    const auto controlPool = taskSpans(control).at(1);
+    expect(reg(control, controlPool, 0x17800) & (1u << 26),
+           "pool sweep control does not reproduce the round-10 writer path");
+    expectOnlyRegisterChanges(control, fixed, {0x17800}, "main fix");
+
+    struct Sweep {
+        const char *name;
+        std::vector<std::uint32_t> fields;
+    };
+    const std::vector<Sweep> sweeps = {
+        {"destination-path", {0x17800}},
+        {"destination-dma", {0x17800, 0x17804, 0x17808, 0x1780c,
+                             0x17810, 0x17814, 0x17818}},
+        {"source-dma", {0x13800, 0x13808, 0x1380c, 0x13810,
+                        0x13814, 0x13818, 0x13838, 0x13840}},
+        {"l2-source", {0x04804, 0x04808, 0x0480c, 0x04810,
+                       0x04814, 0x04818}},
+        {"common-traversal", {0x00020}},
+        {"group-config", {0x00024}},
+        {"column-tile", {0x0002c}},
+        {"output-size", {0x00010, 0x00014, 0x00028}},
+        {"halo-padding", {0x0001c}},
+        {"pe-config", {0x08800}},
+        {"width-28", {0x00014}},
+        {"width-16", {0x00014}},
+    };
+    for (const auto &sweep : sweeps) {
+        const auto variant = encode("pool-sweep-" + std::string(sweep.name));
+        expectOnlyRegisterChanges(control, variant, sweep.fields, sweep.name);
+    }
 }
 
 static std::uint32_t floatWord(float value) {
@@ -768,6 +860,10 @@ int main(int argc, char **argv) {
                pool.output.nchw[1] == 64 && pool.output.nchw[2] == 56 &&
                pool.output.nchw[3] == 56,
            "pool boundary metadata differs from the compiler plan");
+    expect(full.taskRecords.size() > 2 &&
+               full.taskRecords[2].role == "projection" &&
+               full.taskRecords[2].boundary == "projection01",
+           "first post-pool task is not the isolated projection boundary");
     expect(block.taskCount == 7 && block.outputBoundary == "block01" &&
                block.output.nchw[1] == 256,
            "first block boundary metadata differs from the compiler plan");
@@ -788,6 +884,7 @@ int main(int argc, char **argv) {
     validatePoolBoundaryLayout(pool);
     validateKernelDMASpans(stem);
     validatePoolViaDRAM(poolViaDRAM);
+    validatePoolSweeps(boundaryNetwork, boundaryHead, poolViaDRAM);
     validatePoolResidentLayout(full);
     validateFullPoolCompletionChain(full);
     const auto fullSpans = taskSpans(full);

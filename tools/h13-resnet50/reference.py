@@ -145,6 +145,8 @@ def evaluate_boundaries(model: Path, x: np.ndarray) -> dict[str, np.ndarray]:
     for stage_index, (first, projection, rest) in enumerate(stages):
         stride = 1 if stage_index == 0 else 2
         shortcut = conv(projection, y, stride)
+        if stage_index == 0:
+            result['projection01'] = shortcut.copy()
         z = np.maximum(conv(first[0], y), 0)
         z = np.maximum(conv(first[1], z, stride), 0)
         z = conv(first[2], z)

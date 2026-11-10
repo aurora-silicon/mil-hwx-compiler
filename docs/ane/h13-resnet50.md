@@ -60,42 +60,58 @@ kernel fields, the leading two-cell TensorFlow-SAME padding of the 7x7 stem,
 and the exact external-source layout shared with the proven 3x3 linked-ring
 stem.
 
-Round 8 showed that both the scratch-fed and resident forms of task 1 produce
-the same wrong pool columns.  A host field decode now compares that PE task
-with the device-proven linked-ring depthwise 3x3/s2 task having the same
-112-to-56 geometry.  Input/output dimensions, kernel and stride, traversal,
-group counts, tile height, and L2 source channel/row/depth advances agree.
-Round 9 incorrectly reused the convolution Common Cfg word at `0x34` as a PE
-column schedule.  Device A/B established that the convolution form hangs a PE
-pool; this register stays in the executing PE pipeline form, with named enable
-and pool/binary/reduction stage fields.
+Rounds 8 and 10 showed that both the scratch-fed and resident forms of task 1
+produce the same wrong pool columns.  Round 10 also proved that changing
+Common `0x2c` from the old role class to the width-derived class, and repeating
+the L2 source depth advance in the group-advance field, has no observable
+effect: the uint16 output stayed bit-identical.  Those shape rules remain as
+guards, but they are no longer claimed as the column fix.  Round 9's other
+hard guard also remains: Common `0x34` is the executing PE pipeline form with
+named enable and pool stage fields.  Substituting the convolution schedule
+there hangs the pool.
 
-The real PE column field is Common `0x2c`.  Its low nibble is the four-lane PE
-issue class and its high nibble is `ceil(log2(active columns))`, as decoded by
-the licensed public PE width families.  The old role-based constructor put
-class 4 on every pool and add, limiting the 56-column pool to a 16-column
-class; the shape rule puts class 6 there.  The measured under-class model
-starts two 16-column pieces late and advances destinations two pieces at a
-time: source piece two reaches columns 32 through 47, and source piece three
-lands at physical column 64 and wraps into columns zero through seven of the
-following 64-column physical row.  Columns 8 through 31 and 48 through 55 are
-written as zero.  This reproduces the device dump.  With the complete class,
-the model starts at piece zero, advances one piece, and covers every logical
-column.  Pool/add derive the class from output width; mean derives it from the
-input reduction width.
+The corrected host model uses eight-column pieces, 16 bytes per fp16 piece,
+and the package's 128-byte physical row.  The round-10 destination path starts
+at source piece four.  It writes source pieces four and five to destination
+byte bases 64 and 80, making columns 32 through 47 correct, then advances the
+third piece to byte base 128.  That last write is the next physical row's
+columns zero through seven, so a logical row observes columns 48 through 55
+from its predecessor.  No write reaches columns 8 through 31 or 48 through
+55.  The unit model constructs those exact piece bases and reproduces all four
+parts of the measured map.  The external linear path instead starts at byte
+zero and advances all seven pieces by 16 bytes, covering columns zero through
+55 while leaving only the eight physical padding columns untouched.
 
-The same decode found that L2 SourceGroupStride was zero while the proven
-112-to-56 task repeats SourceDepthStride there.  Resident and spill-fed PE
-sources now construct both advances from the same plane span.  Tests compare
-those named fields and the PE column class for the 224 and 192 ResNet-50
-programs and ResNet-18.
+The predicted controller is TileDMA Destination Cfg's scratch/interleave
+writer-enable field.  Round 10 set it on an external NCHW result; the public
+linked-ring depthwise terminal clears it.  The main shape rule now enables
+that path only for scratch/interleaved destinations and clears it for external
+results.  This is derived from storage semantics, so the same constructor is
+tested on 224 and 192 ResNet-50 and the ResNet-18-shaped program.  The
+`destination-path` sweep changes only this field and is the direct test of the
+prediction.  `destination-dma` tests the broader result record in case the
+piece progression is coupled to its strides, extents, or format.
 
-The full-stream timeout remains localized to index 1, class pool.  Its
-task-buffer link points to index 2, its nonterminal TBE is set, and its control
-word requests both TSE and TSR.  The column-class and source-advance repair
-does not change routing or the dependency chain.  The ladder already has a
-one-block rung (first add), every later block prefix, reduce-mean, and full
-linear output, so no additional task-class rung is needed.
+Every other plausible field group has a compiler-built negative control.  The
+scratch-fed two-task control is followed by source TileDMA, L2 source, Common
+traversal, GroupCfg, Common `0x2c`, output-size, halo/padding, and PE-Cfg
+variants.  Except for the explicitly documented traversal and trailing-halo
+geometry candidates, each group is taken by name from the public formula-built
+3x3/s2 112-to-56 linked-ring depthwise task.  Width-only variants set the Common output width
+to 28 and 16 while keeping the 56-column output allocation, revealing whether
+the three-piece window has a fixed base or moves with logical width.  Each
+variant is compared byte-for-byte with the round-10 control; tests reject a
+change outside its named register group.  All variants retain the 504-byte
+KernelDMA grammar and the guarded PE pipeline word.  No packaged byte is
+patched.
+
+The full-stream timeout remains localized to index 1, class pool.  Once it is
+correct, the next descriptor is index 2, the first-block projection class.
+The ordinary one-block rung includes that class but does not terminate at it,
+so the kit now adds a three-task `next-stall-projection` diagnostic with its
+own `projection01` reference.  The original 21 ladder rungs and their
+qualification order are unchanged; this diagnostic and the field sweep are
+separate kit sections.
 
 PE tasks have both kernel-table and kernel-execution enables clear and carry
 no constants, but the loader/descriptor walk still requires the 504-byte H13
@@ -120,8 +136,10 @@ manifest records every task's structural layer and role plus the named tensor
 at each legal boundary.
 
 `tools/h13-resnet50/kit.py` reads those manifest boundaries and recompiles each
-rung; it never edits an ANEC. Its first three rungs are the one-task stem, a
-two-task `stem-pool-via-dram` diagnostic that forces a real scratch spill, and
-the ordinary resident stem-to-pool pair. Every rung has its own package
-manifest, input, and plain float64 NPZ containing exactly its boundary array.
-The kit rejects any rung that violates libane's channel-allocation gate.
+rung; it never edits an ANEC. Its first three ladder rungs are the one-task
+stem, a two-task `stem-pool-via-dram` diagnostic that forces a real scratch
+spill, and the ordinary resident stem-to-pool pair. Every ladder, next-stall,
+and sweep entry has its own package manifest, input, plain float64 NPZ, and a
+libane channel-allocation check. `kit.json` keeps the 21 entries under `rungs`,
+puts the projection diagnostic under `next_stall`, and lists the one-field
+variants under `sweep` with a one-line description and stable sweep key.

@@ -132,7 +132,8 @@ struct Program {
     /// form from it; the task words alone do not say it).
     bool depthwiseConv = false;
     /// Semantic records for rule-built residual streams.  `boundary` is a
-    /// stable compiler key (stem, pool, block01..., mean, logits) on tasks whose
+    /// stable compiler key (stem, pool, projection01, block01..., mean,
+    /// logits) on tasks whose
     /// result may be made external by the residual boundary option.
     struct TaskRecord {
         std::string layer;
@@ -161,7 +162,9 @@ struct ResNet50ConvWeights {
 /// tensors from the 2 MiB L2 ring with bind-safe scratch spills.  The head
 /// dimensions are inferred from the final block and bias length.  The
 /// diagnostic `pool-via-dram` termination spills the stem before the pool so
-/// the kit can distinguish stem arithmetic from a resident L2 handoff.
+/// the kit can distinguish stem arithmetic from a resident L2 handoff.  The
+/// `pool-sweep-*` diagnostics use that same spill and change one named pool
+/// field group from the round-10 control.
 Program encodeResidualNetwork(
                        const std::vector<ResNet50ConvWeights> &convolutions,
                        const std::uint8_t *headWeights,

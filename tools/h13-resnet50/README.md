@@ -13,7 +13,8 @@ stem arithmetic, DRAM layout, and the resident handoff independently visible.
 It checks every rung against libane's bind-overrun rule before writing
 `kit.json` and produces deterministic float64 references using TensorFlow SAME
 padding. Each NPZ is plain (no object arrays) and contains exactly one of
-`stem`, `pool`, `block01` through `block16`, `mean`, or `logits`. Stage 1 remains
+`stem`, `pool`, `projection01`, `block01` through `block16`, `mean`, or
+`logits`. Stage 1 remains
 stride 1 (`[256,56,56]`); only later stages downsample.
 
 Run the programs in `kit.json` order. Max-pool, one bottleneck, the remaining
@@ -21,3 +22,13 @@ block prefixes, global mean, and full logits are independently compiled with
 `--terminate-after` using tensor names published by the full package manifest.
 The DRAM diagnostic uses the compiler's `pool-via-dram` termination mode. No
 program bytes are patched by the kit.
+
+The `rungs` and `qualificationOrder` arrays remain the original 21-rung
+smallest-first ladder. `next_stall` is a separate three-task
+stem/pool/projection diagnostic for the descriptor expected immediately after
+the pool is repaired. `sweep` contains a round-10 control and compiler-built
+single-field-group variants of the scratch-fed pool. Each entry names the
+changed field and describes it in one line; `sweepOrder` is the recommended
+device order. The 28- and 16-column variants change only the pool's Common
+output-width word while retaining the ordinary 56-column output allocation so
+the moving piece window remains visible in a full-width dump.
