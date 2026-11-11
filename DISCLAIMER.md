@@ -21,10 +21,13 @@ operation and geometry families on the M4 configuration named in
 The MIT License covers original source code, tests, documentation, and data
 authored for this project. It cannot grant rights in third-party material.
 
-The repository does not include Apple-compiled HWX containers, extracted Task
-Descriptor rows, or Apple-compiled container skeletons. Regression tests store
-expected hashes and decoded field values rather than the corresponding Apple
-binary output.
+The repository does not include Apple-compiled HWX containers or
+Apple-compiled container skeletons. `research/oracles/` does contain decoded
+Task Descriptor words, section sizes and hashes recorded from compiling this
+project's own MIL programs with generated weights; the `plugins/*/*Templates.inc`
+tables are generated from those decoded words. Regression tests store expected
+hashes and decoded field values rather than the corresponding Apple binary
+output.
 
 `plugins/H16G/Encoding/*EncoderData.inc` contains measurements recorded from
 compiler output for specific operations and geometries. These tables describe
