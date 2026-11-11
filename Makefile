@@ -404,6 +404,7 @@ test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/te
 	$(BUILD)/test_h16g_resnet50_packing
 	$(BUILD)/test_h16g_resnet50_program
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
+	python3 tests/test_h16g_denoise_grid_parity.py $(BUILD)/mil-hwxc
 	python3 tests/test_h16g_mobilenet_l2.py $(BUILD)/h16_conv_dump
 	python3 tests/test_h16g_elementwise_view_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
 	python3 tests/test_h16g_transformer_linear_parity.py $(BUILD)/h16_transformer_linear_dump
