@@ -223,7 +223,7 @@ def dma_extent(dma: dict, registers: dict, target: dict,
             return strided_extent(offset, registers[4], 1, registers[12], 0,
                                   registers[0x4d34])
     elif address == 0x5108:
-        if (family == 'resnet50' and registers.get(0x1c) == 1000 and
+        if (family == 'residual' and registers.get(0x1c) and
                 registers.get(0x14) == registers.get(0x18) == 1):
             return offset + ((2 * registers[0x1c] + 63) // 64) * 64
         if (family == 'positional' and
@@ -334,10 +334,28 @@ def linear_program(tasks: list[dict], task_count: int,
     return True
 
 
-def resnet50_program(task_count: int, record_code: int,
+def residual_program(tasks: list[dict], task_count: int, record_code: int,
                      format_code: int) -> bool:
-    """Recognize only the measured full ResNet-50 task stream."""
-    return task_count == 82 and record_code == 0xa5 and format_code == 0x4c
+    """Recognize the rule-built residual packet grammar by its roles.
+
+    The record count is generated as two records per task plus the program
+    record.  Boundary convolution DMA, a second-source add, and a scaled mean
+    distinguish this family without fixing a network, input size, or task
+    count.
+    """
+    if (len(tasks) != task_count or task_count < 6 or
+            record_code != 2 * task_count + 1 or format_code != 0x4c):
+        return False
+    first_dma = {dma['address'] for dma in tasks[0]['dma']}
+    last_dma = {dma['address'] for dma in tasks[-1]['dma']}
+    has_add = any(0x4d28 in {dma['address'] for dma in task['dma']}
+                  for task in tasks)
+    has_mean = any(0x4514 in task['registers'] and
+                   0x4d10 in {dma['address'] for dma in task['dma']} and
+                   0x5510 not in {dma['address'] for dma in task['dma']}
+                   for task in tasks)
+    return ({0x4d10, 0x5510}.issubset(first_dma) and
+            {0x5108, 0x5510}.issubset(last_dma) and has_add and has_mean)
 
 
 def whisper_program(tasks: list[dict], task_count: int,
@@ -695,7 +713,8 @@ def validate(data: bytes, *, owner: bool = False, task_policy: str = 'driver') -
                   task_facts, tasks, record_code, fmt) else
                'layer_norm' if layer_norm_program(
                    task_facts, tasks, record_code, fmt) else
-               'resnet50' if resnet50_program(tasks, record_code, fmt) else None))
+               'residual' if residual_program(
+                   task_facts, tasks, record_code, fmt) else None))
     dma_extents = validate_dma(task_facts, p, dma_targets, seen, family)
     so, ns, st, ss = symtabs[0]
     region(so, ns * 16, len(data), "symbol-range")

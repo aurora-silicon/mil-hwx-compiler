@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from h16g_validate import (ValidationError, dma_extent, fused_attention_program,
                            layer_norm_program, linear_program, positional_program,
-                           resnet50_program, task_stream, validate, validate_resources,
+                           residual_program, task_stream, validate, validate_resources,
                            validate_custom_bars, validate_execute,
                            whisper_program)
 
@@ -208,11 +208,18 @@ class ValidationTests(unittest.TestCase):
         changed[1]['dma'] = [dict(address=0x5108, slot=6)]
         self.assertFalse(linear_program(changed, 2, 0x10, 0))
 
-    def test_resnet50_dma_family_is_exact(self):
-        self.assertTrue(resnet50_program(82, 0xa5, 0x4c))
-        self.assertFalse(resnet50_program(81, 0xa5, 0x4c))
-        self.assertFalse(resnet50_program(82, 0xa4, 0x4c))
-        self.assertFalse(resnet50_program(82, 0xa5, 0x4d))
+    def test_residual_dma_family_is_rule_built(self):
+        tasks = [dict(registers={}, dma=[]) for _ in range(6)]
+        tasks[0]['dma'] = [dict(address=0x4d10), dict(address=0x5510)]
+        tasks[1]['dma'] = [dict(address=0x4d28)]
+        tasks[-2]['registers'][0x4514] = 1
+        tasks[-2]['dma'] = [dict(address=0x4d10)]
+        tasks[-1]['dma'] = [dict(address=0x5108), dict(address=0x5510)]
+        self.assertTrue(residual_program(tasks, 6, 13, 0x4c))
+        self.assertFalse(residual_program(tasks, 6, 12, 0x4c))
+        self.assertFalse(residual_program(tasks, 6, 13, 0x4d))
+        tasks[1]['dma'] = []
+        self.assertFalse(residual_program(tasks, 6, 13, 0x4c))
 
     def test_whisper_dma_family_recognition_ignores_bar_slot(self):
         stem = [dict(registers={0x28: 0x5002a043, 0x4904: 0x123c10},
