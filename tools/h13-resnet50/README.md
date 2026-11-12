@@ -25,12 +25,16 @@ program bytes are patched by the kit.
 
 The `rungs` and `qualificationOrder` arrays remain the original 21-rung
 smallest-first ladder. `next_stall` is a separate three-task
-stem/pool/projection diagnostic for the descriptor expected immediately after
-the pool is repaired. `sweep` contains a round-10 control and compiler-built
-single-word variants of the scratch-fed pool. It isolates every destination
-record word, the predicted destination piece advance, and three Common
-`0x2c` nibble alternatives. Each entry names the changed word and describes it
-in one line; `sweepOrder` places the known hanging writer-bit experiment last.
-The 28- and 16-column variants change only the pool's Common output-width word
-while retaining the ordinary 56-column output allocation so the moving piece
-window remains visible in a full-width dump.
+stem/pool/projection diagnostic. `diagnostics` adds a focused copy of the
+first 7x7 prefix and a thirteen-task standalone form of that block; the latter
+uses the float64 block-13 result as its input, so it does not repeat the first
+64 descriptors.
+
+`sweep` starts from the measured round-12 control: Common `0x2c` low-nibble 4
+emits 16-column pieces, destination `+0x08` is the 128-byte row stride, and
+destination `+0x0c` is the plane stride. It tries low-nibble widths 5, 6, and
+7 before the chosen low-nibble 8 (one 32-column/64-byte piece), then the
+coherent 256-byte-row alternative. Width-28 control and fixed variants are
+last because the round-12 width-28 timed loop hung after a successful cold
+run. Every entry is compiler-built and bind-checked; the kit never patches an
+ANEC.
