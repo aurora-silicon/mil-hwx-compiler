@@ -58,7 +58,7 @@ $(BUILD)/test_diagnostics: tests/test_diagnostics.mm $(SUPPORT_SOURCES) | $(BUIL
 	$(CXX) $(CXXFLAGS) $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_benchmark_stats: tests/test_benchmark_stats.cpp lib/Runtime/ANEBenchmarkStats.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(filter-out -fobjc-exceptions,$(CXXFLAGS)) $^ -o $@
 
 $(BUILD)/test_mil_lexer: tests/test_mil_lexer.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
@@ -419,6 +419,13 @@ test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/te
 # NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
 test-h16g-attention-reference:
 	python3 tests/test_h16g_attention_refs.py
+
+.PHONY: test-h16g-lut-reference
+# Set this to the qualification venv's Python.  Once set, a missing NumPy is a
+# hard import failure; this target never converts it to a skip.
+test-h16g-lut-reference:
+	@test -n "$(H16G_NUMPY_PYTHON)" || (echo 'set H16G_NUMPY_PYTHON to a NumPy venv' >&2; exit 64)
+	"$(H16G_NUMPY_PYTHON)" tests/test_h16g_gelu_reference.py
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
 test-h16g-conv-parity: $(BUILD)/h16_conv_dump

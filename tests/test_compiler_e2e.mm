@@ -13,6 +13,7 @@ using CC_LONG = size_t;
 #import "ANEDiagnostic.h"
 #import "ANEExecutableBundle.h"
 #import "ANEHWXArtifact.h"
+#import "H16GLUTEncoder.h"
 #import "HWXImage.h"
 
 #include <stdio.h>
@@ -36,6 +37,14 @@ static NSString *sha256(NSData *data) {
     for (NSUInteger index = 0; index < sizeof(digest); ++index)
         [result appendFormat:@"%02x", digest[index]];
     return result;
+}
+
+static NSData *trimmedKernel(NSData *data) {
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    NSUInteger length = data.length;
+    while (length > 0 && bytes[length - 1] == 0) --length;
+    length = MIN(data.length,(length + 1) & ~(NSUInteger)1);
+    return [data subdataWithRange:NSMakeRange(0,length)];
 }
 
 static void expectSemanticSectionHashes(NSData *actualData,
@@ -70,13 +79,15 @@ static ANEExecutableBundle *compileCase(ANECompiler *compiler,
 
 static void testThreeEndToEndCompilations(void) {
     ANECompiler *compiler = [[ANECompiler alloc] init];
+    NSString *ruleExpHash = sha256([H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:nil]);
     NSArray<NSDictionary<NSString *, NSString *> *> *cases = @[
         @{@"fixture": @"conv_relu.mil", @"model": @"conv_relu",
           @"text": @"62a90244a4edc71a70d6f0630a2d72371b7dcb39d5194d22369781cb54094bff",
           @"kernel": @"44f8459ee020ef8a01d767df4e238eef58953984af4be906101e9f7bc1a4a1bb"},
         @{@"fixture": @"attention.mil", @"model": @"attention",
           @"text": @"a2d9c65e6440b7fcd1b01c40934c2fdedb5a76575d9c0a5bb86f2becd2e9a95c",
-          @"kernel": @"b7b6085a1edc7def0f0bb2fc1fe345f1ba9d9a1a47e55b4516273149323b54d2"},
+          @"kernel": ruleExpHash},
         @{@"fixture": @"w8a8_conv_chain.mil", @"model": @"w8a8",
           @"text": @"185de64f2a80436a319e7b7ef561a9ee05b9fba45142ddfc11e409e055ae69f8",
           @"kernel": @"54e18123ce030cef0fa8ac906f358e6bcba6ce19ee083173875ee21717407155"},
@@ -250,6 +261,8 @@ static NSArray<NSString *> *bindingIdentifiers(ANEHWXArtifact *artifact) {
 
 static void testMatmulGELUUsesOneComposedProgram(void) {
     ANECompiler *compiler = [[ANECompiler alloc] init];
+    NSString *geluHash = sha256(trimmedKernel([H16GLUTEncoder
+        constantRegionForOperationName:@"gelu" error:nil]));
     NSDictionary<NSString *, NSString *> *textHashes = @{
         @"matmul_gelu_128.mil":
             @"720ff02eb5395f30ce2f0d9ff572e24fc9529cf2724bd07d0338bc6989ccd649",
@@ -274,7 +287,7 @@ static void testMatmulGELUUsesOneComposedProgram(void) {
                    @"the composed program exposes only graph boundaries");
             expectSemanticSectionHashes(bundle.artifacts[0].image,
                 textHashes[fixtureName],
-                @"3df7fa0c50c7582ff3f1a44edaea41d3fb8585422ea36d6e7a2691c67e541a66",
+                geluHash,
                 @"matmul-GELU composed object");
         }
 

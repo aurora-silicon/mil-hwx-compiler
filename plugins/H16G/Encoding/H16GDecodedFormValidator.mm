@@ -347,7 +347,7 @@ static BOOL validateQuantizedWeight(ANEOperationNode *weight, NSError **error) {
         [H16GLUTEncoder squareViewSizeForOperationName:operation.operationName
             elementCount:H16GElementCount(input.type.shape)] == NSNotFound ||
         ![graph.outputValueNames.firstObject isEqualToString:operation.identifier])
-        return reject(error,@"unary pointwise operation, type, shape, or result has no decoded H16G packet");
+        return reject(error,@"unary pointwise operation, type, shape, or result has no rule-built H16G packet");
     NSUInteger active=0;
     for (ANEOperationNode *node in graph.nodes)
         if (node.kind!=ANEOperationKindConstant) ++active;
@@ -379,7 +379,7 @@ static BOOL validateQuantizedWeight(ANEOperationNode *weight, NSError **error) {
     NSUInteger axis=(NSUInteger)axisTexts.firstObject.integerValue;
     if (![H16GReduceEncoder supportsOperationName:operation.operationName
         inputShape:input.type.shape axis:axis])
-        return reject(error,@"reduction operation, axis, or geometry has no measured H16G packet");
+        return reject(error,@"reduction operation, axis, or geometry has no rule-built H16G packet");
     NSMutableArray<NSNumber *> *expected=[input.type.shape mutableCopy];
     if (axis >= expected.count) return reject(error,@"reduction axis is outside the input rank");
     expected[axis]=@1;

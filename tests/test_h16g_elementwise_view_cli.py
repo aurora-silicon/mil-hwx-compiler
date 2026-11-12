@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """H16G staged elementwise forms on non-square tensors.
 
-A standalone binary ALU or table-unary operation on contiguous external fp16
-tensors runs as the measured square [1,1,N,N] program over the same bytes,
-with N the smallest measured size whose N*N covers the tensor. The emitted
-object must be byte-identical to the square program, and the manifest must
+A standalone binary ALU uses its qualified square family. A table-unary
+operation uses a rule-built [1,1,N,N] packet with N rounded to 64 lanes. The
+emitted object must match an explicit square program, and the manifest must
 describe the tensor's logical bytes inside the square allocation.
 """
 import json
@@ -102,14 +101,15 @@ def main():
         (binary, 'add', [1, 256, 1024], 512),      # held-out token count
         (binary, 'add', [1, 512, 1024], 1024),     # held-out token count
         (binary, 'add', [1, 1, 512, 512], 512),    # already square: unchanged
-        (unary, 'gelu', [1, 128, 3072], 1024),     # BERT-base FFN activation
-        (unary, 'gelu', [1, 1500, 2048], 2048),    # Whisper-base FFN activation
-        (unary, 'exp', [1, 12, 128, 128], 512),
+        (unary, 'gelu', [1, 128, 3072], 640),      # BERT-base FFN activation
+        (unary, 'gelu', [1, 1500, 2048], 1792),    # Whisper-base FFN activation
+        (unary, 'exp', [1, 12, 128, 128], 448),
         (unary, 'sigmoid', [100], 128),
         (unary, 'gelu', [1, 64, 1024], 256),       # held-out transformer width
         (unary, 'gelu', [1, 256, 1024], 512),      # held-out token count
-        (unary, 'gelu', [1, 512, 1024], 1024),     # held-out token count
+        (unary, 'gelu', [1, 512, 1024], 768),      # held-out token count
         (unary, 'gelu', [1, 1, 256, 256], 256),
+        (unary, 'log', [1, 128, 768], 320),
     ]
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
@@ -154,7 +154,6 @@ def main():
             ('shape_mismatch', f'{HEADER}  func main<ios18>({ttype([1, 128, 768])} x, '
              f'{ttype([1, 768, 128])} y) {{\n    {ttype([1, 128, 768])} z = add(x = x, y = y)'
              '[name = string("z")];\n  } -> (z);\n}\n'),
-            ('log_view', unary('log', [1, 128, 768])),               # log: [1,1,256,256] only
             ('rank5', unary('gelu', [1, 1, 2, 64, 64])),
         ]
         for name, mil in refused:
