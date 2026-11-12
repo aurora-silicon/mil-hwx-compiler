@@ -247,14 +247,13 @@ class ValidationTests(unittest.TestCase):
                                     'fused-attention'), 2 * score)
         self.assertGreater(2 * score, old_allocation)
 
-    def test_layer_norm_affine_constants_use_kernel_extent(self):
+    def test_layer_norm_zero_beta_uses_kernel_extent(self):
         tasks = [dict(registers={0x450c: 0x37280000},
                       dma=[dict(address=0x4d10)]),
                  *[dict(registers={}, dma=[]) for _ in range(2)],
-                 dict(registers={}, dma=[dict(address=0x4d28)]),
                  dict(registers={}, dma=[dict(address=0x4d28),
                                          dict(address=0x5108)])]
-        self.assertTrue(layer_norm_program(tasks, 5, 0x10, 20))
+        self.assertTrue(layer_norm_program(tasks, 4, 0x10, 20))
         self.assertEqual(dma_extent(
             dict(address=0x4d28, offset=1536), {4: 768},
             dict(kind='kernel', size=3072), 'layer_norm'), 3072)

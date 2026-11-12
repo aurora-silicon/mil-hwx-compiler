@@ -2,8 +2,8 @@
 """Sanitized parity for native H16G last-axis layer normalization.
 
 The sealed prefix digests cover the isolated layer_norm->projection programs.
-The standalone assertions connect those measured producer layouts to the
-affine/output boundary from the final full Whisper-tiny layer normalization.
+The standalone assertions connect those measured producer layouts directly
+to the zero-beta output boundary. Identity gamma is intentionally omitted.
 """
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ DUMP = str(Path(sys.argv[1] if len(sys.argv) > 1 else
                 ROOT / "build/h16_transformer_layer_norm_dump").resolve())
 
 CASES = [
-    (128, 768, 3, [180, 132, 132, 176, 248],
+    (128, 768, 3, [180, 132, 132, 248],
      "1b9fe62201bfab3bf23e00fa7d9db9a89118e0ba5de670c45a48e3be4467d061"),
     (1500, 384, 9,
-     [180, 172, 172, 168, 196, 196, 192, 192, 200, 176, 248],
+     [180, 172, 172, 168, 196, 196, 192, 192, 200, 248],
      "8f1107a90c61a18787b6c8a7e266af65fc6a6adddbe43eeb37478479db932d2a"),
     (1500, 512, 9,
-     [180, 172, 172, 168, 196, 196, 192, 192, 184, 176, 248],
+     [180, 172, 172, 168, 196, 196, 192, 192, 184, 248],
      "b95ec9b09570c0b57ad532181f3f2e804cc19ad3c138729f96eac024b533f4f6"),
 ]
 def canonical(task: bytes) -> dict:
@@ -81,17 +81,15 @@ def main() -> None:
             for record in task["records"]:
                 if record["address"] in ("0x04d10", "0x04d28"):
                     assert bar_slot(task, record["address"]) == 6
-        assert bar_slot(decoded[-2], "0x04d28") == 8
         assert bar_slot(decoded[-1], "0x04d28") == 8
         assert bar_slot(decoded[-1], "0x05108") == 7
         normalization_base = 0x33000 if tokens == 128 else \
             0x127380 if channels == 384 else 1500 * 32
         row = 2 * channels
-        assert task_word(decoded[-2], 0x4124) == normalization_base
-        assert task_word(decoded[-1], 0x4124) == normalization_base + 0x40
+        assert task_word(decoded[-1], 0x4124) == normalization_base
         assert task_word(decoded[-1], 0x414c) == normalization_base + row + 0x40
     print("H16G layer_norm parity PASS: three measured input prefixes, "
-          "serialized standalone schedules and connected normalization tails")
+          "serialized standalone schedules and identity-affine output boundaries")
 
 
 if __name__ == "__main__":

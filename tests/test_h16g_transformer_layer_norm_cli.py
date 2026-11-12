@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import struct
 import subprocess
 import sys
@@ -10,6 +11,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/mil-hwxc").resolve()
+VALIDATOR = Path(sys.argv[2] if len(sys.argv) > 2 else
+                 ROOT / "tools/h16g_validate.py").resolve()
+CANDIDATE = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else None
 
 
 def blob(values: list[int]) -> bytes:
@@ -56,6 +60,21 @@ def main() -> None:
             assert "h16g.encode.transformer-layer-norm-hardware-unproved" in result.stderr
             assert not output.exists()
 
+            if CANDIDATE:
+                candidate = root / f"{name}-candidate"
+                built = subprocess.run([str(CANDIDATE), "--mil", str(source),
+                    "--model-root", str(root), "--target", "H16G",
+                    "--output", str(candidate)], capture_output=True, text=True,
+                    timeout=180)
+                assert built.returncode == 0, built.stdout + built.stderr
+                manifest = json.loads((candidate / "manifest.json").read_text())
+                assert manifest["dispatchPlan"] == [0]
+                validation = subprocess.run([sys.executable, str(VALIDATOR),
+                    str(candidate / "program-0.hwx"), "--manifest",
+                    str(candidate / "manifest.json")], capture_output=True,
+                    text=True, timeout=60)
+                assert validation.returncode == 0, validation.stdout + validation.stderr
+
         # The capture carries identity gamma followed by zero beta, but no ANE
         # row consumes non-identity affine values. Keep that gap named.
         (root / "gamma.bin").write_bytes(blob([0x3c01] * 384))
@@ -68,7 +87,15 @@ def main() -> None:
             capture_output=True, text=True, timeout=120)
         assert refused.returncode != 0
         assert "h16g.encode.transformer-layer-norm-hardware-unproved" in refused.stderr
-    print("H16G layer_norm CLI PASS: four named hardware refusals")
+        if CANDIDATE:
+            candidate_refusal = subprocess.run([str(CANDIDATE), "--mil",
+                str(source), "--model-root", str(root), "--target", "H16G",
+                "--output", str(root / "affine-candidate")],
+                capture_output=True, text=True, timeout=180)
+            assert candidate_refusal.returncode != 0
+            assert "h16g.encode.transformer-layer-norm-affine-unproved" in \
+                candidate_refusal.stderr
+    print("H16G layer_norm CLI PASS: gates closed, three validated candidates")
 
 
 if __name__ == "__main__":

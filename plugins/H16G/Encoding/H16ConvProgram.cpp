@@ -848,33 +848,17 @@ Task layerNormShortMiddleTask(U32 index) {
     task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
 }
 
-Task layerNormBoundaryTask(U32 tokens,U32 channels,U32 index,
-                           U32 normalizationBase) {
-    Task task;layerNormHeader(task,index,0x3ffff,1);auto &r=task.registers;
-    task.header[4]=0x00fff820;
-    const U32 row=2*channels;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
-    r[12]=r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=0x80;r[0x4c]=0;
-    r[0x4104]=0x400100;r[0x4108]=0x142;r[0x4114]=row;
-    r[0x4124]=normalizationBase;
-    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;r[0x4150]=row;r[0x4500]=0x80004;
-    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0;r[0x4d2c]=0;
-    r[0x4d6c]=0x1002031;
-    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
-    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
-    record(task,{0x4d0c});record(task,{0x4d6c});record(task,{0x4104,0x4108});
-    record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x4150});
-    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(8));
-    record(task,{0x4d04},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|index;
-    store(task.bytes,0,task.header[0]);return task;
-}
-
 Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
                          U32 normalizationBase) {
     Task task;task.header={index,0,0x04000000,0,0x00fff860,0,0,0,9};auto &r=task.registers;
     const U32 row=2*channels;r[0x5500]=0x80;r[4]=r[0x14]=channels;
     r[8]=r[0x18]=tokens;r[12]=r[0x1c]=1;r[0x34]=tokens;r[0x3c]=0x30;
     r[0x44]=9;r[0x48]=0x20;r[0x4c]=0;r[0x4104]=0x400100;r[0x4108]=0x142;
-    r[0x4118]=row;r[0x4124]=normalizationBase+0x40;
+    // Identity gamma is a no-op.  Read the normalization producer directly
+    // and use only the measured zero-beta/output boundary.  The previous
+    // standalone graft inserted a predicted gamma multiply whose external
+    // constant path returned zero on the device.
+    r[0x4118]=row;r[0x4124]=normalizationBase;
     r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;
     r[0x4148]=0x14a;r[0x414c]=normalizationBase+row+0x40;r[0x4500]=0x80000;
     r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;
@@ -924,8 +908,6 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     // producer bases in the corresponding lnproj programs.
     const U32 normalizationBase=tokens==128 ? 0x33000u
         : channels==384 ? 0x127380u : 1500u*32u;
-    tasks.push_back(layerNormBoundaryTask(
-        tokens,channels,U32(tasks.size()),normalizationBase));
     tasks.push_back(layerNormOutputTask(
         tokens,channels,U32(tasks.size()),normalizationBase));
     for(Task &task:tasks) {
@@ -934,10 +916,9 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     }
     program.taskCount=U32(tasks.size());program.firstTaskBytes=tasks.front().bytes.size();
     program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
-    // The final two tasks consume the identity gamma and zero beta vectors
-    // found at the measured full-program constant boundary.  They are
-    // constants, not a scratch materialization: rebasing them to an empty
-    // standalone __DATA segment made every BERT result wrong and faulted DMA.
+    // Identity gamma is omitted.  The final boundary consumes only zero beta,
+    // stored after the retained identity vector so its decoded BAR addend is
+    // unchanged from the full-program boundary.
     program.constants.assign(std::size_t(channels)*4,0);
     for(U32 channel=0;channel<channels;++channel)
         program.constants[2*channel+1]=0x3c; // fp16 1.0, little endian
@@ -2423,7 +2404,8 @@ Task qkLoadTask(U32 tokens,U32 heads,U32 headDimension) {
     r[0x5138]=0x8302031;packQKLoad(task);return task;
 }
 
-Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) {
+Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final,
+                   U32 outputScale=0x3c00) {
     Task task; task.header={stage,0,final?0x04000000u:0u,0,
         final?0x00fff860u:0x00fff820u,0,0,0,
         final?0x0005000bu:0x00050003u};
@@ -2437,7 +2419,8 @@ Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final) 
     r[0x4104]=final?0x142:0x100142;r[0x4114]=0x100;
     r[0x4118]=0x4000;r[0x411c]=0x4000;r[0x4120]=0x4000;
     r[0x4148]=0x14a;r[0x414c]=0x4000;
-    r[0x4900]=0x10082;r[0x4904]=0x103c00;r[0x4910]=0x3c00;
+    r[0x4900]=0x10082;r[0x4904]=0x103c00;
+    r[0x4910]=final?outputScale:0x3c00;
     r[0x4d00]=(stage<<16)|0x21;r[0x4d08]=0xce;
     r[0x4d10]=final?0:heads*halfPaddedPlane;r[0x4d14]=0;
     r[0x4d1c]=paddedRow;r[0x4d24]=paddedRow*headDimension;
@@ -2891,7 +2874,8 @@ std::string attentionMatmulRefusal(U32 tokens,U32 heads,U32 headDimension,
 }
 
 TransformerAttentionProgram encodeAttentionMatmul(
-    U32 tokens,U32 heads,U32 headDimension,AttentionMatmul operation) {
+    U32 tokens,U32 heads,U32 headDimension,AttentionMatmul operation,
+    std::uint16_t outputScale) {
     if (auto why=attentionMatmulRefusal(tokens,heads,headDimension,operation);
         !why.empty()) throw std::invalid_argument(why);
     TransformerAttentionProgram out;out.program.task=streamPrologue(Generation::H16G);
@@ -2900,7 +2884,7 @@ TransformerAttentionProgram encodeAttentionMatmul(
     appendAttentionTask(out.program.task,load);
     if(operation==AttentionMatmul::QK){
         Task compute=qkComputeTask(tokens,heads,headDimension,1,false);
-        Task store=qkComputeTask(tokens,heads,headDimension,2,true);
+        Task store=qkComputeTask(tokens,heads,headDimension,2,true,outputScale);
         appendAttentionTask(out.program.task,compute);appendAttentionTask(out.program.task,store);
         out.program.taskCount=3;out.programRecordCount=7;
         out.programFormatCode=heads==6?209:heads==8?278:35*heads-1;

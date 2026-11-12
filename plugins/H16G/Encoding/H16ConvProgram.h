@@ -107,7 +107,8 @@ TransformerAttentionProgram encodeAttentionLayout(
 
 /// Runtime/runtime attention matrix products. QK consumes [1,H,S,D] and
 /// [1,H,D,S]; QKTransposeY consumes two [1,H,S,D] tensors; PV consumes
-/// [1,H,S,S] and [1,H,S,D].
+/// [1,H,S,S] and [1,H,S,D]. `outputScale` is folded into QK's final result
+/// word; other operations retain their qualified numerical scale.
 enum class AttentionMatmul { QK, QKTransposeY, PV };
 std::string attentionMatmulRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,
@@ -115,11 +116,11 @@ std::string attentionMatmulRefusal(std::uint32_t tokens,
                                    AttentionMatmul operation);
 TransformerAttentionProgram encodeAttentionMatmul(
     std::uint32_t tokens, std::uint32_t heads,
-    std::uint32_t headDimension, AttentionMatmul operation);
+    std::uint32_t headDimension, AttentionMatmul operation,
+    std::uint16_t outputScale = 0x3c00);
 
-/// Native last-axis softmax over [1,H,S,S]. Only the measured S=1500,H=8
-/// standalone form is admitted; H=6 and the S=128 family failed or lack
-/// device qualification.
+/// Native last-axis softmax over [1,H,S,S]. The measured S=1500,H=8 program
+/// is the physical form; callers with H<=8 zero-pad its trailing planes.
 std::string attentionSoftmaxRefusal(std::uint32_t tokens,
                                     std::uint32_t heads);
 TransformerAttentionProgram encodeAttentionSoftmax(std::uint32_t tokens,

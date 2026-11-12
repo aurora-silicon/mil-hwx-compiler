@@ -77,12 +77,13 @@ runtime matmuls for the Whisper S=1500 geometries:
 | transpose-y QK | same | same | 4 |
 | PV | same | same | heads + 1 |
 | last-axis softmax | eight-plane program, two zero planes | measured and enabled | 5 |
-| fused scaled QK + softmax + PV | refused after accuracy failure | refused pending qualification | heads + 12 candidate |
+| scaled QK + softmax + PV | three proven programs, gate closed | three proven programs, gate closed | 3 dispatches |
 
 The compiler keeps public held-out movement and matmul axes as unrevealed
 predictions. They pass the structural validator but do not claim descriptor
-or numerical parity. Predicted standalone softmax and every fused-attention
-form are refused; only the measured S=1500, H=8 standalone softmax is exposed.
+or numerical parity. Resident single-program attention remains refused. The
+candidate path instead emits scaled QK, measured eight-plane softmax, and PV
+as three ordinary programs with identifier-shared DRAM score surfaces.
 
 The first corrected Whisper-tiny device run made the numerical and scheduling
 boundaries more precise.  Split/split-transpose/merge were bit exact, QK and
@@ -99,6 +100,18 @@ relative-L2 signature.  Its corrected research form preserves the captured
 QK/softmax prefix, adds one resident-to-resident P*128 staging task into the
 second score plane, and folds 1/128 into each PV head.  This heads+12 form is
 structurally validated but remains refused pending a numerical device run.
+
+The next device run completed that resident candidate without translation
+faults, but H=6 still measured relative L2 `1.12` despite the right output
+magnitude. It is therefore not a qualified fusion. The replacement chain
+uses only independently qualified boundaries: the QK result-scale word folds
+the MIL scalar, softmax is the measured eight-plane program, and standalone
+PV stages P*128 and folds 1/128 into each head. H=6 score tensors occupy the
+first six physical planes of an eight-plane intermediate; the runtime clears
+shared intermediates before every dispatch, so the two padding planes are
+deterministic. The compiler manifest records three programs, dispatch order,
+two shared surfaces, and per-program bindings. Qualification gates remain
+closed until both H=6 and H=8 pass the reviewer kit.
 
 The first run found that the unrevealed H=6 softmax loaded but never completed.
 Its exponential task retained the captured H=8 dependency mask `0x3ff`; the
@@ -127,15 +140,11 @@ On a J616s with Linux the H=6 object, run on a padded `[1,6,1500,1500]`
 input of N(0,3) scores, matches a float64 reference with relative L2
 `5.5e-4` (max abs error `9.9e-4`).
 
-There is no captured H=6 standalone program to close that gap: Core ML placed
-the isolated Whisper-tiny softmax on the CPU.  The H=6 forms inside fused and
-full Whisper programs use four tiled staging tasks plus contextual
-max/exp/sum/normalize tasks, while the working H=8 standalone object is a
-different five-task external-surface program.  Head-count scaling agrees for
-the fields shared by those contextual forms, but it does not prove the
-standalone loop, record-hint, or scratch law that failed LOAD/EXECUTE.  The
-compiler therefore keeps H=6 refused instead of presenting another derived
-task stream as measured.
+Core ML placed isolated H=6 softmax on the CPU, so there is no captured H=6
+standalone program. The compiler closes that gap without predicting a new
+schedule: last-axis rows are independent, so it executes the byte-identical
+measured H=8 object over an eight-plane allocation and zero pads the final two
+planes. The failed H=6 schedule is no longer emitted.
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
@@ -158,34 +167,32 @@ the captured BERT and Whisper encoder programs:
 
 | Shape | Tasks | Measured part | Predicted part |
 | --- | ---: | --- | --- |
-| `[1,128,768]` | 5 | three-task external-input prefix | standalone two-task output boundary |
-| `[1,1500,384]` | 11 | nine-task tiled prefix and two-task standalone boundary | none |
-| `[1,1500,512]` | 11 | nine-task tiled prefix | standalone two-task output boundary |
+| `[1,128,768]` | 4 | three-task external-input prefix | zero-beta output boundary |
+| `[1,1500,384]` | 10 | nine-task tiled prefix | zero-beta output boundary |
+| `[1,1500,512]` | 10 | nine-task tiled prefix | zero-beta output boundary |
 
 The long form splits 1500 rows into three 384-row tiles and one 348-row tail.
 It encodes the fp16 value of `1e-5`, promoted to fp32 in the task, and fp32
 `1/d` for the reduction.  Reciprocal square root uses the task's direct
 normalization unit; there is no external reciprocal or rsqrt lookup table.
-The standalone boundary consumes the packaged identity gamma and zero beta
-vectors, then writes the external result.  These vectors are constants; they
-are not a scratch materialization.  Comparing the failed standalone object
-with the normalization-to-projection and full-encoder forms found a lost L2
-edge: the affine/output tail read base zero, while its producer writes
-`0x33000`, `0x127380`, or `0xbb80` for BERT, Whisper-tiny, or Whisper-base.
-The research constructor now preserves that producer base through both tail
-tasks and uses the serialized `0x00fff868` / `0x00fff820` /
+Identity gamma is a no-op, so the standalone form does not materialize or
+multiply it. The final boundary adds the packaged zero beta while writing the
+external result. Comparing the failed standalone object with the
+normalization-to-projection and full-encoder forms found that the invented
+gamma multiply, not the measured prefix, was the remaining bad boundary. The
+constructor now connects the normalization producer directly to the final
+zero-beta task and uses the serialized `0x00fff868` / `0x00fff820` /
 `0x00fff860` standalone schedule.
 
-Research objects use BAR 6 for the external input, BAR 8 for the gamma/beta
+Research objects use BAR 6 for the external input, BAR 8 for zero beta
 constant table, and BAR 7 for the external output.  The fail-closed validator
-recognizes the family, checks direction and aperture binding, and bounds four
-BERT or twelve Whisper DMA extents.  It rejects the earlier scratch-rebased
-objects. The earlier BERT build removed the translation faults but returned
-all ones (relative L2 `306`), while the earlier S=1500 object timed out at
-EXECUTE and quarantined the session. The disconnected L2 edge explains the
-identity-gamma output; the corrected candidate passes the offline validator
-and simulator, but host structural success is not treated as device
-qualification. The compiler refuses the family with
+recognizes the family and checks direction, aperture binding, and computable
+DMA extents. The first BERT build returned all ones, and the next connected-
+tail candidate completed with every output lane zero. The latter result
+isolates the unproved external gamma multiply: retaining only the identity-
+specialized output boundary removes that operation. The four/ten-task
+candidates pass the offline validator, but host structural success is not
+treated as device qualification. The compiler refuses the family with
 `h16g.encode.transformer-layer-norm-hardware-unproved`.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
@@ -246,7 +253,7 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| `layer_norm` (2) | `[1,128,768]` last axis | refused with hardware diagnostic | five-task research program | constant all-ones output (relL2 306) | normalization dataflow |
+| `layer_norm` (2) | `[1,128,768]` last axis | refused with hardware diagnostic | four-task identity boundary candidate | previous candidate all zero; reviewer run pending | fixed boundary |
 | `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
 | `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
@@ -267,10 +274,11 @@ work; **facts** = needs new field facts for this geometry.
 | conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | v4 relL2 `1.4e-3` to `1.7e-3` | done for d=384/512 |
 | `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | device-qualified with stem rows | done |
 | `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | transpose exact; add relL2 `2.1e-4` | done |
-| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused with hardware diagnostic | eleven-task research program | EXECUTE timeout on tiny | normalization dataflow |
+| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused with hardware diagnostic | ten-task identity boundary candidate | reviewer run pending | fixed boundary |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
-| `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | refused | square 1536 matmul per head, d_head padded to 1536 | padded (24x) | batched non-square runtime matmul |
-| `softmax` (1) | `[1,h,1500,1500]` | refused (SRAM overflow) | none | facts | tiled row softmax |
+| `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | native formula | batched QK/PV programs | device-qualified separately | done for h=6/8, d=64 |
+| `softmax` (1) | `[1,h,1500,1500]` | eight-plane program | pad unused heads to eight | H=6 relL2 `5.5e-4` | done for h<=8 |
+| attention chain (1) | Q/K/V, h=6/8 | qualification gate closed | scaled QK -> softmax -> PV through DRAM | reviewer run pending | proven-program chain |
 | `mul`, `reshape`, `transpose` | as BERT | refused | as BERT | as BERT | as BERT |
 
 ## Device results

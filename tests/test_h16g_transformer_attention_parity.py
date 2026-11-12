@@ -95,9 +95,12 @@ def emit(operation: str, sequence: int, heads: int, head_dim: int) -> list[bytes
 
 
 def emit_matmul(operation: str, sequence: int, heads: int,
-                head_dim: int) -> list[bytes]:
-    stream = subprocess.check_output([
-        DUMP, "matmul", operation, str(sequence), str(heads), str(head_dim)])
+                head_dim: int, output_scale: int | None = None) -> list[bytes]:
+    arguments = [DUMP, "matmul", operation, str(sequence), str(heads),
+                 str(head_dim)]
+    if output_scale is not None:
+        arguments.append(hex(output_scale))
+    stream = subprocess.check_output(arguments)
     assert stream[:16] == b"\x01" + bytes(15)
     return split_h14_tasks(stream[16:])
 
@@ -120,6 +123,10 @@ def main() -> None:
             sort_keys=True,
             separators=(",", ":")).encode()
         assert hashlib.sha256(encoded).hexdigest() == digest
+    scaled_qk = [decode_task(task, "h16") for task in
+                 emit_matmul("qk", 1500, 6, 64, 0x2400)]
+    assert task_word(scaled_qk[-1], "0x04910") == "0x00002400"
+    assert task_word(scaled_qk[-2], "0x04910") == "0x00003c00"
     for sequence, heads, sizes, digest in SOFTMAX_CASES:
         stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
         tasks = split_h14_tasks(stream[16:])

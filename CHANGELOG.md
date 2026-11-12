@@ -4,6 +4,16 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: replace the inaccurate resident fused-attention candidate with a
+  three-program DRAM chain: QK folds the graph's fp16 score scale, the
+  device-qualified eight-plane S=1500 softmax supplies H=6 zero padding, and
+  the device-qualified P*128/1/128 PV program writes the result. Shared
+  intermediates are zeroed before dispatch so physical padding is
+  deterministic. Standalone identity-affine layer norm now omits the
+  unproved gamma multiply and connects its measured normalization producer
+  directly to the zero-beta output boundary (4 BERT tasks, 10 Whisper
+  tasks). Both forms remain behind explicit qualification gates; a separate
+  candidate compiler builds the five-case reviewer kit.
 - H16G: emit S=1500 last-axis softmax with one to eight heads as the measured
   eight-plane program, with the unused trailing planes as zero padding. The
   H=6 (Whisper-tiny) object is byte-identical to the H=8 one and matches a
@@ -29,7 +39,7 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   Fused attention now stages resident probabilities at the exact fp16 scale
   128 into the second score plane and folds 1/128 into every PV head, matching
   the device-qualified standalone PV numerical fix. Offline validation and
-  simulation cover the new 5/11-task normalization and heads+12 fused forms;
+  simulation cover the superseded 5/11-task normalization and heads+12 fused forms;
   the named compiler refusals remain until a device run proves completion,
   numerical agreement, and zero translation faults.
 - H16G: fail closed on the three transformer forms that did not pass J616s

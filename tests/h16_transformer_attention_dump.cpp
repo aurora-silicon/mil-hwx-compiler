@@ -21,7 +21,7 @@ int main(int argc,char **argv) {
                         encoded.program.task.size());
         return 0;
     }
-    if (argc!=6 || (std::string(argv[1])!="layout" &&
+    if ((argc!=6 && argc!=7) || (std::string(argv[1])!="layout" &&
                     std::string(argv[1])!="matmul")) {
         std::cerr << "usage: h16_transformer_attention_dump "
                      "layout split|splitT|merge S H D | matmul qk|qkT|pv S H D\n";
@@ -44,9 +44,11 @@ int main(int argc,char **argv) {
         else if (name=="qkT") operation=ane::h16::AttentionMatmul::QKTransposeY;
         else if (name=="pv") operation=ane::h16::AttentionMatmul::PV;
         else throw std::invalid_argument("unknown attention matmul operation");
+        const std::uint16_t outputScale=argc==7
+            ? std::strtoul(argv[6],nullptr,0) : 0x3c00;
         encoded=ane::h16::encodeAttentionMatmul(
             std::strtoul(argv[3],nullptr,0),std::strtoul(argv[4],nullptr,0),
-            std::strtoul(argv[5],nullptr,0),operation);
+            std::strtoul(argv[5],nullptr,0),operation,outputScale);
     }
     std::cout.write(reinterpret_cast<const char *>(encoded.program.task.data()),
                     encoded.program.task.size());
