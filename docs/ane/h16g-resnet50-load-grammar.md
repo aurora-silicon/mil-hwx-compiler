@@ -37,3 +37,34 @@ split control. The first three arms preserve the accepted object's file layout
 and patch only aligned task fields. Changed descriptor boundaries cannot be
 represented as an in-place one-group patch, so the final arm is explicitly
 labeled as the complete donor control.
+
+The final control is byte-identical to the full round-3 ladder rung. The
+ladder copy loaded and reached EXECUTE, while the same bytes timed out at LOAD
+when run after three other morph loads in one recovery-kernel session. That
+contradiction rules out an object-level task-split conclusion from arm 04;
+the different result is sequencing or retained runtime state.
+
+## Stem EXECUTE audit
+
+After LOAD was fixed, every residual prefix hung at EXECUTE, including the
+three-task stem/probe object. Its first task differed from the accepted main
+stem in five named groups only:
+
+| Group | Rule-builder defect | Round-4 action |
+| --- | --- | --- |
+| Header hints | The generic MAC estimate and a 256-KiB staging extent produced the wrong execution-cost hint and marked four extra L2 banks live. | Use the sparse-stem phase cost and compute the live mask from the compact source and result extents. |
+| Common schedule | The generic wide-spatial schedule selected three traversal groups. | The stem selects four issue and traversal groups for the seven-phase walk. |
+| Source layout | The generic residual tuple described the external NCHW row inside L2 and placed it at a 64-KiB first-fit boundary. | Keep external DMA geometry unchanged, but use the compact three-plane phase tuple immediately after the guarded result extent. |
+| Result layout | The generic resident traversal and 64-byte row skew were used. | Select the sparse-stem result traversal and its 32-byte row skew. |
+| Result-span record | The generic packet explicitly wrote two complete-plane spans. | Omit them; the sparse phase engine derives both spans from geometry. |
+
+With those rules, the complete packed first task—not just its decoded values—
+is byte-identical to the accepted main stem task. The remaining two probe
+tasks and CPU reference are unchanged.
+
+`tools/h16g_stem_execute_morph.py` builds forward cumulative/single and mirror
+cumulative/single sets over these groups. Value groups are patched only at
+existing operand offsets. The differing result-span write set always comes
+from one of the two compiler-built endpoint objects; the tool never edits a
+record header or shifts a task by hand. It also requires a byte-exact accepted
+stem-task match and runs the container and LOAD-grammar gates on every output.

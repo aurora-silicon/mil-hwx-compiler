@@ -1677,10 +1677,32 @@ constexpr U32 kResidualProjectionOffset=2u<<20; // Projection scratch follows ma
 constexpr U32 kResidualScratchBytes=4u<<20; // Two projection-sized scratch regions.
 constexpr U32 kResidualPageBytes=1u<<14; // Driver-visible buffers use 16 KiB pages.
 constexpr U32 kResidualTaskIdMask=(1u<<16)-1; // Task id occupies header low half.
+constexpr U32 kResidualStemSourceGuardBytes=1u<<13;
 
 U32 residualChannelStride(U32 width) { return (2*width+15)&~U32(15); }
 U32 residualRowStride(ElementwiseShape shape) {
     return align64(shape.channels*residualChannelStride(shape.width))+0x40;
+}
+// The 7x7 sparse stem feeds its phase engine from a compact three-plane L2
+// view and leaves one 8-KiB guard after the result.  These are descriptor
+// layout fields, not the external NCHW DMA strides (which remain 448/100352).
+U32 residualStemSourceChannelStride(ConvShape shape) {
+    return shape.output.width;
+}
+U32 residualStemSourceRowStride(ConvShape shape) {
+    return shape.input.channels*residualStemSourceChannelStride(shape);
+}
+U32 residualStemResultRowStride(ConvShape shape) {
+    return shape.output.channels*residualChannelStride(shape.output.width)+0x20;
+}
+U32 residualStemResultBytes(ConvShape shape) {
+    return shape.output.height*residualStemResultRowStride(shape);
+}
+U32 residualStemSourceBase(ConvShape shape) {
+    return residualStemResultBytes(shape)+kResidualStemSourceGuardBytes;
+}
+U32 residualStemSourceBytes(ConvShape shape) {
+    return shape.input.channels*residualStemSourceRowStride(shape);
 }
 U32 residualBytes(ElementwiseShape shape) {
     const std::uint64_t bytes=std::uint64_t(shape.height)*residualRowStride(shape);
@@ -1708,7 +1730,10 @@ U32 residualBankMask(U32 base,U32 bytes) {
     return mask;
 }
 
-U32 residualCost(ConvShape shape) {
+U32 residualCost(ConvShape shape,ResidualRole role) {
+    // The native seven-phase sparse stem carries the compact phase-dispatch
+    // cost.  Ordinary convolution costs remain the bounded MAC estimate.
+    if (role==ResidualRole::Stem) return 12;
     const std::uint64_t macs=std::uint64_t(shape.output.width)*shape.output.height*
         shape.output.channels*shape.input.channels*shape.kernel*shape.kernelWidth;
     return U32(std::max<std::uint64_t>(1,std::min<std::uint64_t>(0x7f,
@@ -1718,6 +1743,8 @@ U32 residualSchedule(ConvShape shape,ResidualRole role) {
     // Schedule fields: enable bit 21, linear traversal bit 28, and four
     // 4-bit tile-group counts at bits 16/12/8/0.
     if (role==ResidualRole::Linear) return (1u<<28)|(1u<<21);
+    if (role==ResidualRole::Stem)
+        return (1u<<21)|(4u<<16)|(4u<<12)|(4u<<8);
     constexpr U32 tileWidth=7;
     U32 spatialGroups=(shape.output.width+tileWidth-1)/tileWidth;
     U32 level=0;
@@ -1821,6 +1848,10 @@ constexpr U32 residualL2ResultConfig(ResidualIO storage,bool terminal) {
     return (interleave<<8)|(4u<<4)|(1u<<3)|2u|
            (terminal?0u:(1u<<11));
 }
+constexpr U32 residualStemL2ResultConfig() {
+    // Sparse-stem result: external phase class 5, traversal 7, fp16 result.
+    return (5u<<20)|(1u<<8)|(7u<<4);
+}
 constexpr U32 residualDMAChannel(U32 id,bool source,bool first,bool terminal) {
     // TileDMA channel: task dependency id, enable, direction and endpoint class.
     const U32 endpoint=source?(first?(1u<<5):((1u<<29)|(1u<<6)))
@@ -1905,12 +1936,14 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
                       bool relu) {
     const bool first=id==0,last=id+1==taskCount;
     Task task;
-    const U32 sourceBytes=source==ResidualIO::Ring ? residualBytes(shape.input) :
-                                                    kResidualStageBytes;
-    const U32 resultBytes=result==ResidualIO::Ring ?
-        residualBytes({fullOutputs,shape.output.height,shape.output.width}) :
-        kResidualStageBytes;
-    task.header={id,residualCost(shape),residualHeaderRoute(first,last),0,
+    const bool stem=role==ResidualRole::Stem;
+    const U32 sourceBytes=stem ? residualStemSourceBytes(shape) :
+        (source==ResidualIO::Ring ? residualBytes(shape.input) : kResidualStageBytes);
+    const U32 resultBytes=stem ? residualStemResultBytes(shape) :
+        (result==ResidualIO::Ring ?
+         residualBytes({fullOutputs,shape.output.height,shape.output.width}) :
+         kResidualStageBytes);
+    task.header={id,residualCost(shape,role),residualHeaderRoute(first,last),0,
                  residualHeaderEngineEvents(first),0,0,
                  last?0u:residualBankMask(sourceBase,sourceBytes)|
                             residualBankMask(resultBase,resultBytes),
@@ -1933,6 +1966,12 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
         setResidualSource(r,shape.input,residualL2SourceConfig(source),sourceBase);
     } else {
         setResidualSource(r,shape.input,residualL2SourceConfig(source),sourceBase);
+        if (stem) {
+            const U32 stride=residualStemSourceChannelStride(shape);
+            const U32 row=residualStemSourceRowStride(shape);
+            r[0x4114]=stride;r[0x4118]=row;
+            r[0x411c]=row;r[0x4120]=row;
+        }
         if (first) r[0x4108]=residualL2ExternalRecord();
         r[0x4d00]=residualDMAChannel(id,true,first,false);
         r[0x4d08]=residualDMAOpcode(first);
@@ -1947,6 +1986,14 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
     if (result==ResidualIO::Ring) {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
                           resultBase+channelOffset);
+        if (stem) {
+            r[0x4148]=residualStemL2ResultConfig();
+            r[0x4154]=residualStemResultRowStride(shape);
+            // The phase engine derives both complete-plane spans from the
+            // stem geometry; writing the generic values selects a different
+            // traversal and wedges EXECUTE.
+            r.erase(0x4158);r.erase(0x415c);
+        }
     } else {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
                           resultBase+channelOffset);
@@ -2150,8 +2197,7 @@ ResNet50Program encodeResidualNetwork(
     const auto &stem=convolutions.front().shape;
     const U32 stemBase=0;
     emitConv(0,ResidualRole::Stem,ResidualIO::External,
-             residualFirstFit(stemBase,residualBytes(stem.output),
-                              kResidualStageBytes),0,
+             residualStemSourceBase(stem),0,
              ResidualIO::Ring,stemBase,0,true);
     if (options.maxPool) {
         const U32 poolBase=residualFirstFit(stemBase,residualBytes(stem.output),

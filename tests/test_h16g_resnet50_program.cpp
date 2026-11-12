@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <vector>
 
 using ane::h13::ElementwiseShape;
@@ -31,6 +32,40 @@ static std::vector<std::uint8_t> nonzeroHalves(std::size_t count,unsigned seed) 
     for (std::size_t i=0;i<count;++i) {
         const std::uint16_t value=std::uint16_t(0x2001+(i+seed)%0x1ffe);
         out[2*i]=std::uint8_t(value); out[2*i+1]=std::uint8_t(value>>8);
+    }
+    return out;
+}
+
+static std::uint32_t read32(const std::vector<std::uint8_t> &bytes,
+                            std::size_t at) {
+    return std::uint32_t(bytes.at(at)) |
+           std::uint32_t(bytes.at(at+1))<<8 |
+           std::uint32_t(bytes.at(at+2))<<16 |
+           std::uint32_t(bytes.at(at+3))<<24;
+}
+
+static std::map<std::uint32_t,std::uint32_t> firstTaskRegisters(
+    const std::vector<std::uint8_t> &stream) {
+    const std::size_t task=16;
+    const std::size_t words=read32(stream,task)>>16;
+    std::size_t cursor=task+9*4;
+    const std::size_t end=task+words*4;
+    std::map<std::uint32_t,std::uint32_t> out;
+    while (cursor<end) {
+        const std::uint32_t packed=read32(stream,cursor);cursor+=4;
+        const std::uint32_t base=packed&0x7fff;
+        std::vector<std::uint32_t> indices;
+        if (packed&(1u<<31)) {
+            indices.push_back(base);
+            for (unsigned delta=1;delta<=16;++delta)
+                if (packed&(1u<<(delta+14))) indices.push_back(base+delta);
+        } else {
+            const unsigned count=((packed>>15)&63)+1;
+            for (unsigned i=0;i<count;++i) indices.push_back(base+i);
+        }
+        for (std::uint32_t index:indices) {
+            out[index*4]=read32(stream,cursor);cursor+=4;
+        }
     }
     return out;
 }
@@ -72,6 +107,31 @@ int main() {
                   << " relocations=" << encoded.program.kernelRelocations.size()
                   << " records=" << encoded.programRecordCount << "\n";
         return 1;
+    }
+    const auto stemRegisters=firstTaskRegisters(encoded.program.task);
+    const std::size_t stemTask=16;
+    constexpr std::uint32_t stemTaskWords=103,stemExecutionCost=12;
+    constexpr std::uint32_t stemLiveBanks=(1u<<25)-1;
+    constexpr std::uint32_t stemSchedule=(1u<<21)|(4u<<16)|(4u<<12)|(4u<<8);
+    constexpr std::uint32_t stemSourceBase=0x18ae00;
+    constexpr std::uint32_t stemSourceChannelStride=112;
+    constexpr std::uint32_t stemSourceRowStride=3*stemSourceChannelStride;
+    constexpr std::uint32_t stemResultConfig=(5u<<20)|(1u<<8)|(7u<<4);
+    constexpr std::uint32_t stemResultRowStride=64*224+32;
+    if ((read32(encoded.program.task,stemTask)>>16)!=stemTaskWords ||
+        read32(encoded.program.task,stemTask+4)!=stemExecutionCost ||
+        read32(encoded.program.task,stemTask+28)!=stemLiveBanks ||
+        stemRegisters.at(0x3c)!=stemSchedule ||
+        stemRegisters.at(0x4110)!=stemSourceBase ||
+        stemRegisters.at(0x4114)!=stemSourceChannelStride ||
+        stemRegisters.at(0x4118)!=stemSourceRowStride ||
+        stemRegisters.at(0x411c)!=stemSourceRowStride ||
+        stemRegisters.at(0x4120)!=stemSourceRowStride ||
+        stemRegisters.at(0x4148)!=stemResultConfig ||
+        stemRegisters.at(0x4154)!=stemResultRowStride ||
+        stemRegisters.count(0x4158) || stemRegisters.count(0x415c)) {
+        std::cerr << "rule-built stem does not use the native sparse-phase layout\n";
+        return 6;
     }
 
     // A 192-pixel input uses the identical weights and rule constructors;
