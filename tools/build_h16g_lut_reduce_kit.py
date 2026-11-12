@@ -10,6 +10,7 @@ No Apple program or private comparison data is read by this script.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -202,16 +203,64 @@ def write_reference(case: Path, spec: dict, seed: int) -> tuple[list[int], list[
     return input_shape, output_shape
 
 
+def augment_kit(output: Path, source: Path) -> int:
+    """Add deterministic references and old-main neighbors to built programs."""
+    entries = json.loads((output / "cases.json").read_text())
+    source_entries = {entry["name"]: entry for entry in
+                      json.loads((source / "cases.json").read_text())}
+    for entry in entries:
+        name = entry["name"]
+        case = output / name
+        old_case = source / name
+        old_entry = source_entries[name]
+        for filename in ("input.bin", "reference.float64.bin"):
+            shutil.copy2(old_case / filename, case / filename)
+        if (old_case / "old-main.anec").exists():
+            shutil.copy2(old_case / "old-main.anec", case / "old-main.anec")
+            entry["oldMainProgram"] = f"{name}/old-main.anec"
+            entry.pop("oldMainRefusal", None)
+        else:
+            refusal = "old-main-unavailable.txt"
+            shutil.copy2(old_case / refusal, case / refusal)
+            entry["oldMainProgram"] = None
+            entry["oldMainRefusal"] = f"{name}/{refusal}"
+        # The source kit owns the deterministic input/reference contract.
+        for key in ("inputShape", "outputShape", "tolerance", "coverage"):
+            entry[key] = old_entry[key]
+        (case / "manifest.json").write_text(json.dumps(entry, indent=2) + "\n")
+    (output / "cases.json").write_text(json.dumps(entries, indent=2) + "\n")
+    (output / "README.md").write_text(
+        "# H16G LUT/reduce r3 qualification kit\n\n"
+        "The 38 current programs were rebuilt from the r3 compiler. "
+        "Deterministic inputs, float64 references, and old-main comparison "
+        "programs come from the round-2 kit with the same case contract. "
+        "Every current program passed the independent H16G container and "
+        "bind-extent validator during construction. Run smallest-first and "
+        "reboot after any LOAD or EXECUTE failure.\n")
+    sums = []
+    for path in sorted(output.rglob("*")):
+        if path.is_file() and path.name != "SHA256SUMS":
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            sums.append(f"{digest}  {path.relative_to(output)}")
+    (output / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+    print(f"H16G LUT/reduce kit: {len(entries)} cases augmented from {source}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("compiler", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--role", choices=("current", "old-main"), default="current")
     parser.add_argument("--validator", type=Path, required=True)
+    parser.add_argument("--augment-from", type=Path,
+                        help="augment an existing program-only kit")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--programs-only", action="store_true")
     mode.add_argument("--references-only", action="store_true")
     args = parser.parse_args()
+    if args.augment_from:
+        return augment_kit(args.output, args.augment_from)
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"output is not empty: {args.output}")
     args.output.mkdir(parents=True, exist_ok=True)
