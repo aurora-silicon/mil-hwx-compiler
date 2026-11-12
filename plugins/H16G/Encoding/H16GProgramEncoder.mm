@@ -1279,7 +1279,8 @@ static ANEHWXArtifact *encodeUnaryPointwiseProgram(
         encodeOperationName:operation.operationName inputShape:view
         error:&error];
     NSData *constants=[H16GLUTEncoder
-        constantRegionForOperationName:operation.operationName error:&error];
+        standaloneConstantRegionForOperationName:operation.operationName
+        error:&error];
     if (!program || !constants) {
         emitError(diagnostics,@"h16g.encode.unary-pointwise-fields",
             error.localizedDescription ?: @"cannot encode unary pointwise task",

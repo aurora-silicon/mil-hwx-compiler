@@ -73,6 +73,13 @@ constexpr std::uint32_t endpoint(std::uint32_t dependencyClass) {
     return std::uint32_t(1) | (dependencyClass << 4);
 }
 
+// ResultDMA.endpoint also owns the engine-enable bit. SourceDMA is armed by
+// its separate flags word, but ResultDMA never produces the completion event
+// consumed by Store when this bit is clear.
+constexpr std::uint32_t resultEndpoint(std::uint32_t dependencyClass) {
+    return (std::uint32_t(1) << 24) | endpoint(dependencyClass);
+}
+
 // Source DMA flags: external-memory, cacheable, and seven-beat burst.
 constexpr std::uint32_t sourceDMAFlags() {
     return (std::uint32_t(1) << 7) | (std::uint32_t(1) << 6) |

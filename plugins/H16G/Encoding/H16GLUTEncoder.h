@@ -16,6 +16,11 @@ NS_ASSUME_NONNULL_BEGIN
                                                   error:(NSError **)error;
 + (nullable NSData *)constantRegionForOperationName:(NSString *)operationName
                                                error:(NSError **)error;
+/// Construct the standalone LUT operation's direct interpolation table.
+/// Composed/device-proven consumers use constantRegionForOperationName: so
+/// their range-reduction header remains compatible with the proven program.
++ (nullable NSData *)standaloneConstantRegionForOperationName:
+    (NSString *)operationName error:(NSError **)error;
 /// Byte offset of the fp16 input-scale word in a table unary task stream, or
 /// NSNotFound when the operation is not a table unary or the geometry is not
 /// encodable. The plain program carries 1.0 there (log2 e for `exp`).

@@ -2,6 +2,7 @@
 """Compiler/container coverage for native H16G transformer attention."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -95,6 +96,7 @@ def main() -> None:
     }
     with tempfile.TemporaryDirectory(prefix="h16g-attention-") as temp:
         root = Path(temp)
+        images = {}
         for name, source in cases.items():
             mil = root / f"{name}.mil"; mil.write_text(source)
             output = root / name
@@ -103,12 +105,19 @@ def main() -> None:
                 capture_output=True, text=True, timeout=120)
             assert result.returncode == 0, result.stdout + result.stderr
             image = output / "program-0.hwx"
+            images[name] = image.read_bytes()
             validation = subprocess.run([sys.executable, str(VALIDATOR), str(image),
                 "--manifest", str(output / "manifest.json")],
                 capture_output=True, text=True, timeout=30)
             assert validation.returncode == 0, name + ": " + validation.stdout + validation.stderr
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
+        # This digest is current main's device-proven H=8 S=1500 object. The
+        # H<=8 padding rule must preserve the complete object, including the
+        # range-reduced exp table consumed by the five-task softmax stream.
+        assert hashlib.sha256(images["softmax_wbase"]).hexdigest() == \
+            "7d5ba12a57a109c587f594fea31046ed43ba05013f874673c9204dc21521b374"
+        assert images["softmax_wtiny"] == images["softmax_wbase"]
         refused_cases = {
             "softmax_h12": (softmax(1500, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),

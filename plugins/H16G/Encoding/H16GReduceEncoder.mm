@@ -250,7 +250,7 @@ static H16GEncodedTDProgram *encodeReductionPacket(
             registers[0x4d68]=surfaceDescriptor(0,2);
         }
         if (writesExternal) {
-            registers[0x5100]=endpoint(3);
+            registers[0x5100]=resultEndpoint(3);
             registers[0x5108]=(uint32_t)(taskRule.channelStart*outputPlaneBytes);
             registers[0x510c]=0;
             registers[0x5110]=(uint32_t)outputRowBytes;

@@ -21,11 +21,13 @@ using CC_LONG = size_t;
 #import "H16GMatrixRowDivisionEncoder.h"
 #import "H16GRegularConvEncoder.h"
 #import "H16GReduceEncoder.h"
+#include "H16GRulePacket.h"
 #import "H16GTDWriter.h"
 #import "H16GTarget.h"
 #import "H16GTaskEncoder.h"
 
 #include <stdio.h>
+#include <cstring>
 
 static int failures = 0;
 static NSString *sha256(NSData *data);
@@ -280,6 +282,14 @@ static uint32_t word(NSData *data, NSUInteger offset) {
     return value;
 }
 
+static uint32_t packTestHalves(float low,float high) {
+    _Float16 halves[2]={(_Float16)low,(_Float16)high};
+    uint32_t packed=0;
+    static_assert(sizeof(halves)==sizeof(packed));
+    memcpy(&packed,halves,sizeof(packed));
+    return packed;
+}
+
 static NSUInteger linearTaskCount(NSData *data, BOOL *headersValid) {
     NSUInteger count=0,position=16;
     BOOL valid=data.length>=16&&((const uint8_t *)data.bytes)[0]==1;
@@ -330,15 +340,32 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
     for (NSString *operation in @[@"sigmoid",@"tanh",@"gelu",@"silu",
             @"exp",@"log",@"sqrt",@"rsqrt",@"reciprocal"]) {
         NSError *error = nil;
-        NSData *first = [H16GLUTEncoder constantRegionForOperationName:operation
-            error:&error];
-        NSData *second = [H16GLUTEncoder constantRegionForOperationName:operation
-            error:&error];
+        NSData *first = [H16GLUTEncoder
+            standaloneConstantRegionForOperationName:operation error:&error];
+        NSData *second = [H16GLUTEncoder
+            standaloneConstantRegionForOperationName:operation error:&error];
         expect(first.length == 0x80 && error == nil &&
                [first isEqualToData:second] && word(first,0x54) == 33,
                @"unary constants are deterministic 33-sample rule-built tables");
     }
-    NSError *error = nil;
+    NSError *error=nil;
+    NSData *consumerExp=[H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:&error];
+    expect(word(consumerExp,0)==packTestHalves(-25.0f,16.0f) &&
+           word(consumerExp,4)==packTestHalves(0.0f,INFINITY) &&
+           word(consumerExp,80)==((uint32_t)5<<16) &&
+           word(consumerExp,84)==10,
+           @"composed exp consumers keep the proven clamp and tail contract");
+    H16GEncodedTDProgram *expProgram=[H16GLUTEncoder
+        encodeOperationName:@"exp" inputShape:@[@1,@1,@128,@128]
+        error:&error];
+    std::size_t resultEndpointOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x5100);
+    expect(resultEndpointOffset!=SIZE_MAX &&
+           word(expProgram.data,resultEndpointOffset)==
+               ane::h16::rule::fields::resultEndpoint(3),
+           @"rule-built ResultDMA is enabled so Store can observe completion");
+    error = nil;
     H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
         inputShape:@[@1,@1,@192,@192] error:&error];
     H16GEncodedTDProgram *relu = [H16GLUTEncoder encodeOperationName:@"relu"

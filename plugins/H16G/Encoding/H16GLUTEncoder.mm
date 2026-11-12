@@ -172,7 +172,7 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     registers[0x4d18]=rowBytes;
     registers[0x4d1c]=(uint32_t)surfaceBytes;
     registers[0x4d68]=surfaceDescriptor(0,2);
-    registers[0x5100]=endpoint(3);
+    registers[0x5100]=resultEndpoint(3);
     registers[0x5108]=0;
     registers[0x510c]=0;
     registers[0x5110]=rowBytes;
@@ -269,7 +269,8 @@ static double evaluateTable(NSString *operation, double x) {
     return 1.0/x;
 }
 
-static NSData *buildKernelTable(NSString *operation, NSError **error) {
+static NSData *buildStandaloneKernelTable(NSString *operation,
+                                           NSError **error) {
     H16GLUTRule rule;
     if (!ruleForOperation(operation,&rule)) {
         setError(error,@"operation has no rule-built H16G unary table");
@@ -291,6 +292,50 @@ static NSData *buildKernelTable(NSString *operation, NSError **error) {
     uint32_t sampleCount = 33;
     [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&metadata];
     [data replaceBytesInRange:NSMakeRange(84,4) withBytes:&sampleCount];
+    return data;
+}
+
+static NSData *buildConsumerCompatibleKernelTable(NSString *operation,
+                                                   NSError **error) {
+    NSMutableData *data=[buildStandaloneKernelTable(operation,error) mutableCopy];
+    if (!data) return nil;
+    if ([operation isEqualToString:@"exp"]) {
+        // The consumer-facing exponential table uses range reduction before
+        // interpolation. These are, in order: input clamp low, input clamp
+        // high, output below range, and output above range. The samples still
+        // cover 2^x on [0,1].
+        uint32_t inputClamps=packHalves(-25.0,16.0);
+        uint32_t outputTails=packHalves(0.0,
+            std::numeric_limits<double>::infinity());
+        uint32_t operationControl=(uint32_t)5 << 16;
+        uint32_t rangeReductionControl=10;
+        [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&inputClamps];
+        [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&outputTails];
+        [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&operationControl];
+        [data replaceBytesInRange:NSMakeRange(84,4)
+                        withBytes:&rangeReductionControl];
+    } else if ([operation isEqualToString:@"reciprocal"]) {
+        // Reciprocal consumers likewise range-reduce their input. These are
+        // input clamp low/high followed by output below/above range. The
+        // reduced table stores 2/x for x in [1,2].
+        uint32_t inputClamps=packHalves(0.0,
+            std::numeric_limits<double>::infinity());
+        uint32_t outputTails=packHalves(
+            std::numeric_limits<double>::infinity(),0.0);
+        [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&inputClamps];
+        [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&outputTails];
+        for (NSUInteger index=0;index<33;++index) {
+            double x=1.0+(double)index/32.0;
+            uint16_t sample=floatToHalf((float)(2.0/x));
+            [data replaceBytesInRange:NSMakeRange(8+index*2,2)
+                            withBytes:&sample];
+        }
+        uint32_t operationControl=(uint32_t)6 << 16;
+        uint32_t rangeReductionControl=103;
+        [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&operationControl];
+        [data replaceBytesInRange:NSMakeRange(84,4)
+                        withBytes:&rangeReductionControl];
+    }
     return data;
 }
 
@@ -351,6 +396,13 @@ static NSData *buildKernelTable(NSString *operation, NSError **error) {
                                       error:(NSError **)error {
     NSString *operation = canonicalOperation(operationName);
     if ([operation isEqualToString:@"relu"]) return [NSData data];
-    return buildKernelTable(operation,error);
+    return buildConsumerCompatibleKernelTable(operation,error);
+}
+
++ (NSData *)standaloneConstantRegionForOperationName:(NSString *)operationName
+                                               error:(NSError **)error {
+    NSString *operation=canonicalOperation(operationName);
+    if ([operation isEqualToString:@"relu"])return [NSData data];
+    return buildStandaloneKernelTable(operation,error);
 }
 @end
