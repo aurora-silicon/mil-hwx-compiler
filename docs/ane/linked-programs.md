@@ -1,7 +1,7 @@
 # H13 linked programs: a whole conv chain in one submit
 
 The H13 `linked-ring` schedule also recognizes basic and bottleneck residual
-DAGs; see [h13-resnet50.md](h13-resnet50.md). The public ResNet-50 is 80 tasks.
+DAGs; see [h13-resnet50.md](h13-resnet50.md). The public ResNet-50 is 103 tasks.
 Projection branches, pool/add/reduction tasks, 2 MiB ring placement, spills,
 and the classifier are emitted as one program with constants rebuilt from the
 MIL blob.

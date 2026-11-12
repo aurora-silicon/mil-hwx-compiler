@@ -302,6 +302,7 @@ static ane::h13::Program linkedRingPoolGeometryReference(
 }
 
 struct ColumnWrite {
+    std::uint32_t sourceChannel;
     std::uint32_t sourceRow;
     std::uint32_t sourceColumn;
     std::uint32_t destinationByte;
@@ -314,37 +315,43 @@ static std::uint32_t ceilLog2(std::uint32_t value) {
     return result;
 }
 
+static std::uint32_t pieceWidthGroups(std::uint32_t columns) {
+    std::uint32_t pieceColumns = 4;
+    while (pieceColumns < columns && pieceColumns < 32)
+        pieceColumns <<= 1;
+    return pieceColumns / 4;
+}
+
 static std::vector<ColumnWrite> modelPoolResultWriter(
     std::uint32_t width, std::uint32_t columnConfig,
-    std::uint32_t destinationPieceWord, std::uint32_t rows = 3) {
-    constexpr std::uint32_t tileColumns = 32;
+    std::uint32_t destinationRowStride,
+    std::uint32_t destinationPlaneStride,
+    std::uint32_t channels = 2, std::uint32_t rows = 56) {
     constexpr std::uint32_t halfwordBytes = 2;
-    constexpr std::uint32_t rowBytes = 128;
-    const auto pieceClass = (columnConfig >> 4) & 15u;
-    const auto pieceColumns = pieceClass > 2
-        ? std::min(16u, 1u << (pieceClass - 2)) : 1u;
-    // The destination word is decoded in half-byte units on this PE path.
-    const auto destinationAdvanceBytes = destinationPieceWord / 2;
+    constexpr std::uint32_t placementAlignment = 64;
+    const auto pieceColumns = 4u * (columnConfig & 15u);
+    if (!pieceColumns) throw std::runtime_error("zero pool piece width");
     std::vector<ColumnWrite> writes;
-    // The PE walks one piece across every row before advancing to the next.
-    // There are two destination piece slots per 32-column tile; narrowing
-    // Common +0x2c emits more source pieces into the second slot, so the last
-    // source piece wins.  A partial final piece zero-fills the unused columns
-    // of its complete destination slot.
-    for (std::uint32_t tile = 0; tile < width; tile += tileColumns) {
-        const auto tileWidth = std::min(tileColumns, width - tile);
-        const auto pieces = (tileWidth + pieceColumns - 1) / pieceColumns;
+    // Round 12 pins down two independent destination fields: +0x08 advances
+    // rows and +0x0c advances channel planes.  Piece k starts at the 64-byte
+    // roundup of k complete pieces.  The writer visits every row of a piece
+    // before advancing to the next piece, and partial pieces zero their tail.
+    const auto pieces = (width + pieceColumns - 1) / pieceColumns;
+    for (std::uint32_t channel = 0; channel != channels; ++channel) {
         for (std::uint32_t piece = 0; piece != pieces; ++piece) {
-            const auto sourceBase = tile + piece * pieceColumns;
-            const auto destinationBase = tile * halfwordBytes +
-                std::min(piece, 1u) * destinationAdvanceBytes;
+            const auto sourceBase = piece * pieceColumns;
+            const auto pieceBytes = pieceColumns * halfwordBytes;
+            const auto destinationBase =
+                (piece * pieceBytes + placementAlignment - 1) &
+                ~(placementAlignment - 1);
             for (std::uint32_t row = 0; row != rows; ++row)
                 for (std::uint32_t within = 0;
                      within != pieceColumns; ++within)
-                    writes.push_back({row,
-                        sourceBase + within < tile + tileWidth
+                    writes.push_back({channel, row,
+                        sourceBase + within < width
                             ? sourceBase + within : UINT32_MAX,
-                        row * rowBytes + destinationBase +
+                        channel * destinationPlaneStride +
+                            row * destinationRowStride + destinationBase +
                             within * halfwordBytes});
         }
     }
@@ -355,64 +362,88 @@ static void validateMeasuredPoolColumnModel() {
     constexpr std::uint32_t logicalWidth = 56;
     constexpr std::uint32_t physicalWidth = 64;
     constexpr std::uint32_t measuredColumnConfig = 0x64;
-    constexpr std::uint32_t round10DestinationWord = 128;
-    constexpr std::uint32_t correctedDestinationWord = 64;
+    constexpr std::uint32_t fixedColumnConfig = 0x68;
+    constexpr std::uint32_t rowStride = 128;
+    constexpr std::uint32_t planeStride = rowStride * 56;
+    using Source = std::array<int, 3>;
     const auto map = [](const std::vector<ColumnWrite> &writes) {
-        std::vector<std::pair<int, int>> result(
-            3 * physicalWidth, {-1, -1});
+        std::vector<Source> result(2 * planeStride / 2, {-1, -1, -1});
         for (const auto &write : writes)
             if (write.destinationByte / 2 < result.size())
                 result[write.destinationByte / 2] =
                     write.sourceColumn == UINT32_MAX
-                    ? std::make_pair(-1, -1)
-                    : std::make_pair(static_cast<int>(write.sourceRow),
-                                     static_cast<int>(write.sourceColumn));
+                    ? Source{-1, -1, -1}
+                    : Source{static_cast<int>(write.sourceChannel),
+                             static_cast<int>(write.sourceRow),
+                             static_cast<int>(write.sourceColumn)};
         return result;
     };
-    const auto at = [&](const auto &mapping, std::uint32_t row,
+    const auto at = [&](const auto &mapping, std::uint32_t channel,
+                        std::uint32_t row,
                         std::uint32_t column) -> const auto & {
-        return mapping[row * physicalWidth + column];
+        return mapping[channel * 56 * physicalWidth +
+                       row * physicalWidth + column];
     };
-    const auto oldDestination = map(modelPoolResultWriter(
-        logicalWidth, measuredColumnConfig, round10DestinationWord));
+    const auto control = map(modelPoolResultWriter(
+        logicalWidth, measuredColumnConfig, rowStride, planeStride));
     for (std::uint32_t column = 8; column != 32; ++column)
-        expect(at(oldDestination, 1, column).first < 0,
-               "round-10 model does not leave columns 8..31 unwritten");
+        expect(at(control, 0, 1, column)[0] < 0,
+               "round-12 control model does not leave columns 8..31 unwritten");
     for (std::uint32_t column = 32; column != 48; ++column)
-        expect(at(oldDestination, 1, column) ==
-                   std::make_pair(1, static_cast<int>(column)),
-               "round-10 model does not preserve columns 32..47");
+        expect(at(control, 0, 1, column) ==
+                   Source{0, 1, static_cast<int>(column)},
+               "round-12 control model does not preserve columns 32..47");
     for (std::uint32_t column = 48; column != 56; ++column)
-        expect(at(oldDestination, 1, column).first < 0,
-               "round-10 model does not leave columns 48..55 unwritten");
+        expect(at(control, 0, 1, column)[0] < 0,
+               "round-12 control model does not leave columns 48..55 unwritten");
     for (std::uint32_t column = 0; column != 8; ++column)
-        expect(at(oldDestination, 1, column) ==
-                   std::make_pair(0, static_cast<int>(48 + column)),
-               "round-10 model does not wrap the previous-row tail");
+        expect(at(control, 0, 1, column) ==
+                   Source{0, 0, static_cast<int>(48 + column)},
+               "round-12 control model does not wrap the previous-row tail");
 
     const auto width28 = map(modelPoolResultWriter(
-        28, measuredColumnConfig, round10DestinationWord));
+        28, measuredColumnConfig, rowStride, planeStride));
     for (std::uint32_t column = 0; column != 16; ++column)
-        expect(at(width28, 1, column) ==
-                   std::make_pair(1, static_cast<int>(column)),
+        expect(at(width28, 0, 1, column) ==
+                   Source{0, 1, static_cast<int>(column)},
                "width-28 model does not keep piece zero in place");
     for (std::uint32_t column = 0; column != 12; ++column)
-        expect(at(width28, 1, 32 + column) ==
-                   std::make_pair(1, static_cast<int>(16 + column)),
+        expect(at(width28, 0, 1, 32 + column) ==
+                   Source{0, 1, static_cast<int>(16 + column)},
                "width-28 model does not place piece one 32 columns late");
 
-    const auto oneColumn = map(modelPoolResultWriter(
-        logicalWidth, 0, round10DestinationWord));
-    expect(at(oneColumn, 1, 32) == std::make_pair(1, 32) &&
-               at(oneColumn, 1, 0) == std::make_pair(0, 55),
-           "zero +0x2c model does not retain column 32 and wrapped tail 55");
+    const auto bestGuess = map(modelPoolResultWriter(
+        logicalWidth, measuredColumnConfig, 64, planeStride));
+    for (std::uint32_t row = 29; row != 56; ++row)
+        for (std::uint32_t column = 0; column != logicalWidth; ++column)
+            expect(at(bestGuess, 0, row, column)[0] < 0,
+                   "64-byte-row model does not leave rows 29..55 unwritten");
+
+    const auto planeAdvance = map(modelPoolResultWriter(
+        logicalWidth, measuredColumnConfig, rowStride, planeStride / 2));
+    expect(at(planeAdvance, 0, 28, 0) == Source{1, 0, 0},
+           "plane-advance model does not move channel one to byte 3584");
+
+    const auto lowTwo = map(modelPoolResultWriter(
+        logicalWidth, 0x62, rowStride, planeStride));
+    expect(at(lowTwo, 0, 1, 0) == Source{0, 0, 48} &&
+               at(lowTwo, 0, 1, 7) == Source{0, 0, 55} &&
+               at(lowTwo, 0, 1, 32) == Source{0, 1, 32},
+           "low-2 piece-width model does not reproduce its eight-column slots");
 
     const auto fixedDestination = map(modelPoolResultWriter(
-        logicalWidth, measuredColumnConfig, correctedDestinationWord));
+        logicalWidth, fixedColumnConfig, rowStride, planeStride));
     for (std::uint32_t column = 0; column != logicalWidth; ++column)
-        expect(at(fixedDestination, 1, column) ==
-                   std::make_pair(1, static_cast<int>(column)),
+        expect(at(fixedDestination, 0, 1, column) ==
+                   Source{0, 1, static_cast<int>(column)},
                "corrected pool model does not cover every output column");
+
+    constexpr std::uint32_t measuredPieceBytes = 32;
+    const auto placement = [](std::uint32_t piece) {
+        return (piece * measuredPieceBytes + 63) & ~63u;
+    };
+    expect(placement(1) == placement(2) && placement(3) < 256,
+           "256-byte row unexpectedly repairs the piece-one collision");
 }
 
 static void validatePoolTilingFields(const ane::h13::Program &program) {
@@ -439,9 +470,8 @@ static void validatePoolTilingFields(const ane::h13::Program &program) {
     expect((reg(program, pool, 0x00024) & groupMask) ==
                (reg(proven, provenTask, 0x00024) & groupMask),
            "pool input/output group counts differ from proven geometry");
-    constexpr std::uint32_t fourLaneIssue = 4;
     constexpr std::uint32_t columnClassShift = 4;
-    const auto expectedTileConfig = fourLaneIssue |
+    const auto expectedTileConfig = pieceWidthGroups(output.width) |
         (ceilLog2(output.width) << columnClassShift);
     expect(reg(program, pool, 0x0002c) == expectedTileConfig &&
                reg(proven, provenTask, 0x0002c) == 0,
@@ -462,7 +492,6 @@ static void validateResidualPETasks(const ane::h13::Program &program) {
     const auto spans = taskSpans(program);
     expect(spans.size() == program.taskRecords.size(),
            "residual task metadata count differs from task stream");
-    constexpr std::uint32_t fourLaneIssue = 4;
     constexpr std::uint32_t columnClassShift = 4;
     const auto disabledCoefficientPath = 2u << 6;
     const auto disabledPalettePath = 1u << 6;
@@ -478,9 +507,9 @@ static void validateResidualPETasks(const ane::h13::Program &program) {
                    hasReg(program, span, 0x1f8c8),
                "residual PE task lost its 504-byte KernelDMA grammar");
         expect(reg(program, span, 0x0002c) ==
-                   (fourLaneIssue |
+                   (pieceWidthGroups(activeWidth) |
                     (ceilLog2(activeWidth) << columnClassShift)),
-               "residual PE task has the wrong active-column class");
+               "residual PE task has the wrong piece width or column class");
         const auto stage = role == "pool" ? 2u : role == "add+relu" ? 6u : 10u;
         expect(reg(program, span, 0x00034) == (1u | (stage << 3)),
                "residual PE task lost the executing pipeline config");
@@ -645,14 +674,15 @@ static void validatePoolBoundaryLayout(const ane::h13::Program &program) {
     const auto externalNCHW = 1u | (3u << 4) | (2u << 12) |
                               (3u << 20) | (1u << 24);
     expect((reg(program, terminal, 0x17800) & (1u << 26)) != 0 &&
-               reg(program, terminal, 0x17808) == 64 &&
+               reg(program, terminal, 0x17808) == 128 &&
+               (reg(program, terminal, 0x0002c) & 15u) == 8u &&
                program.output.nchw[5] == 128 &&
                program.output.nchw[4] == reg(program, terminal, 0x1780c) &&
                depth == reg(program, terminal, 0x17810) &&
                depth == reg(program, terminal, 0x17814) &&
                externalNCHW == reg(program, terminal, 0x17818) &&
                program.output.allocationBytes >= depth,
-           "pool terminal piece advance or plane/depth/format is inconsistent");
+           "pool terminal piece width or row/plane/depth/format is inconsistent");
 }
 
 static void expectOnlyRegisterChanges(
@@ -701,32 +731,86 @@ static void validatePoolSweeps(
     const auto control = encode("pool-sweep-control");
     const auto controlPool = taskSpans(control).at(1);
     expect(reg(control, controlPool, 0x17800) & (1u << 26),
-           "pool sweep control does not reproduce the round-10 writer path");
-    expectOnlyRegisterChanges(control, fixed, {0x17808}, "main fix");
+           "pool sweep control does not reproduce the round-12 writer path");
+    expect(reg(control, controlPool, 0x17808) == 128 &&
+               (reg(control, controlPool, 0x0002c) & 15u) == 4,
+           "pool sweep control lost the measured row or piece width");
+    expectOnlyRegisterChanges(control, fixed, {0x0002c}, "main fix");
 
     struct Sweep {
         const char *name;
         std::vector<std::uint32_t> fields;
     };
     const std::vector<Sweep> sweeps = {
-        {"best-guess", {0x17808}},
-        {"dst-config", {0x17800}},
-        {"dst-base", {0x17804}},
-        {"dst-piece-advance", {0x17808}},
-        {"dst-plane-advance", {0x1780c}},
-        {"dst-extent", {0x17810}},
-        {"dst-group-extent", {0x17814}},
-        {"dst-format", {0x17818}},
-        {"column-high-5", {0x0002c}},
-        {"column-high-4", {0x0002c}},
-        {"column-low-2", {0x0002c}},
-        {"width-28", {0x00014}},
-        {"width-16", {0x00014}},
+        {"piece-width-20", {0x0002c}},
+        {"piece-width-24", {0x0002c}},
+        {"piece-width-28", {0x0002c}},
+        {"best-guess", {0x0002c}},
+        {"row-256", {0x17808, 0x1780c, 0x17810, 0x17814}},
+        {"width-28-control", {0x00014}},
+        {"width-28-best-guess", {0x00014, 0x0002c}},
     };
     for (const auto &sweep : sweeps) {
         const auto variant = encode("pool-sweep-" + std::string(sweep.name));
         expectOnlyRegisterChanges(control, variant, sweep.fields, sweep.name);
+        if (std::string(sweep.name) == "row-256")
+            expect(variant.output.nchw[5] == 256 &&
+                       variant.output.nchw[4] == 256 * 56,
+                   "256-byte-row sweep did not update the package layout");
     }
+}
+
+static void validateSmallSpatialStandalone(
+    const OwnedNetwork &network,
+    const std::pair<std::vector<std::uint8_t>,
+                    std::vector<std::uint8_t>> &head,
+    const ane::h13::Program &projectionDiagnostic) {
+    const auto standalone = ane::h13::encodeResidualNetwork(
+        network.convs, head.first.data(), head.first.size(),
+        head.second.data(), head.second.size(),
+        "stage-4-first-block-standalone");
+    const auto spans = taskSpans(standalone);
+    expect(standalone.inputBoundary == "block13" &&
+               standalone.inputs.size() == 1 &&
+               standalone.inputs[0].nchw[1] == 1024 &&
+               standalone.inputs[0].nchw[2] == 14 &&
+               standalone.inputs[0].nchw[3] == 14 &&
+               standalone.output.nchw[1] == 2048 &&
+               standalone.output.nchw[2] == 7 &&
+               standalone.output.nchw[3] == 7,
+           "standalone small-spatial block has the wrong boundary layouts");
+    expect(spans.size() == 13 &&
+               standalone.taskRecords.front().role == "projection" &&
+               standalone.taskRecords.back().role == "add+relu",
+           "standalone small-spatial block has the wrong task range");
+    std::size_t main3Tasks = 0;
+    bool hasThreeByThreeStrideTwo = false;
+    bool hasLowL2Band = false;
+    for (std::size_t index = 0; index != spans.size(); ++index) {
+        const auto &record = standalone.taskRecords[index];
+        if (record.role == "add+relu") continue;
+        const auto conv = reg(standalone, spans[index], 0x0001c);
+        expect(((conv >> 10) & 7u) <= 4,
+               "standalone small-spatial block reintroduced OCG 5");
+        if (record.role == "main3") {
+            ++main3Tasks;
+            expect(record.output.channels == 256,
+                   "small-spatial expansion is not sliced to 256 outputs");
+            expect(reg(standalone, spans[index], 0x00034) & (1u << 23),
+                   "small-spatial expansion lost its full-output schedule");
+        }
+        hasThreeByThreeStrideTwo |=
+            (conv & 31u) == 3u && ((conv >> 13) & 3u) == 2u;
+        hasLowL2Band |= reg(standalone, spans[index], 0x04834) == 0;
+    }
+    expect(main3Tasks == 8 && hasThreeByThreeStrideTwo && hasLowL2Band,
+           "standalone diagnostic lost its new kernel, slices, or L2 band");
+
+    const auto passingProjection = taskSpans(projectionDiagnostic).back();
+    expect(projectionDiagnostic.taskRecords.back().role == "projection" &&
+               ((reg(projectionDiagnostic, passingProjection, 0x0001c) >> 10)
+                & 7u) <= 4,
+           "passing projection diagnostic is outside the OCG-4 envelope");
 }
 
 static std::uint32_t floatWord(float value) {
@@ -845,11 +929,10 @@ static EncodedCase encodeAndCheck(const Shape (&shapes)[S],
         network.convs, head.first.data(), head.first.size(),
         head.second.data(), head.second.size(), "pool-via-dram");
     const auto poolSpan = taskSpans(poolBoundary).at(1);
-    const auto poolWidth = reg(poolBoundary, poolSpan, 0x00014) & 0xffffu;
     expect((reg(poolBoundary, poolSpan, 0x17800) & (1u << 26)) != 0 &&
-               reg(poolBoundary, poolSpan, 0x17808) ==
-                   4u * std::min(16u, poolWidth),
-           "external pool result lost its writer or shape-derived piece advance");
+               reg(poolBoundary, poolSpan, 0x17808) == 128 &&
+               (reg(poolBoundary, poolSpan, 0x0002c) & 15u) == 8u,
+           "external pool result lost its writer, row stride, or piece width");
     return {std::move(program), std::move(logits)};
 }
 
@@ -866,7 +949,7 @@ int main(int argc, char **argv) {
     validateMeasuredPoolColumnModel();
     auto fullCase = encodeAndCheck(bottleneckShapes, bottleneckBlocks, 224);
     auto &full = fullCase.program;
-    if (full.taskCount != 80 || full.task.empty() || full.constants.empty() ||
+    if (full.taskCount != 103 || full.task.empty() || full.constants.empty() ||
         !full.formulaBuilt || full.inputs.size() != 1 ||
         full.inputs[0].nchw[2] != 224 || full.inputs[0].nchw[3] != 224 ||
         full.output.nchw[3] != 1000 || !full.scratchAllocationBytes) {
@@ -900,6 +983,10 @@ int main(int argc, char **argv) {
         boundaryNetwork.convs, boundaryHead.first.data(),
         boundaryHead.first.size(), boundaryHead.second.data(),
         boundaryHead.second.size(), "pool-via-dram");
+    auto projectionDiagnostic = ane::h13::encodeResidualNetwork(
+        boundaryNetwork.convs, boundaryHead.first.data(),
+        boundaryHead.first.size(), boundaryHead.second.data(),
+        boundaryHead.second.size(), "projection01");
     expect(stem.taskCount == 1 && stem.outputBoundary == "stem" &&
                stem.output.nchw[1] == 64 && stem.output.nchw[2] == 112 &&
                stem.output.nchw[3] == 112,
@@ -933,6 +1020,8 @@ int main(int argc, char **argv) {
     validateKernelDMASpans(stem);
     validatePoolViaDRAM(poolViaDRAM);
     validatePoolSweeps(boundaryNetwork, boundaryHead, poolViaDRAM);
+    validateSmallSpatialStandalone(boundaryNetwork, boundaryHead,
+                                   projectionDiagnostic);
     validatePoolResidentLayout(full);
     validateFullPoolCompletionChain(full);
     const auto fullSpans = taskSpans(full);
@@ -953,9 +1042,13 @@ int main(int argc, char **argv) {
 
     auto alternateCase = encodeAndCheck(bottleneckShapes, bottleneckBlocks, 192);
     auto &alternate = alternateCase.program;
-    if (alternate.taskCount != 80 || alternate.inputs[0].nchw[2] != 192 ||
-        alternate.inputs[0].nchw[3] != 192 || !alternate.formulaBuilt)
+    if (alternate.taskCount != 103 || alternate.inputs[0].nchw[2] != 192 ||
+        alternate.inputs[0].nchw[3] != 192 || !alternate.formulaBuilt) {
+        std::cerr << "alternate tasks=" << alternate.taskCount
+                  << " input=" << alternate.inputs[0].nchw[2]
+                  << "x" << alternate.inputs[0].nchw[3] << "\n";
         return 2;
+    }
     if (fullCase.logits != alternateCase.logits ||
         fullCase.logits.front() != 65536.0)
         return 5;

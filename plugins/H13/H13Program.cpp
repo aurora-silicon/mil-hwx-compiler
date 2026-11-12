@@ -125,8 +125,11 @@ std::vector<std::uint8_t> packResidualH13Stride2(
         shape.output.channels % 16 ||
         (shape.kernel != 1 && shape.kernel != 3 && shape.kernel != 7))
         throw std::invalid_argument("invalid H13 ResNet stride-2 convolution");
-    const unsigned cap = std::max(shape.output.width, shape.output.height) <= 8
-        ? 32 : 16;
+    // Every executing residual prefix through 14-wide uses at most sixteen
+    // interleaved output lanes.  The first 7-wide block was the first place
+    // the old spatial heuristic selected 32 lanes; its OCG-5 descriptors
+    // wedge q4.  Keep the proven OCG-4 lane ceiling across spatial classes.
+    constexpr unsigned cap = 16;
     const auto chunks = residualH13LaneChunks(shape.output.channels, cap);
     std::vector<std::uint8_t> out;
     for (unsigned region = 0; region != 16; ++region) {
@@ -4443,7 +4446,7 @@ namespace {
 
 std::uint64_t residualStride2RegionBytes(const ConvShape &shape,
                                          std::uint32_t outputs) {
-    const std::uint32_t laneCap = shape.output.width <= 8 ? 32 : 16;
+    constexpr std::uint32_t laneCap = 16;
     std::uint32_t lanes = outputs / 16;
     std::uint64_t bytes = 0;
     while (lanes) {
@@ -4506,6 +4509,16 @@ residualSlices(const ConvShape &shape) {
              shape.output.width);
         byChannel = channelWindow * std::max<std::uint64_t>(1, spatialScale) /
                     shape.input.channels;
+        if (shape.output.width <= 8) {
+            // OCG 5 first appears at the 7-wide stage and is the only new
+            // convolution class in the hanging prefix.  Keep dense 1x1
+            // tasks at the executing sixteen-lane OCG-4 envelope; channel
+            // slices still share the same result allocation and dependency.
+            constexpr std::uint64_t outputsPerInterleavedLane = 16;
+            constexpr std::uint64_t maximumInterleavedLanes = 16;
+            byChannel = std::min(byChannel,
+                outputsPerInterleavedLane * maximumInterleavedLanes);
+        }
     }
     std::uint32_t cap = static_cast<std::uint32_t>(
         std::max<std::uint64_t>(16, std::min(byKernel, byChannel)));
@@ -4559,18 +4572,12 @@ enum class ResidualPoolSweep {
     None,
     Control,
     BestGuess,
-    DestinationConfig,
-    DestinationBase,
-    DestinationPieceAdvance,
-    DestinationPlaneAdvance,
-    DestinationExtent,
-    DestinationGroupExtent,
-    DestinationFormat,
-    ColumnHigh5,
-    ColumnHigh4,
-    ColumnLow2,
-    Width28,
-    Width16,
+    PieceWidth20,
+    PieceWidth24,
+    PieceWidth28,
+    Row256,
+    Width28Control,
+    Width28BestGuess,
 };
 
 ResidualPoolSweep residualPoolSweep(const std::string &boundary) {
@@ -4578,30 +4585,18 @@ ResidualPoolSweep residualPoolSweep(const std::string &boundary) {
         return ResidualPoolSweep::Control;
     if (boundary == "pool-sweep-best-guess")
         return ResidualPoolSweep::BestGuess;
-    if (boundary == "pool-sweep-dst-config")
-        return ResidualPoolSweep::DestinationConfig;
-    if (boundary == "pool-sweep-dst-base")
-        return ResidualPoolSweep::DestinationBase;
-    if (boundary == "pool-sweep-dst-piece-advance")
-        return ResidualPoolSweep::DestinationPieceAdvance;
-    if (boundary == "pool-sweep-dst-plane-advance")
-        return ResidualPoolSweep::DestinationPlaneAdvance;
-    if (boundary == "pool-sweep-dst-extent")
-        return ResidualPoolSweep::DestinationExtent;
-    if (boundary == "pool-sweep-dst-group-extent")
-        return ResidualPoolSweep::DestinationGroupExtent;
-    if (boundary == "pool-sweep-dst-format")
-        return ResidualPoolSweep::DestinationFormat;
-    if (boundary == "pool-sweep-column-high-5")
-        return ResidualPoolSweep::ColumnHigh5;
-    if (boundary == "pool-sweep-column-high-4")
-        return ResidualPoolSweep::ColumnHigh4;
-    if (boundary == "pool-sweep-column-low-2")
-        return ResidualPoolSweep::ColumnLow2;
-    if (boundary == "pool-sweep-width-28")
-        return ResidualPoolSweep::Width28;
-    if (boundary == "pool-sweep-width-16")
-        return ResidualPoolSweep::Width16;
+    if (boundary == "pool-sweep-piece-width-20")
+        return ResidualPoolSweep::PieceWidth20;
+    if (boundary == "pool-sweep-piece-width-24")
+        return ResidualPoolSweep::PieceWidth24;
+    if (boundary == "pool-sweep-piece-width-28")
+        return ResidualPoolSweep::PieceWidth28;
+    if (boundary == "pool-sweep-row-256")
+        return ResidualPoolSweep::Row256;
+    if (boundary == "pool-sweep-width-28-control")
+        return ResidualPoolSweep::Width28Control;
+    if (boundary == "pool-sweep-width-28-best-guess")
+        return ResidualPoolSweep::Width28BestGuess;
     return ResidualPoolSweep::None;
 }
 
@@ -4686,8 +4681,9 @@ Program residualConvTask(const ResNet50ConvWeights &conv,
         cfg &= ~((31u << 0) | (31u << 5) | (7u << 10) |
                  (3u << 13) | (3u << 15) |
                  (31u << 17) | (31u << 22));
-        const auto cap = shape.output.width <= 8 ? 32u : 16u;
-        const auto lanes = std::min(cap, conv.shape.output.channels / 16);
+        constexpr std::uint32_t maximumInterleavedLanes = 16;
+        const auto lanes = std::min(maximumInterleavedLanes,
+                                    conv.shape.output.channels / 16);
         cfg |= shape.kernelWidth | (shape.kernel << 5) |
                (floorLog2(lanes) << 10) |
                (shape.stride << 13) | (shape.stride << 15);
@@ -4756,18 +4752,24 @@ constexpr std::uint32_t residualGroupConfig() {
 std::uint32_t residualPEColumnTileConfig(ResidualRole role,
                                          ElementwiseShape input,
                                          ElementwiseShape output) {
-    // Common PEColumnTileCfg: the low nibble selects four-lane PE issue and
-    // the high nibble is ceil(log2(active columns)).  The PE families at
-    // widths 8 and 16 decode to classes 3 and 4.  Pool/add traverse output
-    // columns; spatial mean traverses the input reduction columns.
+    // Common PEColumnTileCfg: the low nibble is the output piece width in
+    // groups of four columns; the high nibble is the active-column class.
+    // Round 12 changed the high nibble without changing a single output,
+    // while low 2 emitted eight-column pieces.  Pick one power-of-two piece
+    // that covers up to 32 active columns.  Thus widths 56/28/14/7 use
+    // 32/32/16/8-column pieces and every physical piece is self-contained.
+    // Pool/add traverse output columns; mean traverses its input reduction.
     const auto columns = role == ResidualRole::Mean ? input.width
                                                     : output.width;
     if (!columns || ceilLog2(columns) > 7)
         throw std::invalid_argument(
             "h13.residual-shape: PE column tile is outside the H13 class");
-    constexpr std::uint32_t fourLaneIssue = 4u;
+    std::uint32_t pieceColumns = 4;
+    while (pieceColumns < columns && pieceColumns < 32)
+        pieceColumns <<= 1;
+    const auto pieceWidthGroups = pieceColumns / 4;
     constexpr std::uint32_t columnClassShift = 4u;
-    return fourLaneIssue | (ceilLog2(columns) << columnClassShift);
+    return pieceWidthGroups | (ceilLog2(columns) << columnClassShift);
 }
 
 constexpr std::uint32_t residualPipelineConfig(ResidualRole role) {
@@ -4918,21 +4920,6 @@ constexpr std::uint32_t residualDestinationDMAConfig(bool external) {
     // the M1 Pro timed out with no finish lines, so every executing result
     // keeps the round-10 writer and storage only selects the data set.
     return 1u | (12u << 4) | (external ? 0u : 3u << 8) | (1u << 26);
-}
-
-std::uint32_t residualPoolPieceAdvanceWord(std::uint32_t outputWidth) {
-    // Pool PE output is divided into 32-column tiles and at most 16-column
-    // fp16 pieces.  TileDMA decodes this word in half-byte units for PE
-    // results, so twice the desired byte step is programmed.  The ordinary
-    // external row stride is 128 here; using it made the decoded piece step
-    // 64 bytes, twice the required 32-byte step.
-    constexpr std::uint32_t elementBytes = 2;
-    constexpr std::uint32_t maximumPieceColumns = 16;
-    if (!outputWidth)
-        throw std::invalid_argument(
-            "h13.residual-shape: pool output width must be nonzero");
-    const auto pieceColumns = std::min(maximumPieceColumns, outputWidth);
-    return 2 * elementBytes * pieceColumns;
 }
 
 constexpr std::uint32_t residualDestinationFormat(bool external) {
@@ -5145,73 +5132,48 @@ void applyResidualPoolSweep(std::vector<std::uint8_t> &stream,
             stream, at, bytes, address));
     };
     const auto outputSize = read(0x00014);
-    const auto outputHeight = outputSize >> 16;
     const auto outputWidth = outputSize & UINT16_MAX;
-    const auto physicalRow = read(0x1780c) / outputHeight;
-    const auto pieceWord = residualPoolPieceAdvanceWord(outputWidth);
-    const auto candidatePlane = pieceWord * outputHeight;
-    const auto candidateExtent = candidatePlane * read(0x00010);
-
-    // Every variant begins at the executing round-10 control, including its
-    // ordinary external row word.  Each case below changes exactly one
-    // candidate word, so a hang cannot hide which field selected it.
+    // Every variant begins at the measured round-12 control: destination
+    // +0x08 remains the 128-byte row stride and Common +0x2c low 4 emits
+    // sixteen-column pieces.  The narrow sweep changes only piece width,
+    // logical width, or the complete 256-byte-row alternative.
     putRegister(stream, at, bytes, 0x17800,
                 residualDestinationDMAConfig(true));
-    putRegister(stream, at, bytes, 0x17808, physicalRow);
+    putRegister(stream, at, bytes, 0x0002c,
+                (read(0x0002c) & ~0x0fu) | 4u);
     if (sweep == ResidualPoolSweep::Control) return;
 
     switch (sweep) {
     case ResidualPoolSweep::BestGuess:
-    case ResidualPoolSweep::DestinationPieceAdvance:
-        putRegister(stream, at, bytes, 0x17808, pieceWord);
-        break;
-    case ResidualPoolSweep::DestinationConfig:
-        putRegister(stream, at, bytes, 0x17800,
-                    read(0x17800) & ~(1u << 26));
-        break;
-    case ResidualPoolSweep::DestinationBase:
-        putRegister(stream, at, bytes, 0x17804,
-                    2u * std::min(16u, outputWidth));
-        break;
-    case ResidualPoolSweep::DestinationPlaneAdvance:
-        putRegister(stream, at, bytes, 0x1780c, candidatePlane);
-        break;
-    case ResidualPoolSweep::DestinationExtent:
-        putRegister(stream, at, bytes, 0x17810, candidateExtent);
-        break;
-    case ResidualPoolSweep::DestinationGroupExtent:
-        putRegister(stream, at, bytes, 0x17814, candidateExtent);
-        break;
-    case ResidualPoolSweep::DestinationFormat:
-        putRegister(stream, at, bytes, 0x17818,
-                    (read(0x17818) & ~(15u << 24)) | (8u << 24));
-        break;
-    case ResidualPoolSweep::ColumnHigh5:
         putRegister(stream, at, bytes, 0x0002c,
-                    (read(0x0002c) & ~0xf0u) | 0x50u);
+                    (read(0x0002c) & ~0x0fu) | 8u);
         break;
-    case ResidualPoolSweep::ColumnHigh4:
+    case ResidualPoolSweep::PieceWidth20:
         putRegister(stream, at, bytes, 0x0002c,
-                    (read(0x0002c) & ~0xf0u) | 0x40u);
+                    (read(0x0002c) & ~0x0fu) | 5u);
         break;
-    case ResidualPoolSweep::ColumnLow2:
+    case ResidualPoolSweep::PieceWidth24:
         putRegister(stream, at, bytes, 0x0002c,
-                    (read(0x0002c) & ~0x0fu) | 2u);
+                    (read(0x0002c) & ~0x0fu) | 6u);
         break;
-    case ResidualPoolSweep::Width28: {
-        const auto size = loadLE32(stream, h13RegisterOffset(
-            stream, at, bytes, 0x00014));
+    case ResidualPoolSweep::PieceWidth28:
+        putRegister(stream, at, bytes, 0x0002c,
+                    (read(0x0002c) & ~0x0fu) | 7u);
+        break;
+    case ResidualPoolSweep::Row256:
+        // configureResidualResult already installed the coherent 256-byte
+        // row, plane, extents, and package layout for this alternative.
+        break;
+    case ResidualPoolSweep::Width28Control:
         putRegister(stream, at, bytes, 0x00014,
-                    size - (size & UINT16_MAX) + 28u);
+                    outputSize - outputWidth + 28u);
         break;
-    }
-    case ResidualPoolSweep::Width16: {
-        const auto size = loadLE32(stream, h13RegisterOffset(
-            stream, at, bytes, 0x00014));
+    case ResidualPoolSweep::Width28BestGuess:
         putRegister(stream, at, bytes, 0x00014,
-                    size - (size & UINT16_MAX) + 16u);
+                    outputSize - outputWidth + 28u);
+        putRegister(stream, at, bytes, 0x0002c,
+                    (read(0x0002c) & ~0x0fu) | 8u);
         break;
-    }
     case ResidualPoolSweep::None:
     case ResidualPoolSweep::Control:
         break;
@@ -5535,7 +5497,7 @@ std::uint32_t residualScheduleWord(const ResidualTask &task) {
     std::uint32_t word = 0x00200001u | digit * 0x00011100u;
     if ((task.role == ResidualRole::Main3 ||
          task.role == ResidualRole::Projection) &&
-        task.shape.output.channels >= 4 * task.shape.input.channels)
+        task.fullOutputs >= 4 * task.shape.input.channels)
         word |= 0x00800000u; // expanded-output schedule class
     return word;
 }
@@ -5691,10 +5653,6 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
     configureResidualResult(program.task, at, bytes, planned.route.result,
                             planned.route.resultStage, task.firstOutput,
                             initialAliasProducer);
-    if (task.role == ResidualRole::Pool &&
-        planned.route.result.storage == ResidualStorage::External)
-        putRegister(program.task, at, bytes, 0x17808,
-                    residualPoolPieceAdvanceWord(task.shape.output.width));
     if (planned.route.hasSecond)
         configureResidualSecond(program.task, at, bytes, planned.route.second,
                                 planned.route.secondStage);
@@ -5840,6 +5798,8 @@ Program encodeResidualNetwork(
     const auto poolSweep = residualPoolSweep(terminateAfter);
     const bool poolViaDRAM = terminateAfter == "pool-via-dram" ||
         poolSweep != ResidualPoolSweep::None;
+    const bool standaloneSmallSpatialBlock =
+        terminateAfter == "stage-4-first-block-standalone";
     if (poolViaDRAM) {
         stem.storage = ResidualStorage::Scratch;
         stem.scratchOffset = static_cast<std::uint32_t>(
@@ -5866,12 +5826,24 @@ Program encodeResidualNetwork(
     stageRoute(pool.route, ringRanges({&stem, &current}));
     planned.push_back(std::move(pool));
 
+    std::size_t standaloneFirst = kNoConvolution;
+    std::size_t standaloneLast = kNoConvolution;
+    ResidualValue standaloneInput;
+    std::string standaloneInputBoundary;
     for (std::size_t blockIndex = 0; blockIndex != blocks.size(); ++blockIndex) {
         const auto &block = blocks[blockIndex];
         const std::string blockName = "block" +
             (blockIndex + 1 < 10 ? std::string("0") : std::string()) +
             std::to_string(blockIndex + 1);
         const auto blockInput = current;
+        const auto blockOutput =
+            convolutions[block.main.back()].shape.output;
+        const bool standaloneCandidate = standaloneSmallSpatialBlock &&
+            standaloneFirst == kNoConvolution &&
+            blockInput.shape.width > blockOutput.width &&
+            blockOutput.width <= 8;
+        const auto blockTaskStart = planned.size();
+        const auto incomingBoundary = planned.back().boundary;
         ResidualValue shortcut = blockInput;
         if (block.projection != kNoConvolution) {
             const auto output = convolutions[block.projection].shape.output;
@@ -5924,6 +5896,12 @@ Program encodeResidualNetwork(
         stageRoute(add.route, ringRanges({&main, &shortcut, &sum}));
         planned.push_back(std::move(add));
         current = sum;
+        if (standaloneCandidate) {
+            standaloneFirst = blockTaskStart;
+            standaloneLast = planned.size() - 1;
+            standaloneInput = blockInput;
+            standaloneInputBoundary = incomingBoundary;
+        }
     }
 
     const ElementwiseShape meanShape{finalShape.channels, 1, 1};
@@ -5994,10 +5972,20 @@ Program encodeResidualNetwork(
         throw std::logic_error(
             "h13.residual-fields: topology task count changed while encoding");
 
+    ElementwiseShape programInputShape = convolutions.front().shape.input;
     ElementwiseShape boundaryShape{};
+    std::uint32_t boundaryExternalRow = 0;
+    std::uint32_t boundaryExternalPlane = 0;
     bool boundaryOutput = false;
     if (!terminateAfter.empty() && terminateAfter != "logits") {
-        const std::string boundary = poolViaDRAM ? "pool" : terminateAfter;
+        if (standaloneSmallSpatialBlock &&
+            (standaloneFirst == kNoConvolution ||
+             standaloneLast == kNoConvolution))
+            throw std::invalid_argument(
+                "h13.residual-boundary: no small-spatial downsample block");
+        const std::string boundary = poolViaDRAM ? "pool" :
+            standaloneSmallSpatialBlock
+                ? planned[standaloneLast].boundary : terminateAfter;
         const auto target = std::find_if(planned.begin(), planned.end(),
             [&](const PlannedResidualTask &entry) {
                 return entry.boundary == boundary;
@@ -6011,8 +5999,9 @@ Program encodeResidualNetwork(
             target->route.resultStage = external.base;
         external.storage = ResidualStorage::External;
         external.scratchOffset = 0;
-        external.externalRow = static_cast<std::uint32_t>(
-            alignUp(2ull * boundaryShape.width, 64));
+        external.externalRow = poolSweep == ResidualPoolSweep::Row256
+            ? 256u : static_cast<std::uint32_t>(
+                alignUp(2ull * boundaryShape.width, 64));
         external.externalPlane = external.externalRow * boundaryShape.height;
         const std::uint64_t depth = static_cast<std::uint64_t>(
             external.externalPlane) * boundaryShape.channels;
@@ -6020,8 +6009,25 @@ Program encodeResidualNetwork(
             throw std::invalid_argument(
                 "h13.residual-boundary: external result exceeds 32-bit DMA extent");
         external.externalDepth = static_cast<std::uint32_t>(depth);
+        boundaryExternalRow = external.externalRow;
+        boundaryExternalPlane = external.externalPlane;
         target->route.result = external;
         planned.erase(target + 1, planned.end());
+        if (standaloneSmallSpatialBlock) {
+            ResidualValue externalSource = standaloneInput;
+            externalSource.storage = ResidualStorage::External;
+            externalSource.scratchOffset = 0;
+            for (auto &entry : planned) {
+                if (entry.route.source.storage == standaloneInput.storage &&
+                    entry.route.source.base == standaloneInput.base &&
+                    sameResidualTensor(entry.route.source.shape,
+                                       standaloneInput.shape))
+                    entry.route.source = externalSource;
+            }
+            programInputShape = standaloneInput.shape;
+            planned.erase(planned.begin(),
+                          planned.begin() + standaloneFirst);
+        }
         boundaryOutput = true;
     }
 
@@ -6030,6 +6036,8 @@ Program encodeResidualNetwork(
     program.formulaBuilt = true;
     program.scratchAllocationBytes = scratchCursor;
     program.outputBoundary = boundaryOutput ? terminateAfter : "logits";
+    program.inputBoundary = standaloneSmallSpatialBlock
+        ? standaloneInputBoundary : std::string();
     for (const auto &entry : planned)
         program.taskRecords.push_back({entry.layer, entry.role,
                                        entry.boundary,
@@ -6106,15 +6114,15 @@ Program encodeResidualNetwork(
     program.taskCount = static_cast<std::uint32_t>(planned.size());
     program.firstTaskBytes = planned.front().task.encoded.firstTaskBytes;
     program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
-    const auto input = convolutions.front().shape.input;
+    const auto input = programInputShape;
     const std::uint64_t inputRow = align16(2ull * input.width);
     const std::uint64_t inputPlane = inputRow * input.height;
     program.inputs = {{5, {1, input.channels, input.height, input.width,
                            inputPlane, inputRow},
                        alignUp(inputPlane * input.channels, 0x4000)}};
     if (boundaryOutput) {
-        const std::uint64_t outputRow = alignUp(2ull * boundaryShape.width, 64);
-        const std::uint64_t outputPlane = outputRow * boundaryShape.height;
+        const std::uint64_t outputRow = boundaryExternalRow;
+        const std::uint64_t outputPlane = boundaryExternalPlane;
         program.output = {4, {1, boundaryShape.channels,
                               boundaryShape.height, boundaryShape.width,
                               outputPlane, outputRow},

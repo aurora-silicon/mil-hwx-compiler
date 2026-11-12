@@ -143,6 +143,7 @@ struct Program {
     };
     std::vector<TaskRecord> taskRecords{};
     std::string outputBoundary{};
+    std::string inputBoundary{};
 };
 
 /// One biased convolution in an H13 residual schedule.  The
@@ -164,7 +165,9 @@ struct ResNet50ConvWeights {
 /// diagnostic `pool-via-dram` termination spills the stem before the pool so
 /// the kit can distinguish stem arithmetic from a resident L2 handoff.  The
 /// `pool-sweep-*` diagnostics use that same spill and change one named pool
-/// field group from the round-10 control.
+/// field group from the measured round-12 control.  The standalone
+/// small-spatial-block diagnostic selects its range from geometry and exposes
+/// the preceding block result as the package input.
 Program encodeResidualNetwork(
                        const std::vector<ResNet50ConvWeights> &convolutions,
                        const std::uint8_t *headWeights,

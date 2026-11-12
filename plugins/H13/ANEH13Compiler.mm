@@ -3244,6 +3244,8 @@ static BOOL writeH13ResidualNetwork(
     NSString *terminateKey = nil;
     if (terminateAfter.length) {
         if ([terminateAfter isEqualToString:@"pool-via-dram"] ||
+            [terminateAfter isEqualToString:
+                @"stage-4-first-block-standalone"] ||
             [terminateAfter hasPrefix:@"pool-sweep-"])
             terminateKey = terminateAfter;
         else
@@ -3276,14 +3278,24 @@ static BOOL writeH13ResidualNetwork(
         : [NSData dataWithBytes:anec.data() length:anec.size()];
     if (!payload) return NO;
 
-    ANEGraphValue *input = function.inputs[0];
+    ANEGraphValue *input = program.inputBoundary.empty()
+        ? function.inputs[0]
+        : boundaryValues[[NSString stringWithUTF8String:
+              program.inputBoundary.c_str()]];
     NSString *outputKey = [NSString stringWithUTF8String:
         program.outputBoundary.c_str()];
+    const BOOL standaloneSmallSpatialBlock =
+        [outputKey isEqualToString:@"stage-4-first-block-standalone"];
+    NSString *selectedOutputKey = outputKey;
+    if (standaloneSmallSpatialBlock && !program.taskRecords.empty())
+        selectedOutputKey = [NSString stringWithUTF8String:
+            program.taskRecords.back().boundary.c_str()];
     ANEGraphValue *selectedOutput =
         [outputKey isEqualToString:@"pool-via-dram"] ||
         [outputKey hasPrefix:@"pool-sweep-"]
-        ? boundaryValues[@"pool"] : boundaryValues[outputKey];
-    if (!selectedOutput || program.taskRecords.size() != program.taskCount)
+        ? boundaryValues[@"pool"] : boundaryValues[selectedOutputKey];
+    if (!input || !selectedOutput ||
+        program.taskRecords.size() != program.taskCount)
         return reject(diagnostics,
             @"H13 residual encoder boundary metadata disagrees with its task stream",
             nil, @"h13.residual-boundary");

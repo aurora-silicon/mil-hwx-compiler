@@ -3,7 +3,7 @@
 `mil-hwxc --target H13 --schedule linked-ring` recognizes a residual graph
 with a convolution stem, max-pool, basic (3x3,3x3) or bottleneck
 (1x1,3x3,1x1) blocks, global mean, and a linear classifier. It emits one
-program. The public 224 ResNet-50 is 80 tasks; 192-input ResNet-50 and a
+program. The public 224 ResNet-50 is 103 tasks; 192-input ResNet-50 and a
 ResNet-18-shaped graph use the same constructors and allocator.
 
 Every task field is constructed from operation geometry and storage semantics.
@@ -28,8 +28,8 @@ pixel-row span in all three extent fields, while resident results use the
 consumer's stride-class bank skew. This is one rule for 224/192 ResNet-50 and
 ResNet-18; it is not selected by a model or layer name.
 
-For the reference 224 model the result has 80 descriptors, 53,158,912 bytes
-of rebuilt constants, and a 12,058,624-byte spill arena. Channel 5 is the
+For the reference 224 model the result has 103 descriptors and a
+12,058,624-byte spill arena. Channel 5 is the
 `[1,3,224,224]` input with a 448-byte row and 100,352-byte plane. Channel 4 is
 the `[1,1,1,1000]` output with a 2,000-byte physical row.
 
@@ -54,7 +54,7 @@ configuration, consumer control, and channel-3 selectors. A host test decodes
 every task of the 224/192 bottleneck programs, ResNet-18, the two-task pool
 rung, and the first-block rung; it also checks that the stem result base and
 channel/row/plane strides equal the pool source fields, while the terminal
-pool plane/depth fields and the separate PE piece-advance word follow their
+pool row/plane/depth fields and the Common PE piece-width field follow their
 respective package and output-shape rules.
 It additionally checks all sixteen stem kernel-DMA spans, the native sparse
 kernel fields, the leading two-cell TensorFlow-SAME padding of the 7x7 stem,
@@ -71,55 +71,55 @@ hard guard also remains: Common `0x34` is the executing PE pipeline form with
 named enable and pool stage fields.  Substituting the convolution schedule
 there hangs the pool.
 
-Round 11 proves that Common `0x2c` sets the PE output piece width.  The normal
-class emits 16-column fp16 pieces; setting the whole word to zero emits
-one-column pieces and is much slower.  The result writer groups pieces in
-32-column tiles.  It walks one piece across every row before the next piece,
-and later tiles can overwrite the same physical slot.
+Rounds 11 and 12 pin down Common `0x2c` as the PE output piece-width control.
+Its low nibble is the width in groups of four columns: low 4 emits 16-column
+fp16 pieces and low 2 emits eight-column pieces. Changing the high nibble to
+classes 4 or 5 left every output bit-identical. Destination `0x17808` is not a
+piece advance: it is the row stride. Setting it to 64 packed rows at `64*y`
+and left physical rows 29 through 55 unwritten. Destination `0x1780c` is the
+plane stride; setting it to 3584 moved channel `c` to byte `3584*c`.
 
-The host model names TileDMA destination `0x17808` as the PE destination
-piece-advance word.  On this PE path the hardware decodes half of the stored
-word as bytes.  Round 10 put the ordinary 128-byte physical row there, so a
-piece advanced 64 bytes even though one 16-column fp16 piece is only 32 bytes.
-For width 28, the two pieces consequently land at byte bases 0 and 64, exactly
-matching source columns 0 through 15 in place and source columns 16 through 27
-at physical columns 32 through 43.  For width 56, tile zero's second piece and
-tile one's first piece collide at byte 64; the latter wins, explaining correct
-columns 32 through 47.  Tile one's tail lands at byte 128 and overwrites the
-next row's 16-column slot: its first eight values are the preceding row's
-columns 48 through 55 and its padded half clears columns 8 through 15.
-The zero `0x2c` diagnostic emits extra one-column pieces into the second slot;
-the last writers leave only column 32 and the preceding row's column 55.  The
-unit model reproduces all three measured maps, including write ordering and
-the 128-byte row wrap.
+For a piece of `P` fp16 columns, piece `k` starts at
+`roundup(2*P*k, 64)` bytes. With the measured 16-column pieces, width 28 puts
+columns 16 through 27 at byte 64. Width 56 puts pieces 1 and 2 at the same
+byte 64, so piece 2 overwrites piece 1, and puts the final piece at byte 128
+on top of the next row. The host model walks every row of a piece before the
+next piece and reproduces the control, 64-byte-row, width-28, low-2, and
+3584-byte-plane maps. It also proves that a 256-byte row cannot be the fix:
+it prevents the final piece from wrapping into the next row but pieces 1 and
+2 still collide at byte 64.
 
-The shape rule programs twice the byte size of `min(width, 16)` fp16 columns
-into destination `0x17808`.  For the 56-column pool that stored word is 64 and
-decodes to the required 32-byte advance.  The model then places tile-zero
-pieces at physical columns 0 and 16 and tile-one pieces at 32 and 48, covering
-the complete logical row without touching its eight padding columns.  The
-same rule is host-tested for 224- and 192-input ResNet-50 and the ResNet-18
-shape.
+The selected shape rule keeps destination `0x17808` at the physical row stride
+and chooses one power-of-two piece covering up to 32 columns. Widths
+56/28/14/7 therefore use 32/32/16/8-column pieces (low nibbles 8/8/4/2).
+At width 56 the two 64-byte pieces land at byte 0 and byte 64, covering the
+complete 128-byte physical row without a collision. The same rule covers PE
+add boundaries, whose old unwritten slots retained non-finite BO contents;
+that explains why the one-block boundary was merely wrong while block-prefix
+02 through 13 reported non-finite external results. The passing three-task
+projection at relL2 3.0e-4 independently shows that resident pool arithmetic
+and its first consumer were already sound.
 
-Round 11's separate attempt to clear destination Cfg writer bit 26 is fully
-reverted: it timed out with no finish lines and poisoned all subsequent jobs
-until reboot.  The round-10 executing writer remains selected for both
-external and scratch results.  The new sweep keeps that control and changes
-one word per variant: every destination record word has its own candidate,
-`0x2c` gets high-nibble classes 5 and 4 plus the low-nibble issue alternative,
-and widths 28 and 16 remain explicit.  The best-guess and destination
-piece-advance variants change only `0x17808`; the known hanging writer-bit
-variant is last in `sweepOrder`.  Tests compare every variant byte-for-byte
-with the control, retain the 504-byte KernelDMA grammar and guarded PE pipeline
-word, and reject changes outside the named word.  No packaged byte is patched.
+The narrow sweep retains the executing writer bit and the 128-byte-row
+control, tries 20-, 24-, and 28-column pieces, the selected 32-column piece,
+and the coherent 256-byte-row alternative. It includes both control and fixed
+width-28 programs, ordered last because the round-12 width-28 cold run
+completed but its timed loop hung. Tests restrict every variant to its named
+Common or destination-layout words, retain the 504-byte KernelDMA grammar and
+guarded PE pipeline word, and reject package byte patching.
 
-The full-stream timeout remains localized to index 1, class pool.  Once it is
-correct, the next descriptor is index 2, the first-block projection class.
-The ordinary one-block rung includes that class but does not terminate at it,
-so the kit now adds a three-task `next-stall-projection` diagnostic with its
-own `projection01` reference.  The original 21 ladder rungs and their
-qualification order are unchanged; this diagnostic and the field sweep are
-separate kit sections.
+Round 12's first q4 hang is the first 7-wide block. In one-based task order,
+65 is a 1x1 stride-2 projection from 1024x14x14 to 2048x7x7, 66 and 67 are
+the two 256-output 1x1 main slices in the low L2 band (the latter writes base
+zero), 68 is the 512-output 3x3 stride-2 task, 69 is the 1x1 expansion to
+2048, and 70 is the PE add. The projection, 3x3 task, and expansion were the
+first residual descriptors to select OCG 5 (32 interleaved lanes). The passing
+`next-stall-projection` is a 64-to-256 1x1 task at width 56 and stays in the
+OCG-4 envelope. Round 13 consequently keeps stride-2 packing at sixteen lanes
+and slices the 7-wide dense expansion into eight 256-output OCG-4 tasks. The
+focused prefix is 77 tasks and the standalone first 7-wide block is 13 tasks;
+both are separate kit diagnostics, while the original 21-rung qualification
+order remains unchanged.
 
 PE tasks have both kernel-table and kernel-execution enables clear and carry
 no constants, but the loader/descriptor walk still requires the 504-byte H13
@@ -147,7 +147,8 @@ at each legal boundary.
 rung; it never edits an ANEC. Its first three ladder rungs are the one-task
 stem, a two-task `stem-pool-via-dram` diagnostic that forces a real scratch
 spill, and the ordinary resident stem-to-pool pair. Every ladder, next-stall,
-and sweep entry has its own package manifest, input, plain float64 NPZ, and a
-libane channel-allocation check. `kit.json` keeps the 21 entries under `rungs`,
-puts the projection diagnostic under `next_stall`, and lists the one-field
-variants under `sweep` with a one-line description and stable sweep key.
+focused diagnostic, and sweep entry has its own package manifest, input, plain
+float64 NPZ, and a libane channel-allocation check. `kit.json` keeps the 21
+entries under `rungs`, puts the projection diagnostic under `next_stall`, the
+focused prefix and standalone small-spatial block under `diagnostics`, and the
+piece/layout variants under `sweep` with stable keys.
