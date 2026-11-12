@@ -126,7 +126,7 @@ def main() -> None:
     scaled_qk = [decode_task(task, "h16") for task in
                  emit_matmul("qk", 1500, 6, 64, 0x2400)]
     assert task_word(scaled_qk[-1], "0x04910") == "0x00002400"
-    assert task_word(scaled_qk[-2], "0x04910") == "0x00003c00"
+    assert task_word(scaled_qk[-2], "0x04910") == "0x00002400"
     for sequence, heads, sizes, digest in SOFTMAX_CASES:
         stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
         tasks = split_h14_tasks(stream[16:])

@@ -8,6 +8,15 @@
 namespace ane::h16 {
 namespace {
 using U32 = std::uint32_t;
+// Extended-header word 4 is the dispatch-limit field.  Serialized H16G
+// programs retain the 0xfff800 window and select first/middle/final task
+// state with the low byte; H17 uses zero rather than bit 5 for its middle
+// state.  Keep the field names here so task constructors do not carry bare
+// 0x00fff8xx words.
+constexpr U32 kDispatchLimitFirst = 0x00fff868u;
+constexpr U32 kDispatchLimitMiddleH16G = 0x00fff820u;
+constexpr U32 kDispatchLimitMiddleH17 = 0x00fff800u;
+constexpr U32 kDispatchLimitFinal = 0x00fff860u;
 // Standalone H16G objects place input, output and __KERN_0 at BAR slots
 // 6, 7 and 8. Formula tasks must use this object-writer BAR law rather than
 // the one-slot-earlier numbering retained by sanitized captures.
@@ -226,8 +235,8 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     // ExeCycles (header[1]) is unknown; zero is an explicit unmodelled hint.
     t.header = {stage,0, first ? (last ? 0x04000068u : 0x68u)
                                : (last ? 0x04000000u : 0u),
-                0, first ? ((!linked && !p.headerWindow) ? 0x68u : 0x00fff868u) : (last ? 0x00fff860u
-                                    : (h17 ? 0x00fff800u : 0x00fff820u)),
+                0, first ? ((!linked && !p.headerWindow) ? 0x68u : kDispatchLimitFirst) : (last ? kDispatchLimitFinal
+                                    : (h17 ? kDispatchLimitMiddleH17 : kDispatchLimitMiddleH16G)),
                 0,0, last ? 0u : (count == 2 ? 0x7fu
                                   : (first ? 0x01ffffffu : 0x7fffffffu)),
                 last ? 0x00050009u : 0x00050001u};
@@ -460,7 +469,7 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
     else if (bias && ((tokens==128 && cout>cin) ||
                       (tokens==1500 && cin==384 && cout==384))) serialized=true;
     t.header={taskIndex,0,last ? 0x04000000u : 0u,0,
-              serialized ? (last ? 0x00fff860u : 0x00fff820u) : 0x28u,
+              serialized ? (last ? kDispatchLimitFinal : kDispatchLimitMiddleH16G) : 0x28u,
               0,0,dependency,last ? 0x50009u : 0x50001u};
     auto &r=t.registers;
     r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=cin; r[0x1c]=slice;
@@ -520,7 +529,7 @@ Task whisperStem1Task(U32 tokens, U32 cout, U32 kernelBytes, bool gelu) {
     t.resultSlotFlags=taskBar(7);
     const U32 externalRow=align64(2*tokens);
     t.header={0,0,0x04000068,0,
-              (gelu || cout>=512) ? 0x00fff868u : 0x68u,
+              (gelu || cout>=512) ? kDispatchLimitFirst : 0x68u,
               0,0,0,0x50009};
     auto &r=t.registers;
     r[4]=r[0x14]=tokens; r[8]=r[0x18]=1; r[0xc]=80; r[0x1c]=cout;
@@ -630,7 +639,7 @@ Task whisperStem2Task(U32 cin, U32 slice, U32 firstOutput,
     const bool first=taskIndex==0,last=taskIndex+1==taskCount;
     t.header={taskIndex,0,first ? (last ? 0x04000068u : 0x68u)
                                : (last ? 0x04000000u : 0u),
-              0,first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+              0,first ? kDispatchLimitFirst : (last ? kDispatchLimitFinal : kDispatchLimitMiddleH16G),
               0,0,0,last ? 0x50009u : 0x50001u};
     auto &r=t.registers;
     r[4]=3000; r[8]=1; r[0xc]=cin;
@@ -752,7 +761,7 @@ Task layerNormLongLoadTask(U32 channels,U32 index) {
     const U32 tile=384,edge=1500-3*tile,row=2*channels;
     const bool edgeTile=index==0;Task task;
     task.header={index,0,index==0?0x68u:0u,0,
-        index==0?0x00fff868u:0x00fff820u,0,0,1,1};
+        index==0?kDispatchLimitFirst:kDispatchLimitMiddleH16G,0,0,1,1};
     auto &r=task.registers;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
     r[12]=r[0x1c]=edgeTile?edge:tile;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
     r[0x4104]=index?0x142:0x500172;if(!index)r[0x4108]=0x500130;
@@ -770,7 +779,7 @@ Task layerNormLongLoadTask(U32 channels,U32 index) {
 Task layerNormLongVarianceTask(U32 channels,U32 index) {
     const U32 tile=384,edge=1500-3*tile,row=2*channels;
     const U32 position=index==7?3:6-index;const bool last=index==7;
-    Task task;task.header={index,0,0,0,0x00fff820,0,0,1,1};auto &r=task.registers;
+    Task task;task.header={index,0,0,0,kDispatchLimitMiddleH16G,0,0,1,1};auto &r=task.registers;
     r[4]=r[0x14]=channels;r[8]=r[0x18]=1;r[12]=r[0x1c]=last?edge:tile;
     r[0x34]=1;r[0x3c]=0x60;r[0x44]=9;r[0x48]=1;r[0x4c]=0;
     if(index!=7)r[0x4104]=0x400100;r[0x4108]=0x142;
@@ -787,7 +796,7 @@ Task layerNormLongVarianceTask(U32 channels,U32 index) {
 Task layerNormLongReduceTask(U32 channels) {
     Task task;layerNormHeader(task,8,channels==512?0x1ffffff:0,
                              channels==512?1:0);auto &r=task.registers;
-    task.header[4]=0x00fff820;
+    task.header[4]=kDispatchLimitMiddleH16G;
     r[4]=r[0x14]=channels;r[8]=r[0x18]=1;r[12]=r[0x1c]=1500;
     r[0x34]=1;r[0x3c]=0x40;r[0x44]=7;r[0x4c]=0;
     r[0x4104]=0x142;r[0x4108]=0x400100;
@@ -810,7 +819,7 @@ Task layerNormLongReduceTask(U32 channels) {
 }
 
 Task layerNormShortLoadTask() {
-    Task task;task.header={0,0,0x68,0,0x00fff868,0,0,0x3c0,1};auto &r=task.registers;
+    Task task;task.header={0,0,0x68,0,kDispatchLimitFirst,0,0,0x3c0,1};auto &r=task.registers;
     r[4]=r[0x14]=768;r[8]=r[0x18]=1;r[12]=r[0x1c]=128;
     r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x48]=0x400;r[0x4c]=0;
     r[0x4104]=0x500171;r[0x4108]=0x500130;r[0x4110]=0x63200;
@@ -828,7 +837,7 @@ Task layerNormShortLoadTask() {
 }
 
 Task layerNormShortMiddleTask(U32 index) {
-    Task task;task.header={index,index==1?3u:1u,0,0,0x00fff820,0,0,
+    Task task;task.header={index,index==1?3u:1u,0,0,kDispatchLimitMiddleH16G,0,0,
         index==1?0x3c0u:0x3ffu,1};
     task.header[1]=0;auto &r=task.registers;r[4]=r[0x14]=768;r[8]=r[0x18]=1;
     r[12]=r[0x1c]=128;r[0x34]=1;r[0x3c]=index==1?0x60:0x40;
@@ -848,16 +857,39 @@ Task layerNormShortMiddleTask(U32 index) {
     task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
 }
 
+// The fourth BERT task (tenth for Whisper) is the normalization operation,
+// not an identity-gamma affine boundary.  It is byte-for-byte the task that
+// feeds the following projection in the measured full encoder program: NE
+// consumes the centered value and reciprocal standard deviation resident at
+// normalizationBase and writes the normalized tensor back to that L2 view.
+Task layerNormNormalizeTask(U32 tokens,U32 channels,U32 index,
+                            U32 normalizationBase) {
+    Task task;layerNormHeader(task,index,0x3ffff,1);auto &r=task.registers;
+    task.header[4]=kDispatchLimitMiddleH16G;
+    const U32 row=2*channels;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
+    r[12]=r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=0x80;r[0x4c]=0;
+    r[0x4104]=0x400100;r[0x4108]=0x142;r[0x4114]=row;
+    r[0x4124]=normalizationBase;
+    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;r[0x4150]=row;r[0x4500]=0x80004;
+    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0;r[0x4d2c]=0;
+    r[0x4d6c]=0x1002031;
+    task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
+    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
+    record(task,{0x4d0c});record(task,{0x4d6c});record(task,{0x4104,0x4108});
+    record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x4150});
+    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(8));
+    record(task,{0x4d04},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|index;
+    store(task.bytes,0,task.header[0]);return task;
+}
+
 Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
                          U32 normalizationBase) {
-    Task task;task.header={index,0,0x04000000,0,0x00fff860,0,0,0,9};auto &r=task.registers;
+    Task task;task.header={index,0,0x04000000,0,kDispatchLimitFinal,0,0,0,9};auto &r=task.registers;
     const U32 row=2*channels;r[0x5500]=0x80;r[4]=r[0x14]=channels;
     r[8]=r[0x18]=tokens;r[12]=r[0x1c]=1;r[0x34]=tokens;r[0x3c]=0x30;
     r[0x44]=9;r[0x48]=0x20;r[0x4c]=0;r[0x4104]=0x400100;r[0x4108]=0x142;
-    // Identity gamma is a no-op.  Read the normalization producer directly
-    // and use only the measured zero-beta/output boundary.  The previous
-    // standalone graft inserted a predicted gamma multiply whose external
-    // constant path returned zero on the device.
+    // Identity gamma is a no-op.  Add only the packaged zero beta while the
+    // full-program output writer materializes the normalized L2 view.
     r[0x4118]=row;r[0x4124]=normalizationBase;
     r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;
     r[0x4148]=0x14a;r[0x414c]=normalizationBase+row+0x40;r[0x4500]=0x80000;
@@ -901,13 +933,13 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
         tasks.push_back(layerNormShortMiddleTask(1));
         tasks.push_back(layerNormShortMiddleTask(2));
     }
-    // The input/reduction prefix and standalone affine/output tail must share
-    // one L2 address.  The former lnproj/standalone graft rebased the tail to
-    // zero, disconnecting it from the normalized value and exposing gamma as
-    // the result (all 1.0 for identity affine).  These are the measured
-    // producer bases in the corresponding lnproj programs.
+    // The reduction prefix, normalization task and output writer share the
+    // measured producer base from the corresponding normalization-to-
+    // projection program.
     const U32 normalizationBase=tokens==128 ? 0x33000u
         : channels==384 ? 0x127380u : 1500u*32u;
+    tasks.push_back(layerNormNormalizeTask(
+        tokens,channels,U32(tasks.size()),normalizationBase));
     tasks.push_back(layerNormOutputTask(
         tokens,channels,U32(tasks.size()),normalizationBase));
     for(Task &task:tasks) {
@@ -1619,7 +1651,8 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
         Task t=task(gen,layers[i],true,0,1,0,0,kernelBase,0,0);
         auto &r=t.registers;
         t.header={i,0,(first ? 0x68u : 0u) | (last ? 0x04000000u : 0u),0,
-                  first ? 0x00fff868u : (last ? 0x00fff860u : (h17 ? 0x00fff800u : 0x00fff820u)),
+                  first ? kDispatchLimitFirst : (last ? kDispatchLimitFinal :
+                      (h17 ? kDispatchLimitMiddleH17 : kDispatchLimitMiddleH16G)),
                   0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
         r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240);
         for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
@@ -1876,7 +1909,8 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
         Task t=task(gen,layers[i],true,0,1,0,0,kernelBase,0,0);
         auto &r=t.registers;
         t.header={i,0,(first ? 0x68u : 0u) | (last ? 0x04000000u : 0u),0,
-                  first ? 0x00fff868u : (last ? 0x00fff860u : 0x00fff820u),
+                  first ? kDispatchLimitFirst : (last ? kDispatchLimitFinal :
+                      kDispatchLimitMiddleH16G),
                   0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
         if (policy!=MobileNetL2Policy::Placement) r[0x3c]=mobileSchedule[i];
         if (policy==MobileNetL2Policy::Header) {
@@ -2387,7 +2421,7 @@ void packQKCompute(Task &task,bool final,U32 resultFlags=attentionBar(8)) {
 }
 
 Task qkLoadTask(U32 tokens,U32 heads,U32 headDimension) {
-    Task task; task.header={0,0,0x68,0,0x00fff868,0,0,0,1};
+    Task task; task.header={0,0,0x68,0,kDispatchLimitFirst,0,0,0,1};
     auto &r=task.registers; const U32 rowBytes=2*headDimension;
     const U32 planeBytes=tokens*rowBytes;
     const U32 paddedRow=attentionAlign64(2*tokens);
@@ -2407,7 +2441,7 @@ Task qkLoadTask(U32 tokens,U32 heads,U32 headDimension) {
 Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final,
                    U32 outputScale=0x3c00) {
     Task task; task.header={stage,0,final?0x04000000u:0u,0,
-        final?0x00fff860u:0x00fff820u,0,0,0,
+        final?kDispatchLimitFinal:kDispatchLimitMiddleH16G,0,0,0,
         final?0x0005000bu:0x00050003u};
     auto &r=task.registers; const U32 headPairs=(heads+1)/2;
     const U32 paddedRow=attentionAlign64(2*tokens);
@@ -2420,7 +2454,10 @@ Task qkComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,bool final,
     r[0x4118]=0x4000;r[0x411c]=0x4000;r[0x4120]=0x4000;
     r[0x4148]=0x14a;r[0x414c]=0x4000;
     r[0x4900]=0x10082;r[0x4904]=0x103c00;
-    r[0x4910]=final?outputScale:0x3c00;
+    // The two compute tasks own the low and high head halves independently.
+    // Applying the MIL score scale only to the terminal task left heads
+    // floor(H/2)..H-1 exactly 64x too large for the Whisper 1/64 scale.
+    r[0x4910]=outputScale;
     r[0x4d00]=(stage<<16)|0x21;r[0x4d08]=0xce;
     r[0x4d10]=final?0:heads*halfPaddedPlane;r[0x4d14]=0;
     r[0x4d1c]=paddedRow;r[0x4d24]=paddedRow*headDimension;
@@ -2473,7 +2510,7 @@ Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
                             U32 stage,bool final) {
     const bool shortSchedule=heads==6;
     Task task;task.header={stage,0,final?0x04000000u:0u,0,
-        shortSchedule?0x28u:(final?0x00fff860u:0x00fff820u),0,0,
+        shortSchedule?0x28u:(final?kDispatchLimitFinal:kDispatchLimitMiddleH16G),0,0,
         final?0u:(shortSchedule?0x0003ffffu:0x00ffffffu),
         final?0x0005000bu:0x00050003u};
     auto &r=task.registers;const U32 pairs=(heads+1)/2;
@@ -2518,7 +2555,7 @@ Task qkTransposeComputeTask(U32 tokens,U32 heads,U32 headDimension,
 Task pvLoadTask(U32 tokens,U32 heads,bool fused=false) {
     const U32 taskIndex=fused?11:0;
     Task task;task.header={taskIndex,0,fused?0u:0x68u,0,
-        fused?(heads==6?0x28u:0x00fff820u):0x68u,
+        fused?(heads==6?0x28u:kDispatchLimitMiddleH16G):0x68u,
         0,0,0,0x00050001};
     auto &r=task.registers;const U32 paddedRow=attentionAlign64(2*tokens);
     const U32 scorePlane=tokens*paddedRow;
@@ -2556,7 +2593,7 @@ Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
     const U32 planeBytes=tokens*rowBytes;const U32 paddedRow=attentionAlign64(2*tokens);
     const U32 scorePlane=tokens*paddedRow;const U32 remaining=heads-stage;
     Task task;task.header={taskIndex,0,final?0x04000000u:0u,0,
-        heads==6?0x28u:(final?0x00fff860u:0x00fff820u),0,0,0,
+        heads==6?0x28u:(final?kDispatchLimitFinal:kDispatchLimitMiddleH16G),0,0,0,
         final?0x0005000bu:0x00050003u};auto &r=task.registers;
     r[4]=headDimension;r[8]=1;r[12]=tokens;r[0x14]=headDimension;
     r[0x18]=1;r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x20200004;r[0x4c]=0x100000;
@@ -2599,7 +2636,7 @@ Task pvHeadTask(U32 tokens,U32 heads,U32 headDimension,U32 stage,
 Task fusedQKLoadTask(U32 tokens,U32 heads,U32 headDimension) {
     Task task=qkLoadTask(tokens,heads,headDimension);auto &r=task.registers;
     const U32 scorePlane=tokens*attentionAlign64(2*tokens);
-    task.header[4]=heads==6?0x68:0x00fff868;r[0x4508]=0x3e000000;
+    task.header[4]=heads==6?0x68:kDispatchLimitFirst;r[0x4508]=0x3e000000;
     r[0x5108]=heads*scorePlane;
     task.bytes.clear();for(U32 v:task.header)word(task.bytes,v);
     record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x24,0x34,0x3c,0x44,0x4c});
@@ -2615,7 +2652,7 @@ Task fusedQKComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage) {
     Task task=qkComputeTask(tokens,heads,headDimension,stage,false);auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     const U32 halfPaddedPlane=paddedRow*headDimension/2;
-    task.header[4]=heads==6?0x28:0x00fff820;
+    task.header[4]=heads==6?0x28:kDispatchLimitMiddleH16G;
     r[0x4148]=0x44a;r[0x5100]=0x010000f1|(stage<<16);
     r[0x5114]=4*paddedRow;r[0x5138]=0x04302031;
     r[0x5500]=((stage+1)<<16)|0x240;
@@ -2626,7 +2663,7 @@ Task fusedQKComputeTask(U32 tokens,U32 heads,U32 headDimension,U32 stage) {
 }
 
 Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
-    Task task;task.header={index,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};
+    Task task;task.header={index,0,0,0,heads==6?0x28u:kDispatchLimitMiddleH16G,0,0,7,1};
     auto &r=task.registers;const U32 channels=index==3?348:384;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=channels;r[0x14]=tokens;r[0x18]=1;r[0x1c]=channels;
@@ -2654,7 +2691,7 @@ Task fusedSoftmaxTileTask(U32 tokens,U32 heads,U32 index) {
 }
 
 Task fusedSoftmaxMaxTask(U32 tokens,U32 heads) {
-    Task task;task.header={7,0,0,0,heads==6?0x28u:0x00fff820u,0,0,0,0};auto &r=task.registers;
+    Task task;task.header={7,0,0,0,heads==6?0x28u:kDispatchLimitMiddleH16G,0,0,0,0};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
     r[0x34]=heads;r[0x3c]=0x30;r[0x44]=0x34;r[0x48]=16;r[0x4c]=0;
@@ -2675,7 +2712,7 @@ Task fusedSoftmaxMaxTask(U32 tokens,U32 heads) {
 }
 
 Task fusedSoftmaxExpTask(U32 tokens,U32 heads) {
-    Task task;task.header={8,0,0,0,heads==6?0x28u:0x00fff820u,0,0,
+    Task task;task.header={8,0,0,0,heads==6?0x28u:kDispatchLimitMiddleH16G,0,0,
         (1u<<(heads+1))-1,0x00050001};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=heads;r[12]=tokens;r[0x14]=tokens;r[0x18]=heads;r[0x1c]=tokens;
@@ -2703,7 +2740,7 @@ Task fusedSoftmaxExpTask(U32 tokens,U32 heads) {
 }
 
 Task fusedSoftmaxSumTask(U32 tokens,U32 heads) {
-    Task task;task.header={9,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    Task task;task.header={9,0,0,0,heads==6?0x28u:kDispatchLimitMiddleH16G,0,0,7,1};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
     r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=9;r[0x4c]=0;
@@ -2722,7 +2759,7 @@ Task fusedSoftmaxSumTask(U32 tokens,U32 heads) {
 }
 
 Task fusedSoftmaxNormalizeTask(U32 tokens,U32 heads) {
-    Task task;task.header={10,0,0,0,heads==6?0x28u:0x00fff820u,0,0,7,1};auto &r=task.registers;
+    Task task;task.header={10,0,0,0,heads==6?0x28u:kDispatchLimitMiddleH16G,0,0,7,1};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=tokens;r[0x14]=tokens;r[0x18]=1;r[0x1c]=tokens;
     r[0x24]=heads;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=1;r[0x4c]=0;
@@ -2749,7 +2786,7 @@ Task softmaxSetupTask(U32 tokens,U32 heads) {
     // The five-task standalone program keeps the captured serialized schedule
     // for every head count.  The 0x68/0x28 form belongs to softmax inside the
     // much larger fused/full-model schedule; using it here wedges EXECUTE.
-    Task task;task.header={0,0,0x68,0,0x00fff868,0,0,7,1};auto &r=task.registers;
+    Task task;task.header={0,0,0x68,0,kDispatchLimitFirst,0,0,7,1};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
     r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
@@ -2769,7 +2806,7 @@ Task softmaxSetupTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxMaxTask(U32 tokens,U32 heads) {
-    Task task;task.header={1,0,0,0,0x00fff820,0,0,0,0};auto &r=task.registers;
+    Task task;task.header={1,0,0,0,kDispatchLimitMiddleH16G,0,0,0,0};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x34]=tokens;r[0x3c]=0x30;r[0x44]=0x44;r[0x48]=2*heads;r[0x4c]=0;
@@ -2796,7 +2833,7 @@ Task softmaxExpTask(U32 tokens,U32 heads) {
     // one completion per head.  Keeping that literal for H=6 waits for two
     // completions which can never be produced and wedges EXECUTE.
     const U32 dependencyMask=(U32(1)<<(heads+2))-1;
-    Task task;task.header={2,0,0,0,0x00fff820,0,0,
+    Task task;task.header={2,0,0,0,kDispatchLimitMiddleH16G,0,0,
         dependencyMask,0x00050001};auto &r=task.registers;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x30]=0x14000;r[0x34]=tokens;r[0x3c]=0x1c4400;r[0x40]=heads;r[0x4c]=0x100000;
@@ -2821,7 +2858,7 @@ Task softmaxExpTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxSumTask(U32 tokens,U32 heads) {
-    Task task;task.header={3,0,0,0,0x00fff820,0,0,7,1};auto &r=task.registers;
+    Task task;task.header={3,0,0,0,kDispatchLimitMiddleH16G,0,0,7,1};auto &r=task.registers;
     r[4]=tokens;r[8]=1;r[12]=heads;r[0x14]=tokens;r[0x18]=1;r[0x1c]=heads;
     r[0x24]=tokens;r[0x34]=1;r[0x3c]=0x50;r[0x44]=heads+1;r[0x4c]=0;
     r[0x4104]=0x852;r[0x4110]=heads*tokens*16;r[0x4114]=heads*128;
@@ -2839,7 +2876,7 @@ Task softmaxSumTask(U32 tokens,U32 heads) {
 }
 
 Task softmaxNormalizeTask(U32 tokens,U32 heads) {
-    Task task;task.header={4,0,0x04000000,0,0x00fff860,0,0,0,9};auto &r=task.registers;
+    Task task;task.header={4,0,0x04000000,0,kDispatchLimitFinal,0,0,0,9};auto &r=task.registers;
     const U32 paddedRow=attentionAlign64(2*tokens),scorePlane=tokens*paddedRow;
     r[4]=tokens;r[8]=tokens;r[12]=heads;r[0x14]=tokens;r[0x18]=tokens;r[0x1c]=heads;
     r[0x34]=4*heads;r[0x3c]=0x30;r[0x44]=heads+1;r[0x48]=1;r[0x4c]=0;
@@ -2883,7 +2920,7 @@ TransformerAttentionProgram encodeAttentionMatmul(
                                              : qkLoadTask(tokens,heads,headDimension);
     appendAttentionTask(out.program.task,load);
     if(operation==AttentionMatmul::QK){
-        Task compute=qkComputeTask(tokens,heads,headDimension,1,false);
+        Task compute=qkComputeTask(tokens,heads,headDimension,1,false,outputScale);
         Task store=qkComputeTask(tokens,heads,headDimension,2,true,outputScale);
         appendAttentionTask(out.program.task,compute);appendAttentionTask(out.program.task,store);
         out.program.taskCount=3;out.programRecordCount=7;

@@ -107,8 +107,8 @@ TransformerAttentionProgram encodeAttentionLayout(
 
 /// Runtime/runtime attention matrix products. QK consumes [1,H,S,D] and
 /// [1,H,D,S]; QKTransposeY consumes two [1,H,S,D] tensors; PV consumes
-/// [1,H,S,S] and [1,H,S,D]. `outputScale` is folded into QK's final result
-/// word; other operations retain their qualified numerical scale.
+/// [1,H,S,S] and [1,H,S,D]. `outputScale` is folded into both independent
+/// QK head-half result words; other operations retain their qualified scale.
 enum class AttentionMatmul { QK, QKTransposeY, PV };
 std::string attentionMatmulRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,

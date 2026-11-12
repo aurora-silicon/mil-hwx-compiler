@@ -424,6 +424,7 @@ test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/te
 # NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
 test-h16g-attention-reference:
 	python3 tests/test_h16g_attention_refs.py
+	python3 tests/test_h16g_attention_stage_check.py
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
 test-h16g-conv-parity: $(BUILD)/h16_conv_dump

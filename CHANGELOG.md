@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: correct the qualification-only transformer candidates after the
+  round-2 J616s per-stage dump. Both independent QK head-half tasks now fold
+  the graph's fp16 score scale; previously the high half was exactly 64x too
+  large while device-P times V was correct. Standalone layer norm restores
+  the measured normalization task between its reduction prefix and zero-beta
+  output writer; removing that task produced BERT zeros, a Whisper-tiny hang,
+  and an unnormalized Whisper-base result. The task-header dispatch-limit
+  words are named fields. Production qualification gates remain closed.
 - H16G: replace the inaccurate resident fused-attention candidate with a
   three-program DRAM chain: QK folds the graph's fp16 score scale, the
   device-qualified eight-plane S=1500 softmax supplies H=6 zero padding, and
@@ -11,9 +19,9 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   intermediates are zeroed before dispatch so physical padding is
   deterministic. Standalone identity-affine layer norm now omits the
   unproved gamma multiply and connects its measured normalization producer
-  directly to the zero-beta output boundary (4 BERT tasks, 10 Whisper
-  tasks). Both forms remain behind explicit qualification gates; a separate
-  candidate compiler builds the five-case reviewer kit.
+  directly to the zero-beta output boundary (superseded 4-task BERT and
+  10-task Whisper forms). Both forms remain behind explicit qualification
+  gates; a separate candidate compiler builds the five-case reviewer kit.
 - H16G: emit S=1500 last-axis softmax with one to eight heads as the measured
   eight-plane program, with the unused trailing planes as zero padding. The
   H=6 (Whisper-tiny) object is byte-identical to the H=8 one and matches a

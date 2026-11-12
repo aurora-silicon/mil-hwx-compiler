@@ -250,10 +250,10 @@ class ValidationTests(unittest.TestCase):
     def test_layer_norm_zero_beta_uses_kernel_extent(self):
         tasks = [dict(registers={0x450c: 0x37280000},
                       dma=[dict(address=0x4d10)]),
-                 *[dict(registers={}, dma=[]) for _ in range(2)],
+                 *[dict(registers={}, dma=[]) for _ in range(3)],
                  dict(registers={}, dma=[dict(address=0x4d28),
                                          dict(address=0x5108)])]
-        self.assertTrue(layer_norm_program(tasks, 4, 0x10, 20))
+        self.assertTrue(layer_norm_program(tasks, 5, 0x10, 20))
         self.assertEqual(dma_extent(
             dict(address=0x4d28, offset=1536), {4: 768},
             dict(kind='kernel', size=3072), 'layer_norm'), 3072)

@@ -167,32 +167,31 @@ the captured BERT and Whisper encoder programs:
 
 | Shape | Tasks | Measured part | Predicted part |
 | --- | ---: | --- | --- |
-| `[1,128,768]` | 4 | three-task external-input prefix | zero-beta output boundary |
-| `[1,1500,384]` | 10 | nine-task tiled prefix | zero-beta output boundary |
-| `[1,1500,512]` | 10 | nine-task tiled prefix | zero-beta output boundary |
+| `[1,128,768]` | 5 | three-task external-input prefix + normalization | zero-beta output writer |
+| `[1,1500,384]` | 11 | nine-task tiled prefix + normalization | zero-beta output writer |
+| `[1,1500,512]` | 11 | nine-task tiled prefix + normalization | zero-beta output writer |
 
 The long form splits 1500 rows into three 384-row tiles and one 348-row tail.
 It encodes the fp16 value of `1e-5`, promoted to fp32 in the task, and fp32
 `1/d` for the reduction.  Reciprocal square root uses the task's direct
 normalization unit; there is no external reciprocal or rsqrt lookup table.
 Identity gamma is a no-op, so the standalone form does not materialize or
-multiply it. The final boundary adds the packaged zero beta while writing the
-external result. Comparing the failed standalone object with the
-normalization-to-projection and full-encoder forms found that the invented
-gamma multiply, not the measured prefix, was the remaining bad boundary. The
-constructor now connects the normalization producer directly to the final
-zero-beta task and uses the serialized `0x00fff868` / `0x00fff820` /
-`0x00fff860` standalone schedule.
+multiply it. The final writer adds the packaged zero beta while writing the
+external result. The round-2 device dump showed that removing the preceding
+normalization task was not an identity specialization: it produced BERT
+zeros, hung Whisper-tiny, and exposed an unnormalized Whisper-base value. The
+constructor now retains that measured task and then uses the zero-beta writer
+with the serialized first/middle/final dispatch-limit schedule.
 
 Research objects use BAR 6 for the external input, BAR 8 for zero beta
 constant table, and BAR 7 for the external output.  The fail-closed validator
 recognizes the family and checks direction, aperture binding, and computable
-DMA extents. The first BERT build returned all ones, and the next connected-
-tail candidate completed with every output lane zero. The latter result
-isolates the unproved external gamma multiply: retaining only the identity-
-specialized output boundary removes that operation. The four/ten-task
-candidates pass the offline validator, but host structural success is not
-treated as device qualification. The compiler refuses the family with
+DMA extents. The first BERT build returned all ones; the five/eleven-task
+round-1 candidate returned all-zero BERT output; and the four/ten-task
+round-2 candidate again returned zeros after it removed the task that actually
+performs normalization. The restored five/eleven-task candidates pass the
+offline validator, but host structural success is not treated as device
+qualification. The compiler refuses the family with
 `h16g.encode.transformer-layer-norm-hardware-unproved`.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
@@ -253,7 +252,7 @@ work; **facts** = needs new field facts for this geometry.
 
 | Op (count) | Shape | Today | Route now | Status | Proper route |
 | --- | --- | --- | --- | --- | --- |
-| `layer_norm` (2) | `[1,128,768]` last axis | refused with hardware diagnostic | four-task identity boundary candidate | previous candidate all zero; reviewer run pending | fixed boundary |
+| `layer_norm` (2) | `[1,128,768]` last axis | refused with hardware diagnostic | five-task normalize + zero-beta writer candidate | round-2 omitted normalize and returned all zero; reviewer run pending | fixed boundary |
 | `linear` d->d (4) | `[1,128,768] x 768x768` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `linear` d->4d (1) | `768 -> 3072` | native formula | same | compiler; corrected device run pending | done |
 | `linear` 4d->d (1) | `3072 -> 768` | native formula | same | compiler; corrected device run pending | done |
@@ -274,7 +273,7 @@ work; **facts** = needs new field facts for this geometry.
 | conv1d k3 s2 stem (1 per model) | `[1,d,3000] -> [1,d,1500]` | native formula | 1-3 tasks | v4 relL2 `1.4e-3` to `1.7e-3` | done for d=384/512 |
 | `gelu` stem (2 per model) | `[1,d,3000]`, `[1,d,1500]` | fused into each stem convolution | same program; decoded LUT reference | device-qualified with stem rows | done |
 | `transpose` + positional `add` (1 per model) | `[1,d,1500] -> [1,1500,d]` | native transpose then constant-backed 1024-square add | two programs | transpose exact; add relL2 `2.1e-4` | done |
-| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused with hardware diagnostic | ten-task identity boundary candidate | reviewer run pending | fixed boundary |
+| `layer_norm` (2, +1 final) | `[1,1500,d]` | refused with hardware diagnostic | eleven-task normalize + zero-beta writer candidate | round-2 tiny hung/base wrong; reviewer run pending | fixed boundary |
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | native formula | batched QK/PV programs | device-qualified separately | done for h=6/8, d=64 |
 | `softmax` (1) | `[1,h,1500,1500]` | eight-plane program | pad unused heads to eight | H=6 relL2 `5.5e-4` | done for h<=8 |

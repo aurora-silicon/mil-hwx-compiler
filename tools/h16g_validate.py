@@ -387,7 +387,7 @@ def positional_program(tasks: list[dict], task_count: int,
 def layer_norm_program(tasks: list[dict], task_count: int,
                        record_code: int, format_code: int) -> bool:
     """Recognize the standalone BERT/Whisper last-axis normalization family."""
-    if (len(tasks) != task_count or task_count not in (4, 10) or
+    if (len(tasks) != task_count or task_count not in (5, 11) or
             record_code != 0x10 or format_code != 20):
         return False
     first_addresses = {dma['address'] for dma in tasks[0]['dma']}
