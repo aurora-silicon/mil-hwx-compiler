@@ -3227,13 +3227,47 @@ static BOOL writeH13ResidualNetwork(
         boundaryValues[key] = blockValues[index];
     }
     ANEGraphValue *poolValue = boundaryValues[@"pool"];
+    ANEGraphValue *projectionValue = nil;
     for (const auto &candidate : numeric) {
         if (candidate.operation.operands[@"x"].value == poolValue &&
             candidate.plan.shape.output.channels !=
                 candidate.plan.shape.input.channels) {
-            boundaryValues[@"projection01"] = candidate.operation.results[0];
+            projectionValue = candidate.operation.results[0];
+            boundaryValues[@"projection01"] = projectionValue;
             break;
         }
+    }
+    const auto fusedReluValue = [&](ANEGraphValue *value) {
+        for (ANEGraphOperation *consumer in operations)
+            if ([consumer.operationName isEqualToString:@"relu"] &&
+                consumer.operands[@"x"].value == value)
+                return consumer.results[0];
+        return value;
+    };
+    ANEGraphValue *main1 = nil;
+    for (const auto &candidate : numeric) {
+        if (candidate.operation.operands[@"x"].value == poolValue &&
+            candidate.operation.results[0] != projectionValue) {
+            main1 = fusedReluValue(candidate.operation.results[0]);
+            break;
+        }
+    }
+    const auto convolutionFrom = [&](ANEGraphValue *value) {
+        for (const auto &candidate : numeric)
+            if (candidate.operation.operands[@"x"].value == value)
+                return candidate.operation.results[0];
+        return static_cast<ANEGraphValue *>(nil);
+    };
+    ANEGraphValue *main2Raw = main1 ? convolutionFrom(main1) : nil;
+    ANEGraphValue *main2 = main2Raw ? fusedReluValue(main2Raw) : nil;
+    ANEGraphValue *main3 = main2 ? convolutionFrom(main2) : nil;
+    if (main1 && main2 && main3 && projectionValue && blockValues.count) {
+        boundaryValues[@"block01-conv1-only"] = main1;
+        boundaryValues[@"block01-conv1-conv2"] = main2;
+        boundaryValues[@"block01-conv1-conv2-conv3"] = main3;
+        boundaryValues[@"block01-main3"] = main3;
+        boundaryValues[@"block01-projection-only"] = projectionValue;
+        boundaryValues[@"block01-add-only"] = blockValues[0];
     }
     boundaryValues[@"logits"] = linear.results[0];
     if (!boundaryValues[@"pool"] || !boundaryValues[@"mean"] ||
@@ -3246,11 +3280,13 @@ static BOOL writeH13ResidualNetwork(
         if ([terminateAfter isEqualToString:@"pool-via-dram"] ||
             [terminateAfter isEqualToString:
                 @"stage-4-first-block-standalone"] ||
+            [terminateAfter hasPrefix:@"block01-"] ||
             [terminateAfter hasPrefix:@"pool-sweep-"])
             terminateKey = terminateAfter;
         else
             for (NSString *key in boundaryValues)
-                if ([boundaryValues[key].name isEqualToString:terminateAfter]) {
+                if (![key hasPrefix:@"block01-"] &&
+                    [boundaryValues[key].name isEqualToString:terminateAfter]) {
                     terminateKey = key;
                     break;
                 }
@@ -3278,10 +3314,20 @@ static BOOL writeH13ResidualNetwork(
         : [NSData dataWithBytes:anec.data() length:anec.size()];
     if (!payload) return NO;
 
-    ANEGraphValue *input = program.inputBoundary.empty()
-        ? function.inputs[0]
-        : boundaryValues[[NSString stringWithUTF8String:
-              program.inputBoundary.c_str()]];
+    NSMutableArray<ANEGraphValue *> *selectedInputs = [NSMutableArray array];
+    if (!program.inputBoundaries.empty()) {
+        for (const auto &boundary : program.inputBoundaries) {
+            ANEGraphValue *value = boundaryValues[
+                [NSString stringWithUTF8String:boundary.c_str()]];
+            if (value) [selectedInputs addObject:value];
+        }
+    } else {
+        ANEGraphValue *input = program.inputBoundary.empty()
+            ? function.inputs[0]
+            : boundaryValues[[NSString stringWithUTF8String:
+                  program.inputBoundary.c_str()]];
+        if (input) [selectedInputs addObject:input];
+    }
     NSString *outputKey = [NSString stringWithUTF8String:
         program.outputBoundary.c_str()];
     const BOOL standaloneSmallSpatialBlock =
@@ -3294,13 +3340,16 @@ static BOOL writeH13ResidualNetwork(
         [outputKey isEqualToString:@"pool-via-dram"] ||
         [outputKey hasPrefix:@"pool-sweep-"]
         ? boundaryValues[@"pool"] : boundaryValues[selectedOutputKey];
-    if (!input || !selectedOutput ||
+    if (selectedInputs.count != program.inputs.size() || !selectedOutput ||
         program.taskRecords.size() != program.taskCount)
         return reject(diagnostics,
             @"H13 residual encoder boundary metadata disagrees with its task stream",
             nil, @"h13.residual-boundary");
-    NSMutableDictionary *inputRecord =
-        [binding(input, input.type.shape, program.inputs[0]) mutableCopy];
+    NSMutableArray<NSMutableDictionary *> *inputRecords =
+        [NSMutableArray arrayWithCapacity:selectedInputs.count];
+    for (NSUInteger index = 0; index != selectedInputs.count; ++index)
+        [inputRecords addObject:[binding(selectedInputs[index],
+            selectedInputs[index].type.shape, program.inputs[index]) mutableCopy]];
     NSMutableDictionary *outputRecord =
         [binding(selectedOutput, selectedOutput.type.shape,
                  program.output) mutableCopy];
@@ -3309,7 +3358,7 @@ static BOOL writeH13ResidualNetwork(
         @"file": file, @"bytes": @(payload.length),
         @"taskDescriptors": @(program.taskCount),
         @"encoder": @"h13-residual-linked-ring",
-        @"operation": @"residual-network", @"inputs": @[inputRecord],
+        @"operation": @"residual-network", @"inputs": inputRecords,
         @"constantInputs": @{}, @"outputs": @[outputRecord],
         @"constantOffset": @(program.constantOffsetBytes),
         @"constantBytes": @(program.constants.size()),
@@ -3328,6 +3377,21 @@ static BOOL writeH13ResidualNetwork(
             @"outputShape": @[@1, @(record.output.channels),
                                @(record.output.height),
                                @(record.output.width)]} mutableCopy];
+        const auto access = [](const ane::h13::Program::TaskAccess &value) {
+            return @{@"storage": [NSString stringWithUTF8String:
+                        value.storage.c_str()],
+                     @"surfaceBase": @(value.surfaceBase),
+                     @"surfaceBytes": @(value.surfaceBytes),
+                     @"l2Base": @(value.l2Base),
+                     @"l2Bytes": @(value.l2Bytes)};
+        };
+        NSMutableArray *reads = [NSMutableArray arrayWithObject:
+            access(record.source)];
+        if (record.hasSecond) [reads addObject:access(record.second)];
+        item[@"reads"] = reads;
+        item[@"writes"] = @[access(record.result)];
+        item[@"dependency"] = [NSString stringWithUTF8String:
+            record.dependency.c_str()];
         if (!record.boundary.empty()) {
             NSString *key = [NSString stringWithUTF8String:
                 record.boundary.c_str()];
@@ -3343,13 +3407,18 @@ static BOOL writeH13ResidualNetwork(
         }
         [taskRecords addObject:item];
     }
-    NSUInteger inputElements = 0, outputElements = 0;
-    tensorElementCount(input, &inputElements);
+    NSUInteger outputElements = 0;
     tensorElementCount(selectedOutput, &outputElements);
-    NSDictionary *inputTensor = @{ @"shape": input.type.shape,
-        @"logicalBytes": @(2 * inputElements), @"role": @"input" };
     NSDictionary *outputTensor = @{ @"shape": selectedOutput.type.shape,
         @"logicalBytes": @(2 * outputElements), @"role": @"output" };
+    NSMutableDictionary *tensorRecords = [NSMutableDictionary dictionary];
+    for (ANEGraphValue *input in selectedInputs) {
+        NSUInteger inputElements = 0;
+        tensorElementCount(input, &inputElements);
+        tensorRecords[input.name] = @{@"shape": input.type.shape,
+            @"logicalBytes": @(2 * inputElements), @"role": @"input"};
+    }
+    tensorRecords[selectedOutput.name] = outputTensor;
     NSDictionary *manifest = @{
         @"schema": @"mil-hwxc.h13-anec-package.v2", @"target": @"H13",
         @"artifactFormat": format, @"schedule": @"linked-ring",
@@ -3357,15 +3426,14 @@ static BOOL writeH13ResidualNetwork(
         @"taskDescriptors": @(program.taskCount), @"tasks": taskRecords,
         @"boundaries": boundaries, @"terminatedAfter": selectedOutput.name,
         @"encoder": @"h13-residual-linked-ring",
-        @"inputs": @[inputRecord], @"outputs": @[outputRecord],
+        @"inputs": inputRecords, @"outputs": @[outputRecord],
         @"constantBytes": @(program.constants.size()),
         @"constantOffset": @(program.constantOffsetBytes),
         @"scratchBytes": @(program.scratchAllocationBytes),
         @"scratch": @{@"bytes": @(program.scratchAllocationBytes),
                        @"channel": @3, @"regions": @{}},
         @"intermediates": @[],
-        @"tensors": @{input.name: inputTensor,
-                       selectedOutput.name: outputTensor},
+        @"tensors": tensorRecords,
         @"physicalOutputs": @[@{@"tensor": selectedOutput.name,
             @"dtype": @"float16", @"shape": selectedOutput.type.shape,
             @"logicalBytes": @(2 * outputElements)}],

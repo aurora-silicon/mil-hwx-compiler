@@ -142,25 +142,36 @@ def evaluate_boundaries(model: Path, x: np.ndarray) -> dict[str, np.ndarray]:
          [[28,29,30],[31,32,33],[34,35,36],[37,38,39],[40,41,42]]),
         ([43, 44, 45], 46, [[47,48,49],[50,51,52]]),
     ]
+    block_index = 0
     for stage_index, (first, projection, rest) in enumerate(stages):
         stride = 1 if stage_index == 0 else 2
         shortcut = conv(projection, y, stride)
         if stage_index == 0:
             result['projection01'] = shortcut.copy()
+            result['block01-projection-only'] = shortcut.copy()
         z = np.maximum(conv(first[0], y), 0)
+        if stage_index == 0:
+            result['block01-conv1-only'] = z.copy()
         z = np.maximum(conv(first[1], z, stride), 0)
+        if stage_index == 0:
+            result['block01-conv1-conv2'] = z.copy()
         z = conv(first[2], z)
+        if stage_index == 0:
+            result['block01-conv1-conv2-conv3'] = z.copy()
+            result['block01-main3'] = z.copy()
         y = np.maximum(z + shortcut, 0)
-        block = sum(key.startswith('block') for key in result) + 1
-        result[f'block{block:02d}'] = y.copy()
+        block_index += 1
+        result[f'block{block_index:02d}'] = y.copy()
+        if stage_index == 0:
+            result['block01-add-only'] = y.copy()
         for block in rest:
             shortcut = y
             z = np.maximum(conv(block[0], y), 0)
             z = np.maximum(conv(block[1], z), 0)
             z = conv(block[2], z)
             y = np.maximum(z + shortcut, 0)
-            block = sum(key.startswith('block') for key in result) + 1
-            result[f'block{block:02d}'] = y.copy()
+            block_index += 1
+            result[f'block{block_index:02d}'] = y.copy()
     mean = y.mean(axis=(1, 2), dtype=np.float64)
     logits = c['linear_0_weight_0'] @ mean + c['linear_0_bias_0']
     result['mean'] = mean

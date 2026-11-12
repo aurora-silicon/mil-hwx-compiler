@@ -55,6 +55,20 @@ POOL_SWEEPS = [
      'Width 28 with one 32-column piece and the 128-byte destination row.'),
 ]
 
+BLOCK_SUBRUNGS = [
+    ('block01-conv1-only', 'block01-conv1-only', ['pool'],
+     'Standalone first bottleneck 1x1 conv with the CPU pool reference as input.'),
+    ('block01-conv1-conv2', 'block01-conv1-conv2', ['pool'],
+     'Standalone conv1+conv2 chain; this isolates the first scratch producer/consumer handoff.'),
+    ('block01-conv1-conv2-conv3', 'block01-conv1-conv2-conv3', ['pool'],
+     'Standalone three-convolution main branch with the CPU pool reference as input.'),
+    ('block01-projection-only', 'block01-projection-only', ['pool'],
+     'Standalone projection branch with the CPU pool reference as input.'),
+    ('block01-add-only', 'block01-add-only',
+     ['block01-main3', 'projection01'],
+     'Standalone fused residual add+ReLU with CPU main3 and projection inputs.'),
+]
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -80,7 +94,11 @@ def main():
     expected = ['stem', 'pool', 'projection01'] + \
         [f'block{index:02d}' for index in range(1, 17)] + \
         ['mean', 'logits']
-    if list(references) != expected or set(boundaries) != set(expected):
+    sub_reference_keys = [key for _, key, _, _ in BLOCK_SUBRUNGS] + \
+        ['block01-main3']
+    if ([key for key in references if key in expected] != expected or
+            not set(sub_reference_keys).issubset(references) or
+            set(boundaries) != set(expected)):
         raise RuntimeError('compiler manifest and reference boundary keys differ')
 
     specifications = [('stem', 'stem', False),
@@ -92,7 +110,8 @@ def main():
     specifications += [('reduce_mean', 'mean', False),
                        ('full', 'logits', False)]
 
-    def kit_entry(name, key, manifest, section=None, description=None):
+    def kit_entry(name, key, manifest, section=None, description=None,
+                  input_files=None):
         logical = manifest['logicalResults'][0]
         item = {
             'name': name,
@@ -110,17 +129,28 @@ def main():
             item['sweep'] = section
         if description:
             item['description'] = description
+        if input_files:
+            item.pop('input')
+            item['inputs'] = input_files
         return item
 
     def materialize(name, key, manifest, section=None, description=None,
-                    input_value=None):
+                    input_value=None, input_values=None):
         directory = args.output / name
-        if input_value is None:
+        input_files = None
+        if input_values is not None:
+            input_files = []
+            for index, value in enumerate(input_values):
+                filename = f'input-{index}.npy'
+                np.save(directory / filename, value)
+                input_files.append(f'{name}/{filename}')
+        elif input_value is None:
             shutil.copy2(input_path, directory / 'input.npy')
         else:
             np.save(directory / 'input.npy', input_value)
         np.savez(directory / 'reference.npz', **{key: references[key]})
-        return kit_entry(name, key, manifest, section, description)
+        return kit_entry(name, key, manifest, section, description,
+                         input_files)
 
     rungs = []
     for name, key, pool_via_dram in specifications:
@@ -165,6 +195,23 @@ def main():
         'Thirteen-task 1024x14x14 to 2048x7x7 block with the block13 reference as its external input.',
         input_value=references['block13']))
 
+    sub_rungs = []
+    for name, key, input_keys, description in BLOCK_SUBRUNGS:
+        directory = args.output / name
+        directory.mkdir()
+        sub_manifest, _ = compile_package(
+            args, directory / 'package', name)
+        entry = materialize(
+            name, key, sub_manifest, description=description,
+            input_values=[references[input_key]
+                          for input_key in input_keys])
+        entry['repeatability'] = {
+            'coldRuns': 3,
+            'comparison': 'uint16-bit-identical',
+            'judge': 'verify_cold.py',
+        }
+        sub_rungs.append(entry)
+
     sweep = []
     for field, boundary, description in POOL_SWEEPS:
         name = f'pool-sweep-{field}'
@@ -183,13 +230,16 @@ def main():
         'rungs': rungs,
         'next_stall': next_stall,
         'diagnostics': diagnostics,
+        'subRungs': sub_rungs,
         'sweep': sweep,
         'qualificationOrder': [item['name'] for item in rungs],
         'sweepOrder': [item['name'] for item in sweep],
+        'subRungOrder': [item['name'] for item in sub_rungs],
         'libaneBindOverrunProgramsChecked':
-            len(rungs) + len(diagnostics) + len(sweep) + 1,
+            len(rungs) + len(diagnostics) + len(sub_rungs) + len(sweep) + 1,
         'reference': 'float64 TensorFlow SAME; one plain array per rung npz',
     }
+    shutil.copy2(HERE / 'verify_cold.py', args.output / 'verify_cold.py')
     (args.output / 'kit.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(args.output)
 

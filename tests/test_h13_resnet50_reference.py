@@ -43,6 +43,17 @@ def main():
         boundaries = module.evaluate_boundaries(Path(model), sample)
         assert logits.shape == (1000,)
         assert boundaries['stem'].shape == (64, 112, 112)
+        assert boundaries['block01-conv1-only'].shape == (64, 56, 56)
+        assert boundaries['block01-conv1-conv2'].shape == (64, 56, 56)
+        assert boundaries['block01-conv1-conv2-conv3'].shape == \
+            (256, 56, 56)
+        assert boundaries['block01-projection-only'].shape == \
+            (256, 56, 56)
+        assert module.np.array_equal(
+            boundaries['block01-add-only'], boundaries['block01'])
+        assert module.np.array_equal(
+            boundaries['block01-main3'],
+            boundaries['block01-conv1-conv2-conv3'])
         assert prefixes[1].shape == (256, 56, 56)
         assert prefixes[4].shape == (512, 28, 28)
         assert prefixes[8].shape == (1024, 14, 14)

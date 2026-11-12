@@ -129,6 +129,14 @@ coefficient-DMA configs, and the named disabled bias/post-scale/palette policy
 groups.  No path enable is set and no coefficient range is supplied; the
 records preserve required descriptor structure rather than enabling kernels.
 
+Round 14 audits the first block's complete access graph in
+`h13-resnet50-round14.md`. Scratch consumers now use the decoded
+TSE+TSR/DependencyMode-7 handoff on their first slice and the mode-3 reread
+form on later slices. Per-task L2 staging allocations are cumulative, so a
+scratch source, result, and second source cannot reuse the same staging tile.
+The package manifest exposes each task's surface and L2 ranges for the offline
+audit tool.
+
 The dependency-free numeric reference explicitly executes TensorFlow-SAME
 max-pool with the odd padding cell after the surface. Its asymmetric test case
 would produce a different first window under torchvision-style symmetric

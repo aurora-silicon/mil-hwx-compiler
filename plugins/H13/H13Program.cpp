@@ -4900,11 +4900,18 @@ constexpr std::uint32_t residualL2ScratchResultConfig() {
     return 2u | (1u << 3) | (4u << 4) | (8u << 8);
 }
 
-constexpr std::uint32_t residualSourceDMAConfig(bool external) {
-    // TileDMA source Cfg: enable, cache hints, and dependency class 3 or 5.
-    return 1u | ((external ? 8u : 0u) << 4) |
-           ((external ? 8u : 9u) << 8) |
-           (3u << 12) | ((external ? 3u : 5u) << 16);
+constexpr std::uint32_t residualSourceDMAConfig(bool external,
+                                                bool producerHandoff = false) {
+    // TileDMA source Cfg: program inputs use DependencyMode 3 and the input
+    // cache policy.  A first scratch read after a TSE+TSR producer must use
+    // DependencyMode 7 and the decoded scratch cache policy (0x7bb81); later
+    // slices reread the now-complete region with mode 3 (0x3bb81).  Using the
+    // previously guessed mode 5 let a cold consumer race its output-DMA
+    // producer, which made the first residual block non-repeatable.
+    if (external)
+        return 1u | (8u << 4) | (8u << 8) | (3u << 12) | (3u << 16);
+    return 1u | (8u << 4) | (11u << 8) | (11u << 12) |
+           ((producerHandoff ? 7u : 3u) << 16);
 }
 
 constexpr std::uint32_t residualSourceFormat(bool external) {
@@ -5392,6 +5399,9 @@ struct ResidualRoute {
     std::uint32_t sourceStage = 0;
     std::uint32_t resultStage = 0;
     std::uint32_t secondStage = 0;
+    std::uint32_t sourceStageBytes = 0;
+    std::uint32_t resultStageBytes = 0;
+    std::uint32_t secondStageBytes = 0;
 };
 
 struct PlannedResidualTask {
@@ -5453,15 +5463,22 @@ ResidualValue allocateResidualValue(ElementwiseShape shape,
 
 std::uint32_t allocateResidualStage(ResidualRingAllocator &ring,
                                     const ResidualValue &value,
-                                    const std::vector<ResidualRange> &live) {
-    if (value.storage == ResidualStorage::Ring) return value.base;
+                                    const std::vector<ResidualRange> &live,
+                                    std::uint32_t *allocatedBytes) {
+    if (value.storage == ResidualStorage::Ring) {
+        *allocatedBytes = value.layout.bytes;
+        return value.base;
+    }
     // Tile DMA stages at most one quarter-ring at a time.  The task's tensor
     // geometry determines the smaller bound.
     auto bytes = std::min<std::uint32_t>(
         value.layout.bytes, static_cast<std::uint32_t>(kL2Bytes / 4));
     std::uint32_t base = 0;
     while (bytes >= 16) {
-        if (ring.allocate(bytes, live, &base)) return base;
+        if (ring.allocate(bytes, live, &base)) {
+            *allocatedBytes = bytes;
+            return base;
+        }
         bytes = static_cast<std::uint32_t>(align16(bytes / 2));
     }
     std::uint64_t occupied = 0;
@@ -5521,7 +5538,8 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
                              std::size_t at, std::size_t bytes,
                              const ResidualValue &value,
                              std::uint32_t stage,
-                             bool initialAlias) {
+                             bool initialAlias,
+                             bool producerHandoff) {
     if (value.storage == ResidualStorage::Ring) {
         residualL2Source(stream, at, bytes,
                          initialAlias ? l2InitialAliasSourceConfig()
@@ -5566,7 +5584,7 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
         ? plane * value.shape.channels
         : plane * ((value.shape.channels + 7) / 8);
     residualTileSource(stream, at, bytes,
-        residualSourceDMAConfig(external), value.scratchOffset,
+        residualSourceDMAConfig(external, producerHandoff), value.scratchOffset,
         row, plane, depth, residualSourceFormat(external));
 }
 
@@ -5618,23 +5636,35 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
                              std::size_t at, std::size_t bytes,
                              const ResidualValue &value,
                              std::uint32_t stage) {
+    auto l2 = value.layout.words;
+    if (value.storage == ResidualStorage::External) {
+        l2.channel = static_cast<std::uint32_t>(
+            align16(2ull * value.shape.width));
+        l2.row = l2.channel * value.shape.channels;
+        l2.depth = l2.row;
+        l2.group = l2.row;
+    }
     residualL2Second(stream, at, bytes,
                      value.storage == ResidualStorage::Ring ? value.base : stage,
-                     value.layout.words);
+                     l2);
     if (value.storage == ResidualStorage::Ring) return;
-    const std::uint32_t row = static_cast<std::uint32_t>(
-        align16(16ull * value.shape.width));
+    const bool external = value.storage == ResidualStorage::External;
+    const std::uint32_t row = static_cast<std::uint32_t>(align16(
+        (external ? 2ull : 16ull) * value.shape.width));
     const std::uint32_t plane = row * value.shape.height;
-    const std::uint32_t depth = plane * ((value.shape.channels + 7) / 8);
+    const std::uint32_t depth = plane * (external
+        ? value.shape.channels : (value.shape.channels + 7) / 8);
     putRegister(stream, at, bytes, 0x13804,
-                residualSecondSourceDMAConfig());
+                external ? residualSourceDMAConfig(true)
+                         : residualSecondSourceDMAConfig());
     putRegister(stream, at, bytes, 0x1381c, value.scratchOffset);
     putRegister(stream, at, bytes, 0x13820, row);
     putRegister(stream, at, bytes, 0x13824, plane);
     putRegister(stream, at, bytes, 0x13828, depth);
     putRegister(stream, at, bytes, 0x1382c, depth);
     putRegister(stream, at, bytes, 0x13838,
-                residualSecondSourceFormat());
+                external ? residualSourceFormat(true)
+                         : residualSecondSourceFormat());
     putRegister(stream, at, bytes, 0x1383c,
                 residualSecondSourceExtension());
 }
@@ -5647,9 +5677,12 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
         planned.route.result.storage == ResidualStorage::Ring;
     const bool initialAliasConsumer = task.role == ResidualRole::Pool &&
         planned.route.source.storage == ResidualStorage::Ring;
+    const bool scratchProducerHandoff =
+        planned.route.source.storage == ResidualStorage::Scratch &&
+        task.slice == 0;
     configureResidualSource(program.task, at, bytes, planned.route.source,
                             planned.route.sourceStage,
-                            initialAliasConsumer);
+                            initialAliasConsumer, scratchProducerHandoff);
     configureResidualResult(program.task, at, bytes, planned.route.result,
                             planned.route.resultStage, task.firstOutput,
                             initialAliasProducer);
@@ -5679,8 +5712,11 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
     else if (initialAliasConsumer)
         selectors |= 3u | 1u << 5;
     if (planned.route.hasSecond && planned.route.second.storage !=
-            ResidualStorage::Ring)
-        selectors |= 3u << 6; // scratch second-source channel
+            ResidualStorage::Ring) {
+        const auto secondChannel = planned.route.second.storage ==
+                ResidualStorage::External ? 6u : 3u;
+        selectors |= (secondChannel | 1u << 5) << 6;
+    }
     const auto resultChannel = planned.route.result.storage ==
             ResidualStorage::External ? 4u : 3u;
     if (planned.route.result.storage != ResidualStorage::Ring)
@@ -5752,14 +5788,25 @@ Program encodeResidualNetwork(
         if (route.result.storage == ResidualStorage::Ring)
             occupied.push_back(ringRange(route.result));
         route.sourceStage = allocateResidualStage(ring, route.source,
-                                                  occupied);
+                                                  occupied,
+                                                  &route.sourceStageBytes);
+        if (route.source.storage != ResidualStorage::Ring)
+            occupied.push_back({route.sourceStage, route.sourceStageBytes});
         if (route.result.storage != ResidualStorage::Ring)
             route.resultStage = allocateResidualStage(ring, route.result,
-                                                       occupied);
+                                                       occupied,
+                                                       &route.resultStageBytes);
+        else
+            route.resultStageBytes = route.result.layout.bytes;
+        if (route.result.storage != ResidualStorage::Ring)
+            occupied.push_back({route.resultStage, route.resultStageBytes});
         if (route.hasSecond &&
             route.second.storage != ResidualStorage::Ring)
             route.secondStage = allocateResidualStage(ring, route.second,
-                                                       occupied);
+                                                       occupied,
+                                                       &route.secondStageBytes);
+        else if (route.hasSecond)
+            route.secondStageBytes = route.second.layout.bytes;
     };
 
     auto emitConv = [&](std::size_t index, ResidualRole role,
@@ -5972,12 +6019,95 @@ Program encodeResidualNetwork(
         throw std::logic_error(
             "h13.residual-fields: topology task count changed while encoding");
 
-    ElementwiseShape programInputShape = convolutions.front().shape.input;
+    struct ResidualProgramInput {
+        ResidualValue value;
+        std::uint32_t channel;
+        std::string boundary;
+    };
+    std::vector<ResidualProgramInput> programInputs;
+    programInputs.push_back({externalInput, 5, {}});
     ElementwiseShape boundaryShape{};
     std::uint32_t boundaryExternalRow = 0;
     std::uint32_t boundaryExternalPlane = 0;
     bool boundaryOutput = false;
-    if (!terminateAfter.empty() && terminateAfter != "logits") {
+    const bool firstBlockSubRung =
+        terminateAfter == "block01-conv1-only" ||
+        terminateAfter == "block01-conv1-conv2" ||
+        terminateAfter == "block01-conv1-conv2-conv3" ||
+        terminateAfter == "block01-projection-only" ||
+        terminateAfter == "block01-add-only";
+    if (firstBlockSubRung) {
+        const auto roleRange = [&](const std::string &role) {
+            std::size_t first = kNoConvolution, last = kNoConvolution;
+            for (std::size_t index = 0; index != planned.size(); ++index) {
+                if (planned[index].layer != "block01" ||
+                    planned[index].role != role)
+                    continue;
+                if (first == kNoConvolution) first = index;
+                last = index;
+            }
+            if (first == kNoConvolution)
+                throw std::logic_error(
+                    "h13.residual-boundary: first block role is absent");
+            return std::pair<std::size_t, std::size_t>{first, last};
+        };
+        std::size_t first = 0, last = 0;
+        if (terminateAfter == "block01-projection-only") {
+            std::tie(first, last) = roleRange("projection");
+        } else if (terminateAfter == "block01-add-only") {
+            std::tie(first, last) = roleRange("add+relu");
+        } else {
+            std::tie(first, last) = roleRange("main1");
+            if (terminateAfter != "block01-conv1-only")
+                last = roleRange("main2").second;
+            if (terminateAfter == "block01-conv1-conv2-conv3")
+                last = roleRange("main3").second;
+        }
+
+        if (terminateAfter == "block01-add-only") {
+            auto &add = planned[first];
+            add.route.source.storage = ResidualStorage::External;
+            add.route.source.scratchOffset = 0;
+            add.route.second.storage = ResidualStorage::External;
+            add.route.second.scratchOffset = 0;
+            add.route.secondStage = add.route.second.base;
+            add.route.secondStageBytes = add.route.second.layout.bytes;
+            programInputs = {{add.route.source, 5, "block01-main3"},
+                             {add.route.second, 6, "projection01"}};
+        } else {
+            const auto original = planned[first].route.source;
+            for (std::size_t index = first; index <= last; ++index) {
+                auto &source = planned[index].route.source;
+                if (source.storage == original.storage &&
+                    source.base == original.base &&
+                    sameResidualTensor(source.shape, original.shape)) {
+                    source.storage = ResidualStorage::External;
+                    source.scratchOffset = 0;
+                }
+            }
+            programInputs = {{planned[first].route.source, 5, "pool"}};
+        }
+
+        auto &terminal = planned[last];
+        boundaryShape = terminal.route.result.shape;
+        ResidualValue external = terminal.route.result;
+        if (external.storage == ResidualStorage::Ring) {
+            terminal.route.resultStage = external.base;
+            terminal.route.resultStageBytes = external.layout.bytes;
+        }
+        external.storage = ResidualStorage::External;
+        external.scratchOffset = 0;
+        external.externalRow = static_cast<std::uint32_t>(
+            alignUp(2ull * boundaryShape.width, 64));
+        external.externalPlane = external.externalRow * boundaryShape.height;
+        external.externalDepth = external.externalPlane * boundaryShape.channels;
+        terminal.route.result = external;
+        planned.erase(planned.begin() + last + 1, planned.end());
+        planned.erase(planned.begin(), planned.begin() + first);
+        boundaryExternalRow = external.externalRow;
+        boundaryExternalPlane = external.externalPlane;
+        boundaryOutput = true;
+    } else if (!terminateAfter.empty() && terminateAfter != "logits") {
         if (standaloneSmallSpatialBlock &&
             (standaloneFirst == kNoConvolution ||
              standaloneLast == kNoConvolution))
@@ -5995,8 +6125,10 @@ Program encodeResidualNetwork(
                 "h13.residual-boundary: unknown boundary " + terminateAfter);
         boundaryShape = target->route.result.shape;
         ResidualValue external = target->route.result;
-        if (external.storage == ResidualStorage::Ring)
+        if (external.storage == ResidualStorage::Ring) {
             target->route.resultStage = external.base;
+            target->route.resultStageBytes = external.layout.bytes;
+        }
         external.storage = ResidualStorage::External;
         external.scratchOffset = 0;
         external.externalRow = poolSweep == ResidualPoolSweep::Row256
@@ -6024,7 +6156,7 @@ Program encodeResidualNetwork(
                                        standaloneInput.shape))
                     entry.route.source = externalSource;
             }
-            programInputShape = standaloneInput.shape;
+            programInputs = {{externalSource, 5, standaloneInputBoundary}};
             planned.erase(planned.begin(),
                           planned.begin() + standaloneFirst);
         }
@@ -6038,10 +6170,64 @@ Program encodeResidualNetwork(
     program.outputBoundary = boundaryOutput ? terminateAfter : "logits";
     program.inputBoundary = standaloneSmallSpatialBlock
         ? standaloneInputBoundary : std::string();
-    for (const auto &entry : planned)
-        program.taskRecords.push_back({entry.layer, entry.role,
-                                       entry.boundary,
-                                       entry.task.shape.output});
+    for (const auto &input : programInputs)
+        if (!input.boundary.empty())
+            program.inputBoundaries.push_back(input.boundary);
+    const auto accessRecord = [](const ResidualValue &value,
+                                 std::uint32_t stage,
+                                 std::uint32_t stageBytes) {
+        Program::TaskAccess access;
+        if (value.storage == ResidualStorage::Ring) {
+            access.storage = "l2";
+            access.surfaceBase = value.base;
+            access.surfaceBytes = value.layout.bytes;
+            access.l2Base = value.base;
+            access.l2Bytes = value.layout.bytes;
+            return access;
+        }
+        access.storage = value.storage == ResidualStorage::Scratch
+            ? "scratch" : "external";
+        access.surfaceBase = value.scratchOffset;
+        if (value.storage == ResidualStorage::Scratch) {
+            access.surfaceBytes = residualScratchBytes(value.shape);
+        } else if (value.externalDepth) {
+            access.surfaceBytes = value.externalDepth;
+        } else {
+            const auto row = align16(2ull * value.shape.width);
+            access.surfaceBytes = row * value.shape.height *
+                                  value.shape.channels;
+        }
+        access.l2Base = stage;
+        access.l2Bytes = stageBytes;
+        return access;
+    };
+    for (const auto &entry : planned) {
+        Program::TaskRecord record;
+        record.layer = entry.layer;
+        record.role = entry.role;
+        record.boundary = entry.boundary;
+        record.output = entry.task.shape.output;
+        record.source = accessRecord(entry.route.source,
+                                     entry.route.sourceStage,
+                                     entry.route.sourceStageBytes);
+        record.result = accessRecord(entry.route.result,
+                                     entry.route.resultStage,
+                                     entry.route.resultStageBytes);
+        record.hasSecond = entry.route.hasSecond;
+        if (record.hasSecond)
+            record.second = accessRecord(entry.route.second,
+                                         entry.route.secondStage,
+                                         entry.route.secondStageBytes);
+        if (entry.route.source.storage == ResidualStorage::Ring)
+            record.dependency = entry.task.role == ResidualRole::Pool
+                ? "initial-alias" : "l2-dependent";
+        else if (entry.route.source.storage == ResidualStorage::Scratch)
+            record.dependency = entry.task.slice == 0
+                ? "tile-dma-mode-7" : "tile-dma-mode-3-reread";
+        else
+            record.dependency = "program-input-mode-3";
+        program.taskRecords.push_back(std::move(record));
+    }
     std::vector<std::size_t> offsets(planned.size());
     for (std::size_t index = 0; index != planned.size(); ++index) {
         std::size_t at = static_cast<std::size_t>(
@@ -6114,12 +6300,16 @@ Program encodeResidualNetwork(
     program.taskCount = static_cast<std::uint32_t>(planned.size());
     program.firstTaskBytes = planned.front().task.encoded.firstTaskBytes;
     program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
-    const auto input = programInputShape;
-    const std::uint64_t inputRow = align16(2ull * input.width);
-    const std::uint64_t inputPlane = inputRow * input.height;
-    program.inputs = {{5, {1, input.channels, input.height, input.width,
-                           inputPlane, inputRow},
-                       alignUp(inputPlane * input.channels, 0x4000)}};
+    for (const auto &programInput : programInputs) {
+        const auto input = programInput.value.shape;
+        const std::uint64_t inputRow = align16(2ull * input.width);
+        const std::uint64_t inputPlane = inputRow * input.height;
+        program.inputs.push_back(
+            {programInput.channel,
+             {1, input.channels, input.height, input.width,
+              inputPlane, inputRow},
+             alignUp(inputPlane * input.channels, 0x4000)});
+    }
     if (boundaryOutput) {
         const std::uint64_t outputRow = boundaryExternalRow;
         const std::uint64_t outputPlane = boundaryExternalPlane;

@@ -135,15 +135,31 @@ struct Program {
     /// stable compiler key (stem, pool, projection01, block01..., mean,
     /// logits) on tasks whose
     /// result may be made external by the residual boundary option.
+    struct TaskAccess {
+        std::string storage;
+        std::uint64_t surfaceBase = 0;
+        std::uint64_t surfaceBytes = 0;
+        std::uint64_t l2Base = 0;
+        std::uint64_t l2Bytes = 0;
+    };
     struct TaskRecord {
         std::string layer;
         std::string role;
         std::string boundary;
         ElementwiseShape output;
+        TaskAccess source;
+        TaskAccess result;
+        TaskAccess second;
+        bool hasSecond = false;
+        std::string dependency;
     };
     std::vector<TaskRecord> taskRecords{};
     std::string outputBoundary{};
     std::string inputBoundary{};
+    /// One graph boundary per physical input.  Ordinary programs leave this
+    /// empty (the function input is used); standalone residual diagnostics
+    /// name their one or two precomputed CPU-reference inputs here.
+    std::vector<std::string> inputBoundaries{};
 };
 
 /// One biased convolution in an H13 residual schedule.  The

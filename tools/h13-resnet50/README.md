@@ -30,6 +30,15 @@ first 7x7 prefix and a thirteen-task standalone form of that block; the latter
 uses the float64 block-13 result as its input, so it does not repeat the first
 64 descriptors.
 
+`subRungs` splits the first bottleneck into standalone `conv1`,
+`conv1+conv2`, `conv1+conv2+conv3`, projection, and fused residual-add
+programs. The convolution and projection programs use the float64 pool result
+as input; add uses separate float64 main3 and projection inputs. Every entry
+requests three cold runs compared as raw uint16 arrays before the relL2 check.
+The generated `verify_cold.py` performs both checks from three output NPYs.
+The task manifests can be audited offline with
+`tools/h13-resnet50/task_graph.py`.
+
 `sweep` starts from the measured round-12 control: Common `0x2c` low-nibble 4
 emits 16-column pieces, destination `+0x08` is the 128-byte row stride, and
 destination `+0x0c` is the plane stride. It tries low-nibble widths 5, 6, and

@@ -555,6 +555,39 @@ static void validateFullPoolCompletionChain(
            "pool does not emit the completion signal consumed by q4");
 }
 
+static void validateResidualScratchDependencies(
+    const ane::h13::Program &program) {
+    const auto spans = taskSpans(program);
+    expect(spans.size() == program.taskRecords.size(),
+           "scratch dependency metadata differs from the task stream");
+    constexpr std::uint32_t scratchChannel = 3;
+    constexpr std::uint32_t firstScratchRead = 0x0007bb81;
+    constexpr std::uint32_t repeatedScratchRead = 0x0003bb81;
+    std::string previousRole;
+    bool sawHandoff = false;
+    for (std::size_t index = 0; index != spans.size(); ++index) {
+        const auto selectors = word(program.task, spans[index].offset + 32);
+        const auto sourceDMA = reg(program, spans[index], 0x13800);
+        if ((selectors & 31u) != scratchChannel || !(sourceDMA & 1u)) {
+            previousRole = program.taskRecords[index].role;
+            continue;
+        }
+        const auto &role = program.taskRecords[index].role;
+        const auto expected = role == previousRole ? repeatedScratchRead
+                                                   : firstScratchRead;
+        const auto actual = sourceDMA;
+        if (actual != expected)
+            throw std::runtime_error(
+                "scratch consumer task " + std::to_string(index) + " (" +
+                role + ") has DMA config " + std::to_string(actual) +
+                ", expected " + std::to_string(expected));
+        sawHandoff |= expected == firstScratchRead;
+        previousRole = role;
+    }
+    expect(sawHandoff,
+           "residual test stream did not exercise a scratch handoff");
+}
+
 static void validateStemPoolHandoff(const ane::h13::Program &program) {
     const auto spans = taskSpans(program);
     expect(spans.size() >= 2, "residual stream has no stem/pool pair");
@@ -813,6 +846,111 @@ static void validateSmallSpatialStandalone(
            "passing projection diagnostic is outside the OCG-4 envelope");
 }
 
+static bool covers(const ane::h13::Program::TaskAccess &write,
+                   const ane::h13::Program::TaskAccess &read) {
+    return write.storage == read.storage &&
+        write.surfaceBase <= read.surfaceBase &&
+        write.surfaceBase + write.surfaceBytes >=
+            read.surfaceBase + read.surfaceBytes;
+}
+
+static bool l2Overlaps(const ane::h13::Program::TaskAccess &a,
+                       const ane::h13::Program::TaskAccess &b) {
+    return a.l2Bytes && b.l2Bytes &&
+        a.l2Base < b.l2Base + b.l2Bytes &&
+        b.l2Base < a.l2Base + a.l2Bytes;
+}
+
+static void validateFirstBlockAccessGraph(
+    const ane::h13::Program &program) {
+    const std::vector<std::string> roles = {
+        "stem", "pool", "projection", "main1", "main2", "main3",
+        "add+relu"};
+    expect(program.taskRecords.size() == roles.size(),
+           "first block access audit has the wrong task count");
+    for (std::size_t index = 0; index != roles.size(); ++index) {
+        const auto &record = program.taskRecords[index];
+        expect(record.role == roles[index],
+               "first block access audit has the wrong schedule");
+        const auto validateRead = [&](const auto &read) {
+            if (read.storage == "external") return;
+            bool orderedProducer = false;
+            for (std::size_t producer = 0; producer < index; ++producer)
+                orderedProducer |= covers(
+                    program.taskRecords[producer].result, read);
+            expect(orderedProducer,
+                   "first block contains a read without an ordered producer");
+        };
+        validateRead(record.source);
+        if (record.hasSecond) validateRead(record.second);
+        expect(!covers(record.result, record.source),
+               "first block task overwrites a live source");
+        expect(!l2Overlaps(record.result, record.source),
+               "first block reuses one L2 staging tile for a read and write");
+        if (record.hasSecond)
+            expect(!covers(record.result, record.second),
+                   "residual add overwrites a live second source");
+        if (record.hasSecond)
+            expect(!l2Overlaps(record.result, record.second),
+                   "residual add result overlaps its second-source L2 range");
+        if (record.source.storage == "scratch")
+            expect(record.dependency == "tile-dma-mode-7",
+                   "first scratch read lacks the producer handoff");
+    }
+    const auto &add = program.taskRecords.back();
+    expect(add.hasSecond && add.source.storage == "scratch" &&
+               add.second.storage == "l2" &&
+               add.result.storage == "external",
+           "first block add does not read both initialized branches into a fresh result");
+}
+
+static void validateBlockSubRungs(
+    const OwnedNetwork &network,
+    const std::pair<std::vector<std::uint8_t>,
+                    std::vector<std::uint8_t>> &head) {
+    const auto encode = [&](const char *name) {
+        return ane::h13::encodeResidualNetwork(
+            network.convs, head.first.data(), head.first.size(),
+            head.second.data(), head.second.size(), name);
+    };
+    const auto conv1 = encode("block01-conv1-only");
+    const auto conv2 = encode("block01-conv1-conv2");
+    const auto conv3 = encode("block01-conv1-conv2-conv3");
+    const auto projection = encode("block01-projection-only");
+    const auto add = encode("block01-add-only");
+    expect(conv1.taskCount == 1 && conv2.taskCount == 2 &&
+               conv3.taskCount == 3 && projection.taskCount == 1 &&
+               add.taskCount == 1,
+           "first-block sub-rungs do not isolate the requested tasks");
+    for (const auto *program : {&conv1, &conv2, &conv3, &projection, &add}) {
+        validateTaskHeaders(*program);
+        expect(program->outputBoundary.find("block01-") == 0,
+               "first-block sub-rung lost its stable boundary name");
+    }
+    expect(conv1.inputs.size() == 1 && conv1.inputBoundaries ==
+               std::vector<std::string>{"pool"} &&
+               conv1.output.nchw[1] == 64,
+           "conv1-only sub-rung has the wrong CPU-reference boundary");
+    expect(conv2.taskRecords.back().role == "main2" &&
+               conv2.taskRecords.back().output.channels == 64 &&
+               conv2.taskRecords.back().dependency == "tile-dma-mode-7",
+           "conv1+conv2 sub-rung does not exercise the scratch handoff");
+    expect(conv3.taskRecords.back().role == "main3" &&
+               conv3.output.nchw[1] == 256,
+           "conv1+conv2+conv3 sub-rung has the wrong output");
+    expect(projection.taskRecords.front().role == "projection" &&
+               projection.output.nchw[1] == 256,
+           "projection-only sub-rung has the wrong task or output");
+    const auto addSpan = taskSpans(add).front();
+    const auto selectors = word(add.task, addSpan.offset + 32);
+    expect(add.inputs.size() == 2 && add.inputBoundaries ==
+               std::vector<std::string>({"block01-main3", "projection01"}) &&
+               (selectors & 31u) == 5u &&
+               ((selectors >> 6) & 31u) == 6u &&
+               add.taskRecords.front().hasSecond,
+           "add-only sub-rung does not bind both CPU-reference inputs");
+}
+
 static std::uint32_t floatWord(float value) {
     std::uint32_t result = 0;
     std::memcpy(&result, &value, sizeof(result));
@@ -1024,6 +1162,9 @@ int main(int argc, char **argv) {
                                    projectionDiagnostic);
     validatePoolResidentLayout(full);
     validateFullPoolCompletionChain(full);
+    validateResidualScratchDependencies(full);
+    validateFirstBlockAccessGraph(block);
+    validateBlockSubRungs(boundaryNetwork, boundaryHead);
     const auto fullSpans = taskSpans(full);
     for (const auto *boundary : {&pool, &block, &mean}) {
         const auto spans = taskSpans(*boundary);
