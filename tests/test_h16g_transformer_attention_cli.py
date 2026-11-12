@@ -87,6 +87,8 @@ def main() -> None:
         "qkT_wbase": matmul("qkT", 1500, 8, 64),
         "pv_wtiny": matmul("pv", 1500, 6, 64),
         "softmax_wbase": softmax(1500, 8),
+        "softmax_wtiny": softmax(1500, 6),
+        "softmax_h1": softmax(1500, 1),
         "split_held_prediction": layout("split", 64, 2, 80),
         "qk_held_prediction": matmul("qk", 64, 2, 80),
         "pv_held_prediction": matmul("pv", 64, 2, 80),
@@ -108,7 +110,7 @@ def main() -> None:
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
         refused_cases = {
-            "softmax_wtiny": (softmax(1500, 6),
+            "softmax_h12": (softmax(1500, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),
             "softmax_bert": (softmax(128, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),
