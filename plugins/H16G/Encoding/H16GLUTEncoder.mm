@@ -184,8 +184,13 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     registers[0x5928]=storeCompletionMask();
     registers[0x592c]=outputSurface();
     BOOL hasTable=family != H16GUnaryPacketFamilyDirectReLU;
-    if(hasTable){registers[0x5500]=lookupKernelCommand();registers[0x5510]=0;
-        registers[0x5514]=0;}
+    if(hasTable){
+        registers[0x5500]=lookupKernelCommand();
+        registers[0x5610]=lookupKernelStream(2);
+        registers[0x5614]=tableBytes;
+        registers[0x5618]=0;
+        registers[0x561c]=0;
+    }
     try {
         ane::h16::rule::Packet packet=ane::h16::rule::build(
             registers,unaryEngineCount(family),hasTable);

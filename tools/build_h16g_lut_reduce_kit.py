@@ -229,9 +229,10 @@ def augment_kit(output: Path, source: Path) -> int:
             entry[key] = old_entry[key]
         (case / "manifest.json").write_text(json.dumps(entry, indent=2) + "\n")
     (output / "cases.json").write_text(json.dumps(entries, indent=2) + "\n")
+    round_name = output.name.rsplit("-", 1)[-1]
     (output / "README.md").write_text(
-        "# H16G LUT/reduce r3 qualification kit\n\n"
-        "The 38 current programs were rebuilt from the r3 compiler. "
+        f"# H16G LUT/reduce {round_name} qualification kit\n\n"
+        f"The 38 current programs were rebuilt from the {round_name} compiler. "
         "Deterministic inputs, float64 references, and old-main comparison "
         "programs come from the round-2 kit with the same case contract. "
         "Every current program passed the independent H16G container and "

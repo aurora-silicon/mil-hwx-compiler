@@ -365,6 +365,21 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
            word(expProgram.data,resultEndpointOffset)==
                ane::h16::rule::fields::resultEndpoint(3),
            @"rule-built ResultDMA is enabled so Store can observe completion");
+    std::size_t kernelStreamOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x5610);
+    std::size_t kernelBytesOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x5614);
+    std::size_t kernelBaseOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x5618);
+    expect(kernelStreamOffset!=SIZE_MAX && kernelBytesOffset!=SIZE_MAX &&
+           kernelBaseOffset!=SIZE_MAX &&
+           word(expProgram.data,kernelStreamOffset)==
+               ane::h16::rule::fields::lookupKernelStream(2) &&
+           word(expProgram.data,kernelBytesOffset)==128 &&
+           expProgram.kernelRelocationOffsets.count==1 &&
+           expProgram.kernelRelocationOffsets[0].unsignedIntegerValue==
+               kernelBaseOffset,
+           @"rule-built KernelDMA relocates the named lookup-table base");
     error = nil;
     H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
         inputShape:@[@1,@1,@192,@192] error:&error];

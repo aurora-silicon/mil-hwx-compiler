@@ -99,6 +99,13 @@ constexpr std::uint32_t lookupKernelCommand() {
     return (std::uint32_t(1) << 16) | (std::uint32_t(11) << 6);
 }
 
+// KernelDMA's lookup-table stream is selected separately from its command.
+// The table base is a relocated 64-bit byte address, not the 0x5510 compute
+// kernel operand used by convolution and matrix programs.
+constexpr std::uint32_t lookupKernelStream(std::uint32_t dependencyClass) {
+    return endpoint(dependencyClass);
+}
+
 // Store flags: store-enable plus fp16 element format.
 constexpr std::uint32_t storeFlags() {
     return (std::uint32_t(1) << 4) |
@@ -221,7 +228,7 @@ inline bool isRelocationOperand(std::uint32_t address) {
     switch (address) {
         case 0x4d00: case 0x4d10: case 0x4d14:
         case 0x5100: case 0x5108: case 0x510c:
-        case 0x5510: case 0x5514:
+        case 0x5618: case 0x561c:
             return true;
         default:
             return false;
@@ -312,7 +319,7 @@ inline void appendTask(Packet &packet, const TaskSpec &task,
     }
     if (task.kernelRelocation) {
         std::size_t relocation = appendRecord(packet.bytes,
-            {{0x5510,value(0x5510)},{0x5514,value(0x5514)}},
+            {{0x5618,value(0x5618)},{0x561c,value(0x561c)}},
             relocationRecordFlags(BARSlot::Kernel));
         packet.kernelRelocations.push_back(relocation);
         ++packet.recordCount;
