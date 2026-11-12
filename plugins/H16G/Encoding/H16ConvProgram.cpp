@@ -1571,6 +1571,23 @@ std::vector<std::pair<U32,U32>> resnetOutputSlices(ConvShape shape) {
         const U32 count=std::min(cap,high);
         high-=count;slices.push_back({high,count});
     }
+    // At the 28 -> 14 stride-two boundary, the sparse kernel grammar rolls
+    // over before the generic byte windows do.  A 3x3 region admits eleven
+    // output lanes (176 channels); the wider 1x1 phase admits 42 lanes (672
+    // channels).  Keep the generic tail-first split, then divide its low
+    // phase at that grammar boundary.  This is expressed entirely in kernel
+    // geometry and also applies to compatible residual networks.
+    constexpr U32 threeByThreePhaseChannels=11*16;
+    constexpr U32 oneByOnePhaseChannels=42*16;
+    const U32 phaseChannels=shape.kernel==3 ? threeByThreePhaseChannels :
+                            shape.kernel==1 ? oneByOnePhaseChannels : 0;
+    if (shape.stride==2 && shape.output.width==14 && phaseChannels &&
+        !slices.empty() && slices.back().first==0 &&
+        slices.back().second>phaseChannels) {
+        const U32 low=slices.back().second-phaseChannels;
+        slices.back()={low,phaseChannels};
+        slices.push_back({0,low});
+    }
     return slices;
 }
 
@@ -1753,7 +1770,9 @@ constexpr U32 residualHeaderEngineEvents(bool first) {
 }
 constexpr U32 residualHeaderCompletion(bool last) {
     // Header completion: event family bits 16/18 plus ready or done event.
-    return (1u<<16)|(1u<<18)|(last?(1u<<3):1u);
+    // A terminal task keeps ready asserted alongside done; clearing ready is
+    // not a legal terminal engine-control form at LOAD time.
+    return (1u<<16)|(1u<<18)|(last?((1u<<3)|1u):1u);
 }
 constexpr U32 residualPEHeaderCompletion(bool last) {
     // Compact PE header completion: ready event bit 0 or terminal bit 3.
@@ -2067,9 +2086,10 @@ void appendResidualTask(h13::Program &program,Task &task,std::size_t &firstBytes
 ResNet50Program encodeResidualNetwork(
     const std::vector<ResNet50ConvWeights> &convolutions,
     const std::uint8_t *headWeights,std::size_t headWeightBytes,
-    const std::uint8_t *headBias,std::size_t headBiasBytes) {
-    if (convolutions.size()<3)
-        throw std::invalid_argument("h16g.residual-shape: network needs a stem and one block");
+    const std::uint8_t *headBias,std::size_t headBiasBytes,
+    ResidualNetworkOptions options) {
+    if (convolutions.empty())
+        throw std::invalid_argument("h16g.residual-shape: network needs a stem");
     for (const auto &conv:convolutions) {
         const auto &s=conv.shape;
         const std::size_t reduction=std::size_t(s.input.channels)*s.kernel*s.kernelWidth;
@@ -2082,8 +2102,11 @@ ResNet50Program encodeResidualNetwork(
     const auto stemOutput=convolutions.front().shape.output;
     ElementwiseShape pooled{stemOutput.channels,(stemOutput.height+1)/2,
                             (stemOutput.width+1)/2};
-    const auto blocks=discoverResidualBlocks(convolutions,pooled);
-    const auto finalShape=convolutions[blocks.back().main.back()].shape.output;
+    const ElementwiseShape firstBlockInput=options.maxPool ? pooled:stemOutput;
+    const auto blocks=convolutions.size()==1 ? std::vector<ResidualBlockPlan>{}:
+        discoverResidualBlocks(convolutions,firstBlockInput);
+    const auto finalShape=blocks.empty() ? firstBlockInput:
+        convolutions[blocks.back().main.back()].shape.output;
     const U32 headOutputs=U32(headBiasBytes/2);
     if (!headWeights || !headBias || !headOutputs ||
         headWeightBytes!=std::size_t(finalShape.channels)*headOutputs*2 ||
@@ -2091,7 +2114,9 @@ ResNet50Program encodeResidualNetwork(
         throw std::invalid_argument(
             "h16g.residual-shape: classifier constants disagree with final channels");
 
-    U32 taskCount=3+U32(blocks.size()); // stem, pool, mean, linear minus one
+    // Convolution slices include the stem. Add pool when requested, one add
+    // per block, then the mean and classifier boundary.
+    U32 taskCount=(options.maxPool?3u:2u)+U32(blocks.size());
     for (const auto &conv:convolutions)
         taskCount+=U32(resnetOutputSlices(conv.shape).size());
     ResNet50Program result;auto &program=result.program;
@@ -2128,11 +2153,13 @@ ResNet50Program encodeResidualNetwork(
              residualFirstFit(stemBase,residualBytes(stem.output),
                               kResidualStageBytes),0,
              ResidualIO::Ring,stemBase,0,true);
-    const U32 poolBase=residualFirstFit(stemBase,residualBytes(stem.output),
-                                       residualBytes(pooled));
-    Task pool=residualPETask(id++,taskCount,ResidualRole::Pool,stem.output,pooled,
-                             stemBase,poolBase,0,0);
-    appendResidualTask(program,pool,firstTaskBytes);
+    if (options.maxPool) {
+        const U32 poolBase=residualFirstFit(stemBase,residualBytes(stem.output),
+                                           residualBytes(pooled));
+        Task pool=residualPETask(id++,taskCount,ResidualRole::Pool,stem.output,pooled,
+                                 stemBase,poolBase,0,0);
+        appendResidualTask(program,pool,firstTaskBytes);
+    }
 
     for (const auto &block:blocks) {
         std::vector<std::size_t> scheduled=block.main;

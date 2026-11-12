@@ -61,11 +61,11 @@ int main() {
     auto encoded=ane::h16::encodeResNet50(
         convs,headWeights.data(),headWeights.size(),
         headBias.data(),headBias.size());
-    if (encoded.program.taskCount!=80 || encoded.program.task.empty() ||
-        encoded.program.constants.size()!=53158912 ||
-        encoded.program.kernelRelocations.size()!=62 ||
+    if (encoded.program.taskCount!=82 || encoded.program.task.empty() ||
+        encoded.program.constants.size()!=53177344 ||
+        encoded.program.kernelRelocations.size()!=64 ||
         encoded.program.scratchAllocationBytes!=4u*1024u*1024u ||
-        encoded.programRecordCount!=161 || encoded.programFormatCode!=0x4c ||
+        encoded.programRecordCount!=165 || encoded.programFormatCode!=0x4c ||
         encoded.program.task[0]!=1 || !encoded.program.formulaBuilt) {
         std::cerr << "resnet50 tasks=" << encoded.program.taskCount
                   << " constants=" << encoded.program.constants.size()
@@ -92,6 +92,39 @@ int main() {
         encoded192.program.kernelRelocations.size()!=62 ||
         encoded192.program.inputs.front().nchw[2]!=192 ||
         !encoded192.program.formulaBuilt) return 3;
+
+    // Qualification prefixes keep a small mean/linear probe head so every
+    // rung has one ordinary output surface. Stem-only may omit max-pool;
+    // stem+maxpool and block prefixes use the same path as the full network.
+    auto stemHeadWeights=nonzeroHalves(64*1000,601);
+    auto stemHeadBias=nonzeroHalves(1000,602);
+    ane::h16::ResidualNetworkOptions stemOptions;stemOptions.maxPool=false;
+    auto stemProbe=ane::h16::encodeResidualNetwork(
+        {convs[0]},stemHeadWeights.data(),stemHeadWeights.size(),
+        stemHeadBias.data(),stemHeadBias.size(),stemOptions);
+    stemOptions.maxPool=true;
+    auto poolProbe=ane::h16::encodeResidualNetwork(
+        {convs[0]},stemHeadWeights.data(),stemHeadWeights.size(),
+        stemHeadBias.data(),stemHeadBias.size(),stemOptions);
+    if (stemProbe.program.taskCount!=3 || poolProbe.program.taskCount!=4 ||
+        stemProbe.program.kernelRelocations.size()!=2 ||
+        poolProbe.program.kernelRelocations.size()!=2) return 4;
+
+    auto blockHeadWeights=nonzeroHalves(256*1000,603);
+    auto blockHeadBias=nonzeroHalves(1000,604);
+    std::vector<ane::h16::ResNet50ConvWeights> firstBlock(
+        convs.begin(),convs.begin()+5);
+    std::vector<ane::h16::ResNet50ConvWeights> firstStage(
+        convs.begin(),convs.begin()+11);
+    auto blockProbe=ane::h16::encodeResidualNetwork(
+        firstBlock,blockHeadWeights.data(),
+        blockHeadWeights.size(),blockHeadBias.data(),blockHeadBias.size());
+    auto stageProbe=ane::h16::encodeResidualNetwork(
+        firstStage,blockHeadWeights.data(),
+        blockHeadWeights.size(),blockHeadBias.data(),blockHeadBias.size());
+    if (blockProbe.program.taskCount!=9 || stageProbe.program.taskCount!=17 ||
+        blockProbe.program.kernelRelocations.size()!=6 ||
+        stageProbe.program.kernelRelocations.size()!=12) return 5;
 
     // A basic-block ResNet-18 geometry takes the same topology discovery,
     // allocator, DMA, and descriptor constructors.  It deliberately has no

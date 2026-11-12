@@ -220,6 +220,11 @@ struct ResNet50Program {
     std::uint32_t programFormatCode = 0;
     std::size_t scratchBytes = 0;
 };
+struct ResidualNetworkOptions {
+    // Prefix probes may end immediately after the stem.  Full residual
+    // networks retain the canonical 3x3 stride-two max-pool.
+    bool maxPool = true;
+};
 // Compatibility entry point for the public ResNet-50 topology.  It delegates
 // to the geometry-driven residual-network encoder below.
 ResNet50Program encodeResNet50(
@@ -234,7 +239,8 @@ ResNet50Program encodeResNet50(
 ResNet50Program encodeResidualNetwork(
     const std::vector<ResNet50ConvWeights> &convolutions,
     const std::uint8_t *headWeights, std::size_t headWeightBytes,
-    const std::uint8_t *headBias, std::size_t headBiasBytes);
+    const std::uint8_t *headBias, std::size_t headBiasBytes,
+    ResidualNetworkOptions options = {});
 // A chain of measured standalone tasks whose intermediates go through the
 // scratch BAR (slot 3) in DRAM, ping-ponging between two regions. Measured
 // uses the r2 DRAM-chain producer/consumer fields; DependencyOnly sets only

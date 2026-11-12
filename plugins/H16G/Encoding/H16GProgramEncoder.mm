@@ -191,55 +191,84 @@ static ANEHWXArtifact *encodeResNet50Program(
         {@"conv_50",2048,512,7,1,1}, {@"conv_51",512,512,7,3,1},
         {@"conv_52",512,2048,7,1,1},
     };
-    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1 ||
-        ![graph.sourceFunction.inputs.firstObject.type.shape
-            isEqualToArray:@[@1,@3,@224,@224]]) return nil;
-    NSUInteger convCount=0,addCount=0,reluCount=0,poolCount=0,meanCount=0,linearCount=0;
+    NSUInteger convCount=0,addCount=0,poolCount=0,meanCount=0,linearCount=0;
     for (ANEOperationNode *node in graph.nodes) {
         convCount += [node.operationName isEqualToString:@"conv"];
         addCount += [node.operationName isEqualToString:@"add"];
-        reluCount += [node.operationName isEqualToString:@"relu"];
         poolCount += [node.operationName isEqualToString:@"max_pool"];
         meanCount += [node.operationName isEqualToString:@"reduce_mean"];
         linearCount += [node.operationName isEqualToString:@"linear"];
     }
-    if (convCount!=53 || addCount!=16 || reluCount!=49 || poolCount!=1 ||
-        meanCount!=1 || linearCount!=1) return nil;
+    // Do not diagnose ordinary primitive graphs. Once the residual boundary
+    // is recognizable, however, a rejected prefix must name the failed gate
+    // instead of silently falling through to a misleading primitive error.
+    if (!convCount || meanCount!=1 || linearCount!=1) return nil;
+    ANEOperationNode *diagnosticNode=nodeWithLabel(graph,@"conv_0");
+    if (!diagnosticNode)
+        for (ANEOperationNode *node in graph.nodes)
+            if ([node.operationName isEqualToString:@"conv"]) {
+                diagnosticNode=node;break;
+            }
+#define REJECT_RESIDUAL(message) do { \
+    emitError(diagnostics,@"h16g.residual-prefix-shape",message,diagnosticNode); \
+    return nil; \
+} while (0)
+    if (graph.sourceFunction.inputs.count!=1 || graph.outputValueNames.count!=1)
+        REJECT_RESIDUAL(@"residual prefix needs one input and one output");
+    NSArray<NSNumber *> *modelInputShape=
+        graph.sourceFunction.inputs.firstObject.type.shape;
+    if (modelInputShape.count!=4 || modelInputShape[0].unsignedIntegerValue!=1 ||
+        modelInputShape[1].unsignedIntegerValue!=3 ||
+        modelInputShape[2].unsignedIntegerValue!=modelInputShape[3].unsignedIntegerValue)
+        REJECT_RESIDUAL(@"residual prefix input must be fp16 NCHW 1x3xSxS");
+    const NSUInteger modelSpatial=modelInputShape[2].unsignedIntegerValue;
+    if (modelSpatial!=224 && modelSpatial!=192)
+        REJECT_RESIDUAL(@"residual prefix supports spatial size 224 or 192");
+    if (convCount<1 || convCount>53 || poolCount>1 ||
+        (convCount>1 && poolCount!=1) || meanCount!=1 || linearCount!=1 ||
+        addCount>16)
+        REJECT_RESIDUAL(@"residual prefix operation counts are inconsistent");
 
     NSMutableArray<NSData *> *storage=[NSMutableArray array];
     std::vector<ane::h16::ResNet50ConvWeights> convolutions;
-    convolutions.reserve(53);
-    for (const auto &spec:specs) {
+    convolutions.reserve(convCount);
+    for (NSUInteger specIndex=0;specIndex<convCount;++specIndex) {
+        const auto &spec=specs[specIndex];
         ANEOperationNode *conv=nodeWithLabel(graph,spec.name);
         if (!conv || ![conv.operationName isEqualToString:@"conv"])
-            return nil;
+            REJECT_RESIDUAL(@"residual prefix convolution labels are not a complete prefix");
         ANEOperationNode *weight=producerForOperand(graph,conv,@"weight");
         ANEOperationNode *bias=producerForOperand(graph,conv,@"bias");
-        if (!weight || !bias) return nil;
+        if (!weight || !bias)
+            REJECT_RESIDUAL(@"residual prefix convolution lacks weight or bias");
         NSArray<NSNumber *> *inputShape=conv.sourceOperation.operands[@"x"].value.type.shape;
         NSArray<NSNumber *> *outputShape=conv.outputType.shape;
         NSArray<NSNumber *> *weightShape=weight.outputType.shape;
-        if (![inputShape isEqualToArray:@[@1,@(spec.cin),@(spec.spatial),@(spec.spatial)]] ||
+        const uint32_t spatial=uint32_t((uint64_t(spec.spatial)*modelSpatial)/224);
+        if (uint64_t(spatial)*224!=uint64_t(spec.spatial)*modelSpatial ||
+            ![inputShape isEqualToArray:@[@1,@(spec.cin),@(spatial),@(spatial)]] ||
             ![outputShape isEqualToArray:@[@1,@(spec.cout),
-                @((spec.spatial+spec.stride-1)/spec.stride),
-                @((spec.spatial+spec.stride-1)/spec.stride)]] ||
+                @((spatial+spec.stride-1)/spec.stride),
+                @((spatial+spec.stride-1)/spec.stride)]] ||
             ![weightShape isEqualToArray:@[@(spec.cout),@(spec.cin),
                                            @(spec.kernel),@(spec.kernel)]] ||
             ![bias.outputType.shape isEqualToArray:@[@(spec.cout)]] ||
             !constantListOperandIs(graph,conv,@"strides",
                                    @[[NSString stringWithFormat:@"%u",spec.stride],
                                      [NSString stringWithFormat:@"%u",spec.stride]]) ||
-            !constantScalarOperandIs(graph,conv,@"groups",@"1")) return nil;
+            !constantScalarOperandIs(graph,conv,@"groups",@"1"))
+            REJECT_RESIDUAL(@"residual prefix convolution geometry is inconsistent");
         const NSUInteger weightBytes=(NSUInteger)spec.cout*spec.cin*spec.kernel*spec.kernel*2;
         NSData *rawWeight=[ANEBlobResolver loadConstantForOperation:weight.sourceOperation
             expectedBytes:weightBytes modelRoot:modelRoot diagnostics:diagnostics];
         NSData *rawBias=[ANEBlobResolver loadConstantForOperation:bias.sourceOperation
             expectedBytes:spec.cout*2 modelRoot:modelRoot diagnostics:diagnostics];
-        if (!rawWeight || !rawBias) return nil;
+        if (!rawWeight || !rawBias)
+            REJECT_RESIDUAL(@"residual prefix convolution constants are invalid");
         [storage addObject:rawWeight]; [storage addObject:rawBias];
         ane::h16::ConvShape shape;
-        shape.input={spec.cin,spec.spatial,spec.spatial};
-        const uint32_t out=(spec.spatial+spec.stride-1)/spec.stride;
+        shape.input={spec.cin,spatial,spatial};
+        const uint32_t out=(spatial+spec.stride-1)/spec.stride;
         shape.output={spec.cout,out,out}; shape.kernel=shape.kernelWidth=spec.kernel;
         shape.stride=spec.stride; shape.groups=1; shape.bias=true;
         convolutions.push_back({shape,
@@ -248,25 +277,37 @@ static ANEHWXArtifact *encodeResNet50Program(
     }
     ANEOperationNode *linear=nodeWithLabel(graph,@"linear_0");
     if (!linear || ![linear.operationName isEqualToString:@"linear"])
-        return nil;
+        REJECT_RESIDUAL(@"residual prefix needs linear_0 as its probe head");
     ANEOperationNode *headWeight=producerForOperand(graph,linear,@"weight");
     ANEOperationNode *headBias=producerForOperand(graph,linear,@"bias");
-    if (!headWeight || !headBias) return nil;
-    if (![linear.outputType.shape isEqualToArray:@[@1,@1000]] ||
-        ![headWeight.outputType.shape isEqualToArray:@[@1000,@2048]] ||
-        ![headBias.outputType.shape isEqualToArray:@[@1000]]) return nil;
+    if (!headWeight || !headBias)
+        REJECT_RESIDUAL(@"residual prefix head lacks weight or bias");
+    if (linear.outputType.shape.count!=2 ||
+        linear.outputType.shape[0].unsignedIntegerValue!=1 ||
+        headWeight.outputType.shape.count!=2 || headBias.outputType.shape.count!=1)
+        REJECT_RESIDUAL(@"residual prefix head ranks are inconsistent");
+    const NSUInteger headOutputs=linear.outputType.shape[1].unsignedIntegerValue;
+    const NSUInteger headInputs=headWeight.outputType.shape[1].unsignedIntegerValue;
+    if (!headOutputs || !headInputs ||
+        ![headWeight.outputType.shape isEqualToArray:@[@(headOutputs),@(headInputs)]] ||
+        ![headBias.outputType.shape isEqualToArray:@[@(headOutputs)]])
+        REJECT_RESIDUAL(@"residual prefix head geometry is inconsistent");
     NSData *rawHeadWeight=[ANEBlobResolver loadConstantForOperation:headWeight.sourceOperation
-        expectedBytes:1000*2048*2 modelRoot:modelRoot diagnostics:diagnostics];
+        expectedBytes:headOutputs*headInputs*2 modelRoot:modelRoot diagnostics:diagnostics];
     NSData *rawHeadBias=[ANEBlobResolver loadConstantForOperation:headBias.sourceOperation
-        expectedBytes:1000*2 modelRoot:modelRoot diagnostics:diagnostics];
-    if (!rawHeadWeight || !rawHeadBias) return nil;
+        expectedBytes:headOutputs*2 modelRoot:modelRoot diagnostics:diagnostics];
+    if (!rawHeadWeight || !rawHeadBias)
+        REJECT_RESIDUAL(@"residual prefix head constants are invalid");
     [storage addObject:rawHeadWeight]; [storage addObject:rawHeadBias];
 
     ane::h16::ResNet50Program encoded;
+    ane::h16::ResidualNetworkOptions residualOptions;
+    residualOptions.maxPool=poolCount==1;
     try {
-        encoded=ane::h16::encodeResNet50(convolutions,
+        encoded=ane::h16::encodeResidualNetwork(convolutions,
             static_cast<const uint8_t *>(rawHeadWeight.bytes),rawHeadWeight.length,
-            static_cast<const uint8_t *>(rawHeadBias.bytes),rawHeadBias.length);
+            static_cast<const uint8_t *>(rawHeadBias.bytes),rawHeadBias.length,
+            residualOptions);
     } catch (const std::exception &exception) {
         emitError(diagnostics,@"h16g.encode.resnet50-fields",
             [NSString stringWithUTF8String:exception.what()],linear);
@@ -280,18 +321,23 @@ static ANEHWXArtifact *encodeResNet50Program(
     for (std::size_t offset:encoded.program.kernelRelocations)
         [relocations addObject:@(offset)];
     ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
-    NSArray<NSNumber *> *outputObjectShape=@[@1,@1,@1,@1000];
+    const NSUInteger inputRowBytes=alignUp(modelSpatial*2,64);
+    const NSUInteger inputPlaneBytes=inputRowBytes*modelSpatial;
+    const NSUInteger inputBatchBytes=inputPlaneBytes*3;
+    const NSUInteger outputRowBytes=alignUp(headOutputs*2,64);
+    NSArray<NSNumber *> *outputObjectShape=@[@1,@1,@1,@(headOutputs)];
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
             role:HWXObjectBindingRoleInput elementType:input.type.elementType
-            shape:input.type.shape rowStrideBytes:448 planeStrideBytes:100352
-            batchStrideBytes:301056 storageByteLength:301056],
+            shape:input.type.shape rowStrideBytes:inputRowBytes
+            planeStrideBytes:inputPlaneBytes batchStrideBytes:inputBatchBytes
+            storageByteLength:inputBatchBytes],
         [[HWXObjectBinding alloc]
             initWithSymbol:[linear.identifier stringByAppendingString:@"@output"]
             shortName:linear.identifier role:HWXObjectBindingRoleOutput
             elementType:linear.outputType.elementType shape:outputObjectShape
-            rowStrideBytes:2048 planeStrideBytes:2048
-            batchStrideBytes:2048 storageByteLength:2048],
+            rowStrideBytes:outputRowBytes planeStrideBytes:outputRowBytes
+            batchStrideBytes:outputRowBytes storageByteLength:outputRowBytes],
     ];
     HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
         initWithTaskCount:encoded.program.taskCount
@@ -311,18 +357,21 @@ static ANEHWXArtifact *encodeResNet50Program(
     }
     NSArray<ANEHWXBinding *> *runtimeBindings=@[
         [[ANEHWXBinding alloc]initWithIdentifier:input.name role:ANESurfaceRoleInput
-            logicalByteLength:301056 allocationByteLength:alignUp(301056,0x4000)
-            ioSurfaceIndex:0 rowStrideBytes:448 planeStrideBytes:100352
-            batchStrideBytes:301056],
+            logicalByteLength:inputBatchBytes
+            allocationByteLength:alignUp(inputBatchBytes,0x4000)
+            ioSurfaceIndex:0 rowStrideBytes:inputRowBytes
+            planeStrideBytes:inputPlaneBytes batchStrideBytes:inputBatchBytes],
         [[ANEHWXBinding alloc]initWithIdentifier:@"resnet50@weights"
             role:ANESurfaceRoleWeight logicalByteLength:constants.length
             allocationByteLength:constants.length ioSurfaceIndex:-1],
         [[ANEHWXBinding alloc]initWithIdentifier:linear.identifier
-            role:ANESurfaceRoleOutput logicalByteLength:2000
-            allocationByteLength:alignUp(2048,0x4000) ioSurfaceIndex:1
-            rowStrideBytes:2048 planeStrideBytes:2048 batchStrideBytes:2048],
+            role:ANESurfaceRoleOutput logicalByteLength:headOutputs*2
+            allocationByteLength:alignUp(outputRowBytes,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:outputRowBytes planeStrideBytes:outputRowBytes
+            batchStrideBytes:outputRowBytes],
     ];
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:runtimeBindings];
+#undef REJECT_RESIDUAL
 }
 
 static ANEHWXArtifact *encodeTransformerLinearProgram(
