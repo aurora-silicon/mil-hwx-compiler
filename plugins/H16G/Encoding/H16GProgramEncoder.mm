@@ -1927,16 +1927,21 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
     NSUInteger tokens=shape[2].unsignedIntegerValue;
     if (shape[0].unsignedIntegerValue!=1 ||
         shape[3].unsignedIntegerValue!=tokens) return nil;
-    if (tokens!=1500 || heads!=8) {
+    // Last-axis softmax normalizes each row on its own, so the heads are
+    // independent planes. The S=1500 program is proven for eight planes; a
+    // tensor with fewer heads runs as that program over its first planes and
+    // the trailing planes are zero padding whose results are discarded.
+    const NSUInteger programHeads=8;
+    if (tokens!=1500 || heads==0 || heads>programHeads) {
         emitError(diagnostics,
             @"h16g.encode.transformer-softmax-hardware-unproved",
-            @"standalone H16G softmax is enabled only for the measured S=1500, H=8 form; H=6 and other predictions are unsafe",
+            @"standalone H16G softmax is enabled only for S=1500 with at most eight heads (run as the measured eight-plane program)",
             output);
         return nil;
     }
     ane::h16::TransformerAttentionProgram encoded;
     try {
-        encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)heads);
+        encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)programHeads);
     } catch (const std::exception &exception) {
         emitError(diagnostics,@"h16g.encode.transformer-softmax-fields",
             [NSString stringWithUTF8String:exception.what()],output);return nil;
@@ -1949,16 +1954,17 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
         return nil;
     }
     const NSUInteger row=alignUp(2*tokens,64),plane=tokens*row;
-    const NSUInteger storage=heads*plane,logical=tensorBytes(input.type);
+    const NSUInteger storage=programHeads*plane,logical=tensorBytes(input.type);
+    NSArray<NSNumber *> *programShape=@[@1,@(programHeads),@(tokens),@(tokens)];
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
             role:HWXObjectBindingRoleInput elementType:input.type.elementType
-            shape:shape rowStrideBytes:row planeStrideBytes:plane
+            shape:programShape rowStrideBytes:row planeStrideBytes:plane
             batchStrideBytes:storage storageByteLength:storage],
         [[HWXObjectBinding alloc]
             initWithSymbol:[output.identifier stringByAppendingString:@"@output"]
             shortName:output.identifier role:HWXObjectBindingRoleOutput
-            elementType:output.outputType.elementType shape:shape
+            elementType:output.outputType.elementType shape:programShape
             rowStrideBytes:row planeStrideBytes:plane
             batchStrideBytes:storage storageByteLength:storage],
     ];

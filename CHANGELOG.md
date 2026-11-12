@@ -4,6 +4,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: emit S=1500 last-axis softmax with one to eight heads as the measured
+  eight-plane program, with the unused trailing planes as zero padding. The
+  H=6 (Whisper-tiny) object is byte-identical to the H=8 one and matches a
+  float64 reference on a J616s (relative L2 5.5e-4). The predicted H=6
+  schedule is no longer emitted.
 - H14: add the rule-built native MobileNetV1 `linked-ring` schedule. It emits
   28 packed tasks, native k3/s2 stem/depthwise coefficients, one interleave-8
   scratch spill, then geometry-allocated 2 MiB L2 residency; resident roles

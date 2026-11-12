@@ -76,7 +76,7 @@ runtime matmuls for the Whisper S=1500 geometries:
 | QK | `[1,6,1500,64]` | `[1,8,1500,64]` | 3 |
 | transpose-y QK | same | same | 4 |
 | PV | same | same | heads + 1 |
-| last-axis softmax | refused after device hangs | measured and enabled | 5 |
+| last-axis softmax | eight-plane program, two zero planes | measured and enabled | 5 |
 | fused scaled QK + softmax + PV | refused after accuracy failure | refused pending qualification | heads + 11 |
 
 The compiler keeps public held-out movement and matmul axes as unrevealed
@@ -110,9 +110,19 @@ The H=8 measured row remains byte-identical. A second device run with that
 serialized H=6 schedule still wedged. Prefix bisection then showed tasks
 0 and 0--1 refused at LOAD, 0--2 and 0--3 timed out at LOAD, and the full
 program timed out at EXECUTE. In contrast the measured H=8 program completed
-with relative L2 `9.4e-4`. The compiler therefore refuses H=6 and every other
-predicted standalone softmax with
-`h16g.encode.transformer-softmax-hardware-unproved`.
+with relative L2 `9.4e-4`.
+
+Last-axis softmax normalizes every row on its own, so the heads of a
+`[1,H,1500,1500]` tensor are independent planes. The compiler now emits any
+S=1500 softmax with one to eight heads as the measured eight-plane program:
+the tensor occupies the first H planes, the remaining planes are zero padding,
+and their results are discarded. The H=6 object is byte-identical to the H=8
+one; only the binding's logical byte count differs. The predicted H=6 schedule
+is no longer emitted. Other token counts and more than eight heads stay
+refused with `h16g.encode.transformer-softmax-hardware-unproved`.
+On a J616s with Linux the H=6 object, run on a padded `[1,6,1500,1500]`
+input of N(0,3) scores, matches a float64 reference with relative L2
+`5.5e-4` (max abs error `9.9e-4`).
 
 Packaged H16G objects expose external surfaces beginning at BAR slot 6, with
 the kernel table after the final surface.  The captured attention records used
@@ -271,7 +281,7 @@ change.
 
 The normalization dataflow and non-identity affine consumption remain open.
 S=1500 attention data movement and batched runtime matmul over heads have
-native encoders; H=6 softmax and fused attention remain named refusals. The two
+native encoders; fused attention remains a named refusal. The two
 Whisper stem convolutions and encoder-axis transpose have measured descriptor
 parity; the positional constant uses the established contiguous ALU packet
 with its constant in the fourth aperture.
