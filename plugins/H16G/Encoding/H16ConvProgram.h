@@ -97,6 +97,14 @@ std::string transformerLayerNormRefusal(std::uint32_t tokens,
 TransformerLayerNormProgram encodeTransformerLayerNorm(
     std::uint32_t tokens, std::uint32_t channels);
 
+/// Research-kit instrumentation. Each variant ends a measured prefix with an
+/// external writer so a reviewer can preserve the first device-visible bad
+/// boundary without changing the production layer_norm object.
+enum class LayerNormDumpStage { Mean, Centered, Variance, ReciprocalStdDev,
+                                Normalized };
+TransformerLayerNormProgram encodeTransformerLayerNormDump(
+    std::uint32_t tokens, std::uint32_t channels, LayerNormDumpStage stage);
+
 std::string attentionLayoutRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,
                                    std::uint32_t headDimension,

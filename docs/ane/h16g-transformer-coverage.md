@@ -181,7 +181,8 @@ external result. The round-2 device dump showed that removing the preceding
 normalization task was not an identity specialization: it produced BERT
 zeros, hung Whisper-tiny, and exposed an unnormalized Whisper-base value. The
 constructor now retains that measured task and then uses the zero-beta writer
-with the serialized first/middle/final dispatch-limit schedule.
+with serialized prefix/final dispatch limits and the measured normalizer's
+contextual dispatch limit.
 
 Research objects use BAR 6 for the external input, BAR 8 for zero beta
 constant table, and BAR 7 for the external output.  The fail-closed validator
@@ -193,6 +194,34 @@ performs normalization. The restored five/eleven-task candidates pass the
 offline validator, but host structural success is not treated as device
 qualification. The compiler refuses the family with
 `h16g.encode.transformer-layer-norm-hardware-unproved`.
+
+The round-3 J616s result made the first wrong boundary observable. BERT wrote
+only eight contiguous rows (6,144 values), and neither that output nor the
+Whisper-base output correlated with CPU mean, centered, variance, reciprocal
+standard deviation, or normalized tensors under row-major, channel-major,
+row-shift, or channel-shift interpretations. The reduction prefixes still
+match their sealed `layer_norm -> projection` programs. The next task did
+not: it was an affine/materialization form incorrectly described as the
+measured normalizer, and its output writer read the reduction source L2 base
+as though it were the normalized result.
+
+The round-4 encoder uses the exact normalization task that feeds projection.
+Its named field table keeps BERT in place, moves Whisper-tiny from its
+reduction source to its normalized result view, and moves Whisper-base from
+its reduction source to its separate normalized result view while retaining
+the measured interleave-8 spill. The tiny/base object diff leaves three
+scheduling candidates for the former tiny hang: the final reduction's
+dependency/mode pair, the normalizer's contextual dispatch limit, and the
+base-only result-DMA split. Width-derived channel counts, row strides,
+reciprocal width, and L2 offsets are numerical/layout fields rather than
+independent hang candidates.
+
+The reviewer kit includes five prefix-ending objects per shape. Each appends
+an external writer after the mean, centered, variance, reciprocal-standard-
+deviation, or normalized boundary. The checker assumes contiguous external
+fp16 `[S,C]` dumps with row stride `2*C`; scalar boundaries use a 16-byte
+internal row packet and are broadcast by the dump writer. These objects are
+instrumentation only and never enter production dispatch.
 
 The full encoder capture stores each explicit affine pair as contiguous fp16
 `gamma` followed by fp16 `beta`. Every pair in that capture is identity/zero,

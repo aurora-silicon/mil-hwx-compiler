@@ -177,6 +177,13 @@ def dma_extent(dma: dict, registers: dict, target: dict,
     # is nevertheless explicit and, with 0x24, proves the complete staged
     # allocation used by QK/PV loads.
     if target['kind'] == 'scratch':
+        if (family == 'layer_norm' and address == 0x5108 and
+                registers.get(4) == registers.get(0x14) == 512 and
+                registers.get(12) == registers.get(0x1c) == 1500 and
+                registers.get(0x5138) == 0x08302031):
+            # The measured C=512 normalization task spills one natural
+            # [1500,512] fp16 plane through its interleave-8 result DMA.
+            return offset + product(product(registers[4], registers[12]), 2)
         if (family == 'fused-attention' and address == 0x5108 and
                 all(key in registers for key in (4, 12, 0x24, 0x511c)) and
                 registers[4] and registers[0x511c] % registers[4] == 0):
@@ -386,17 +393,19 @@ def positional_program(tasks: list[dict], task_count: int,
 
 def layer_norm_program(tasks: list[dict], task_count: int,
                        record_code: int, format_code: int) -> bool:
-    """Recognize the standalone BERT/Whisper last-axis normalization family."""
-    if (len(tasks) != task_count or task_count not in (5, 11) or
+    """Recognize standalone normalization and its prefix-dump variants."""
+    if (len(tasks) != task_count or task_count not in (2, 3, 4, 5, 9, 10, 11) or
             record_code != 0x10 or format_code != 20):
         return False
     first_addresses = {dma['address'] for dma in tasks[0]['dma']}
     final_addresses = {dma['address'] for dma in tasks[-1]['dma']}
     epsilon_tasks = [task for task in tasks
                      if task['registers'].get(0x450c) == 0x37280000]
+    final = tasks[-1]['registers']
     return (bool(first_addresses & {0x4d10, 0x4d28}) and
             {0x4d28, 0x5108}.issubset(final_addresses) and
-            bool(epsilon_tasks))
+            final.get(0x4500) == 0x80000 and
+            (bool(epsilon_tasks) or task_count in (2, 5)))
 
 
 def validate_dma(tasks: list[dict], program: bytes, targets: list[dict],

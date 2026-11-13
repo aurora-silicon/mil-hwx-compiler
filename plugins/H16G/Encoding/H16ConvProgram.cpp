@@ -857,42 +857,77 @@ Task layerNormShortMiddleTask(U32 index) {
     task.header[0]=U32(task.bytes.size()/4)<<16|index;store(task.bytes,0,task.header[0]);return task;
 }
 
-// The fourth BERT task (tenth for Whisper) is the normalization operation,
-// not an identity-gamma affine boundary.  It is byte-for-byte the task that
-// feeds the following projection in the measured full encoder program: NE
-// consumes the centered value and reciprocal standard deviation resident at
-// normalizationBase and writes the normalized tensor back to that L2 view.
-Task layerNormNormalizeTask(U32 tokens,U32 channels,U32 index,
-                            U32 normalizationBase) {
-    Task task;layerNormHeader(task,index,0x3ffff,1);auto &r=task.registers;
-    task.header[4]=kDispatchLimitMiddleH16G;
-    const U32 row=2*channels;r[4]=r[0x14]=channels;r[8]=r[0x18]=1;
-    r[12]=r[0x1c]=tokens;r[0x34]=1;r[0x3c]=0x30;r[0x44]=9;r[0x48]=0x80;r[0x4c]=0;
-    r[0x4104]=0x400100;r[0x4108]=0x142;r[0x4114]=row;
-    r[0x4124]=normalizationBase;
-    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;r[0x4150]=row;r[0x4500]=0x80004;
-    r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;r[0x4d28]=0;r[0x4d2c]=0;
-    r[0x4d6c]=0x1002031;
+// Named fields of the measured normalization task immediately before the
+// projection in each layer_norm -> projection program.  The r3 candidate
+// accidentally substituted the later affine/materialization boundary.  That
+// task read a constant BAR and is not equivalent to this normalization step.
+struct LayerNormNormalizeFields {
+    U32 schedule,dependency,sourceBase,sourceStride,resultBase,resultStride;
+    U32 l2SourceMode,l2ResultMode,resultDmaStride,resultDmaMode;
+    bool resultDma;
+};
+
+LayerNormNormalizeFields layerNormNormalizeFields(U32 tokens,U32 channels) {
+    if(tokens==128) return {
+        0x20,0x3ff,0x33000,2*channels,0x33000,0x110,
+        0x108,0x140,0,0,false};
+    if(channels==384) return {
+        0x20,0x1ffffff,0x127380,0x100,0xbb80,0xbd0,
+        0x103,0x140,0,0,false};
+    return {
+        0x28,0x1ffffff,0xbb80,2*channels,0x1e0780,0,
+        0x108,0x84a,0x5dc0,0x08302031,true};
+}
+
+Task layerNormNormalizeTask(U32 tokens,U32 channels,U32 index) {
+    const auto f=layerNormNormalizeFields(tokens,channels);
+    Task task;task.header={index,0,0,0,f.schedule,0,0,f.dependency,0x50001};
+    auto &r=task.registers;
+    r[4]=r[0x14]=channels;r[8]=r[0x18]=1;r[12]=r[0x1c]=tokens;
+    r[0x30]=0x84000;r[0x34]=1;r[0x3c]=0x30200000;r[0x4c]=0x100000;
+    r[0x4104]=f.l2SourceMode;r[0x4110]=f.sourceBase;
+    r[0x4114]=f.sourceStride;
+    if(tokens==1500&&channels==384)
+        r[0x4118]=r[0x411c]=r[0x4120]=1500*0x100;
+    r[0x4148]=f.l2ResultMode;
+    if(f.resultBase!=f.sourceBase)r[0x414c]=f.resultBase;
+    if(f.resultStride)r[0x4150]=f.resultStride;
+    r[0x4904]=0x103c0c;r[0x4910]=0x3c00;
+    if(f.resultDma) {
+        r[0x5100]=0x010000f1|index<<16;r[0x5108]=r[0x510c]=0;
+        r[0x5114]=f.resultDmaStride;r[0x5138]=f.resultDmaMode;
+    }
     task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
-    record(task,{4,8,12});record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});
-    record(task,{0x4d0c});record(task,{0x4d6c});record(task,{0x4104,0x4108});
-    record(task,{0x4114,0x4124,0x4128,0x412c,0x4130,0x4134,0x4150});
-    record(task,{0x4500});record(task,{0x4d28,0x4d2c},taskBar(8));
-    record(task,{0x4d04},0x22000000);task.header[0]=U32(task.bytes.size()/4)<<16|index;
+    record(task,{4,8,12});
+    record(task,{0x14,0x18,0x1c,0x30,0x34,0x3c,0x4c});
+    if(tokens==1500&&channels==384)
+        record(task,{0x4104,0x4110,0x4114,0x4118,0x411c,0x4120});
+    else record(task,{0x4104,0x4110,0x4114});
+    if(f.resultBase==f.sourceBase)record(task,{0x4148,0x4150});
+    else if(f.resultStride)record(task,{0x4148,0x414c,0x4150});
+    else record(task,{0x4148,0x414c});
+    record(task,{0x4904,0x4910});
+    if(f.resultDma) {
+        record(task,{0x5114,0x5138});
+        record(task,{0x5108,0x510c},taskBar(3));
+        record(task,{0x5100},0x22000000);
+    }
+    task.header[0]=U32(task.bytes.size()/4)<<16|index;
     store(task.bytes,0,task.header[0]);return task;
 }
 
 Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
-                         U32 normalizationBase) {
+                         U32 normalizationBase,U32 sourceRow=0) {
     Task task;task.header={index,0,0x04000000,0,kDispatchLimitFinal,0,0,0,9};auto &r=task.registers;
     const U32 row=2*channels;r[0x5500]=0x80;r[4]=r[0x14]=channels;
     r[8]=r[0x18]=tokens;r[12]=r[0x1c]=1;r[0x34]=tokens;r[0x3c]=0x30;
     r[0x44]=9;r[0x48]=0x20;r[0x4c]=0;r[0x4104]=0x400100;r[0x4108]=0x142;
     // Identity gamma is a no-op.  Add only the packaged zero beta while the
     // full-program output writer materializes the normalized L2 view.
+    if(!sourceRow)sourceRow=row;
     r[0x4118]=row;r[0x4124]=normalizationBase;
-    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=row;
-    r[0x4148]=0x14a;r[0x414c]=normalizationBase+row+0x40;r[0x4500]=0x80000;
+    r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=sourceRow;
+    r[0x4148]=0x14a;r[0x414c]=normalizationBase+sourceRow+0x40;r[0x4500]=0x80000;
     r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;
     r[0x4d28]=2*channels;r[0x4d2c]=0;
     r[0x4d6c]=0x1002031;r[0x5100]=0x01000031|index<<16;
@@ -933,15 +968,14 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
         tasks.push_back(layerNormShortMiddleTask(1));
         tasks.push_back(layerNormShortMiddleTask(2));
     }
-    // The reduction prefix, normalization task and output writer share the
-    // measured producer base from the corresponding normalization-to-
-    // projection program.
-    const U32 normalizationBase=tokens==128 ? 0x33000u
-        : channels==384 ? 0x127380u : 1500u*32u;
-    tasks.push_back(layerNormNormalizeTask(
-        tokens,channels,U32(tasks.size()),normalizationBase));
+    // Preserve the measured normalization task and materialize the L2 result
+    // that its following projection consumes.  Source and result bases differ
+    // for both Whisper widths; treating the source as the normalized value
+    // caused the round-3 layout-looking failures.
+    const auto normalize=layerNormNormalizeFields(tokens,channels);
+    tasks.push_back(layerNormNormalizeTask(tokens,channels,U32(tasks.size())));
     tasks.push_back(layerNormOutputTask(
-        tokens,channels,U32(tasks.size()),normalizationBase));
+        tokens,channels,U32(tasks.size()),normalize.resultBase));
     for(Task &task:tasks) {
         program.task.resize((program.task.size()+15)&~std::size_t(15),0);
         program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
@@ -954,7 +988,11 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     program.constants.assign(std::size_t(channels)*4,0);
     for(U32 channel=0;channel<channels;++channel)
         program.constants[2*channel+1]=0x3c; // fp16 1.0, little endian
-    program.scratchAllocationBytes=0;program.formulaBuilt=true;
+    // The measured C=512 normalization task spills one natural tensor plane
+    // before its projection.  Retain that result edge even though the final
+    // output writer consumes the simultaneously resident L2 result.
+    program.scratchAllocationBytes=channels==512 ? std::uint64_t(tokens)*2*channels : 0;
+    program.formulaBuilt=true;
     const std::uint64_t row=2*channels,plane=row*tokens;
     program.inputs={{5,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)}};
     program.output={4,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)};
@@ -963,9 +1001,66 @@ TransformerLayerNormProgram encodeTransformerLayerNorm(U32 tokens,U32 channels) 
     // and are not portable to this isolated object.
     out.programRecordCount=0x10;
     out.programFormatCode=20;
-    out.scratchBytes=0;
+    out.scratchBytes=program.scratchAllocationBytes;
     out.revealedInputPrefix=true;
     out.revealedOutputBoundary=tokens==1500&&channels==384;
+    return out;
+}
+
+TransformerLayerNormProgram encodeTransformerLayerNormDump(
+    U32 tokens,U32 channels,LayerNormDumpStage stage) {
+    if(auto why=transformerLayerNormRefusal(tokens,channels);!why.empty())
+        throw std::invalid_argument(why);
+    TransformerLayerNormProgram out;auto &program=out.program;
+    program.task.assign(16,0);program.task[0]=1;
+    std::vector<Task> prefix;
+    if(tokens==1500) {
+        for(U32 index=0;index<4;++index)prefix.push_back(layerNormLongLoadTask(channels,index));
+        for(U32 index=4;index<8;++index)prefix.push_back(layerNormLongVarianceTask(channels,index));
+        prefix.push_back(layerNormLongReduceTask(channels));
+    } else {
+        prefix.push_back(layerNormShortLoadTask());
+        prefix.push_back(layerNormShortMiddleTask(1));
+        prefix.push_back(layerNormShortMiddleTask(2));
+    }
+    const auto normalize=layerNormNormalizeFields(tokens,channels);
+    const bool longForm=tokens==1500;
+    U32 keep=0,base=0,sourceRow=2*channels;
+    switch(stage) {
+    case LayerNormDumpStage::Mean:
+        keep=longForm?4:1;base=longForm?0:0x63000;sourceRow=16;break;
+    case LayerNormDumpStage::Centered:
+        keep=longForm?8:2;base=longForm?1500*32:0x63200;break;
+    case LayerNormDumpStage::Variance:
+        keep=longForm?8:2;base=longForm?1500*16:0x63100;sourceRow=16;break;
+    case LayerNormDumpStage::ReciprocalStdDev:
+        keep=U32(prefix.size());base=normalize.sourceBase;sourceRow=16;break;
+    case LayerNormDumpStage::Normalized:
+        keep=U32(prefix.size());
+        prefix.push_back(layerNormNormalizeTask(tokens,channels,U32(prefix.size())));
+        keep=U32(prefix.size());base=normalize.resultBase;break;
+    }
+    prefix.resize(keep);
+    prefix.push_back(layerNormOutputTask(tokens,channels,U32(prefix.size()),base,sourceRow));
+    for(Task &task:prefix) {
+        program.task.resize((program.task.size()+15)&~std::size_t(15),0);
+        program.task.insert(program.task.end(),task.bytes.begin(),task.bytes.end());
+    }
+    program.taskCount=U32(prefix.size());
+    program.firstTaskBytes=prefix.front().bytes.size();
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.constants.assign(std::size_t(channels)*4,0);
+    for(U32 channel=0;channel<channels;++channel)
+        program.constants[2*channel+1]=0x3c;
+    const bool spills=stage==LayerNormDumpStage::Normalized&&channels==512;
+    program.scratchAllocationBytes=spills?std::uint64_t(tokens)*2*channels:0;
+    program.formulaBuilt=true;
+    const std::uint64_t row=2*channels,plane=row*tokens;
+    program.inputs={{5,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)}};
+    program.output={4,{1,1,tokens,channels,plane,row},(plane+0x3fff)&~std::uint64_t(0x3fff)};
+    out.programRecordCount=0x10;out.programFormatCode=20;
+    out.scratchBytes=program.scratchAllocationBytes;
+    out.revealedInputPrefix=true;out.revealedOutputBoundary=false;
     return out;
 }
 
