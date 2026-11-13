@@ -43,6 +43,52 @@ GROUPS = (
     ("Common", (0x0000, 0x0058)),
     ("ResultDMA", (0x5100, 0x5150)),
 )
+FIELD_PROBES = {
+    "exp": (
+        ("l2-input-plane-stride", 0x4118),
+        ("l2-input-batch-stride", 0x411c),
+        ("l2-input-surface-span", 0x4120),
+        ("l2-output-tile-base", 0x414c),
+        ("l2-output-row-stride", 0x4150),
+        ("l2-output-plane-stride", 0x4154),
+        ("l2-output-batch-stride", 0x4158),
+        ("l2-output-surface-span", 0x415c),
+        ("common-resident-layout", 0x0030),
+        ("common-tile-or-partial-base", 0x0034),
+        ("common-kernel-or-output-base", 0x003c),
+        ("common-tile-count", 0x0040),
+    ),
+    "reduce-max": (
+        ("other-reduction-selector", 0x4500),
+        ("source-row-stride", 0x4d18),
+        ("source-plane-stride", 0x4d1c),
+        ("source-batch-span", 0x4d24),
+        ("result-row-stride", 0x5110),
+        ("result-plane-stride", 0x5114),
+        ("result-batch-span", 0x511c),
+        ("common-height", 0x0008),
+        ("common-channels", 0x000c),
+        ("common-output-width", 0x0014),
+        ("common-output-height", 0x0018),
+        ("common-output-channels", 0x001c),
+        ("common-reduction-axis", 0x0024),
+        ("common-tile-or-partial-base", 0x0034),
+        ("common-kernel-or-output-base", 0x003c),
+        ("common-tile-count", 0x0040),
+        ("common-schedule-class", 0x0044),
+        ("common-surface-limit", 0x004c),
+    ),
+}
+HEADER_NAMES = {
+    1: "execution-cycles",
+    2: "output-record-format",
+    3: "extended-header",
+    4: "dispatch-mask-class-format",
+    5: "schedule-hint-0",
+    6: "schedule-hint-1",
+    7: "dependencies",
+    8: "task-control",
+}
 # Public linear-task grammar widths: 11 size bits, 15 register-base bits,
 # and the low 16 bits of header word zero for the task identifier.
 TASK_WORD_COUNT_MASK = (1 << 11) - 1
@@ -307,6 +353,185 @@ def morph(old: dict, current: dict, selected: set[str]) -> bytes:
     return result
 
 
+def install_task_stream(container: dict, kernel_source: dict, stream: bytes,
+                        relocations: list[tuple[int, int]],
+                        record_count: int) -> bytes:
+    """Install a composed task stream in a compiler-produced container."""
+    image = {"data": bytearray(container["data"]),
+             "sections": copy.deepcopy(container["sections"]),
+             "program": container["program"]}
+    text = image["sections"][(b"__TEXT", b"__text")]
+    later_offsets = [section["offset"] for section in image["sections"].values()
+                     if section["offset"] > text["offset"]]
+    capacity_end = min(later_offsets)
+    if text["offset"] + len(stream) > capacity_end:
+        raise ValueError("composed task records do not fit before the next section")
+    image["data"][text["offset"]:capacity_end] = bytes(
+        capacity_end - text["offset"])
+    image["data"][text["offset"]:text["offset"] + len(stream)] = stream
+    struct.pack_into("<Q", image["data"], text["size_field"], len(stream))
+    put32(image["data"], image["program"] + 0x824, len(stream) // 4)
+    put32(image["data"], image["program"] + 0x860, record_count)
+
+    if len(relocations) > text["nreloc"]:
+        raise ValueError("composed task needs more relocation slots")
+    for index in range(max(text["nreloc"], len(relocations))):
+        struct.pack_into("<2I", image["data"], text["reloff"] + index * 8, 0, 0)
+    for index, (patch, info) in enumerate(relocations):
+        struct.pack_into("<2I", image["data"], text["reloff"] + index * 8,
+                         patch, info)
+    put32(image["data"], text["nreloc_field"], len(relocations))
+
+    key = (b"__KERN_0", b"__kern_0")
+    kernel = image["sections"].get(key)
+    source_kernel = section_bytes(kernel_source, key)
+    if kernel and source_kernel:
+        if len(source_kernel) != kernel["size"]:
+            raise ValueError("constant regions have different sizes")
+        image["data"][kernel["offset"]:kernel["offset"] + kernel["size"]] = \
+            source_kernel
+    return bytes(image["data"])
+
+
+def old_relocations(parsed: dict) -> list[tuple[int, int]]:
+    return [(record["start"] + relative, info)
+            for record in parsed["records"]
+            for relative, info in record["relocations"]]
+
+
+def plain_records(values: list[tuple[int, int]]) -> list[bytes]:
+    """Encode ordinary contiguous records without inventing reset writes."""
+    result = []
+    run: list[tuple[int, int]] = []
+    for item in values:
+        if run and (item[0] != run[-1][0] + 4 or len(run) == 64):
+            header = run[0][0] // 4 | ((len(run) - 1) << 15)
+            result.append(struct.pack("<I", header) +
+                          b"".join(struct.pack("<I", value)
+                                   for _, value in run))
+            run = []
+        run.append(item)
+    if run:
+        header = run[0][0] // 4 | ((len(run) - 1) << 15)
+        result.append(struct.pack("<I", header) +
+                      b"".join(struct.pack("<I", value)
+                               for _, value in run))
+    return result
+
+
+def field_morph(container: dict, old: dict, probe: dict,
+                address: int) -> bytes:
+    """Switch one register field from old-main to the probe compiler output."""
+    old_stream = section_bytes(old, (b"__TEXT", b"__text"))
+    old_task, probe_task = decoded_task(old), decoded_task(probe)
+    old_value = old_task["registers"].get(address)
+    probe_value = probe_task["registers"].get(address)
+    if old_value == probe_value:
+        raise ValueError(f"field 0x{address:x} does not differ")
+    target_group = group_for(address)
+    result = bytearray(old_stream[:16 + 9 * 4])
+    relocations: list[tuple[int, int]] = []
+    record_count = 0
+    inserted = False
+
+    def append_raw(raw: bytes, record: dict | None = None) -> None:
+        nonlocal record_count
+        start = len(result)
+        result.extend(raw)
+        if record:
+            relocations.extend((start + relative, info)
+                               for relative, info in record["relocations"])
+        record_count += 1
+
+    for index, record in enumerate(old_task["records"]):
+        if address in record["addresses"]:
+            if probe_value is None:
+                if record["relocations"] or record["header"] & (1 << 29):
+                    raise ValueError("cannot remove a relocated field")
+                kept = [(field, old_task["registers"][field])
+                        for field in record["addresses"] if field != address]
+                for raw in plain_records(kept):
+                    append_raw(raw)
+            else:
+                raw = bytearray(record["raw"])
+                value_index = record["addresses"].index(address)
+                put32(raw, 4 + value_index * 4, probe_value)
+                append_raw(bytes(raw), record)
+            inserted = True
+            continue
+        append_raw(record["raw"], record)
+        next_group = (record_group(old_task["records"][index + 1])
+                      if index + 1 < len(old_task["records"]) else None)
+        if (not inserted and old_value is None and
+                record_group(record) == target_group and
+                next_group != target_group):
+            for raw in plain_records([(address, probe_value)]):
+                append_raw(raw)
+            inserted = True
+    if not inserted:
+        raise ValueError(f"no insertion point for field 0x{address:x}")
+    words = (len(result) - 16) // 4
+    put32(result, 16, (words << 16) |
+          (old_task["header"][0] & TASK_IDENTIFIER_MASK))
+    built = install_task_stream(container, old, bytes(result), relocations,
+                                record_count)
+    parsed = decoded_task(macho_bytes(built))
+    expected = dict(old_task["registers"])
+    if probe_value is None:
+        expected.pop(address)
+    else:
+        expected[address] = probe_value
+    if parsed["registers"] != expected or parsed["header"][1:] != old_task["header"][1:]:
+        raise ValueError("single-field morph failed its decoded-field gate")
+    return built
+
+
+def task_positions(stream: bytes) -> list[int]:
+    positions = []
+    position = 16
+    while position < len(stream):
+        if stream[position:position + 16] == bytes(16):
+            position += 16
+            continue
+        words = (u32(stream, position) >> 16) & TASK_WORD_COUNT_MASK
+        if words < 9 or position + words * 4 > len(stream):
+            raise ValueError("invalid multi-task stream")
+        positions.append(position)
+        end = position + words * 4
+        position = end if end == len(stream) else (end + 15) & ~15
+    return positions
+
+
+def header_field_morph(container: dict, old: dict, probe: dict,
+                       task_index: int, word_index: int) -> bytes:
+    if not 1 <= word_index <= 8:
+        raise ValueError("task word count/identifier is body-derived")
+    old_stream = bytearray(section_bytes(old, (b"__TEXT", b"__text")))
+    probe_stream = section_bytes(probe, (b"__TEXT", b"__text"))
+    old_positions, probe_positions = task_positions(old_stream), task_positions(probe_stream)
+    if len(old_positions) != len(probe_positions) or task_index >= len(old_positions):
+        raise ValueError("header probe task mismatch")
+    old_offset = old_positions[task_index] + word_index * 4
+    probe_offset = probe_positions[task_index] + word_index * 4
+    value = u32(probe_stream, probe_offset)
+    if u32(old_stream, old_offset) == value:
+        raise ValueError("header field does not differ")
+    put32(old_stream, old_offset, value)
+    parsed = decoded_task(old) if len(old_positions) == 1 else None
+    if parsed:
+        relocations = old_relocations(parsed)
+        record_count = len(parsed["records"])
+    else:
+        text = old["sections"][(b"__TEXT", b"__text")]
+        relocations = [struct.unpack_from("<2I", old["data"],
+                       text["reloff"] + index * 8)
+                       for index in range(text["nreloc"])]
+        # The container metadata already bounds this hint; retain it.
+        record_count = u32(old["data"], old["program"] + 0x860)
+    return install_task_stream(container, old, bytes(old_stream), relocations,
+                               record_count)
+
+
 def validate(validator: Path, path: Path) -> None:
     result = subprocess.run([sys.executable, str(validator), str(path)],
                             text=True, capture_output=True, timeout=60)
@@ -349,51 +574,66 @@ def main() -> int:
     parser.add_argument("source_kit", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--validator", type=Path, required=True)
+    parser.add_argument("--probe-kit", type=Path,
+        help="previous compiler kit whose failing field values are isolated")
     args = parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"output is not empty: {args.output}")
     args.output.mkdir(parents=True, exist_ok=True)
 
+    probe_kit = args.probe_kit or args.source_kit
     entries = []
+    cases = {}
     for case_name in CASES:
         source = args.source_kit / case_name
         base = read_base_manifest(source)
         old_image = macho(source / "old-main.anec")
         current_image = macho(source / "program.anec")
+        probe_image = macho(probe_kit / case_name / "program.anec")
         prefix = "exp" if case_name.startswith("exp-") else "reduce-max"
+        cases[prefix] = (case_name, source, base, old_image, current_image,
+                         probe_image)
+
+    # Both no-op gates are first.  No field probe counts unless c01 reproduces
+    # its exact 00 output bit-for-bit with zero DART faults.
+    for prefix in ("exp", "reduce-max"):
+        _, source, base, old_image, current_image, _ = cases[prefix]
         entries.append(write_case(args.output, f"{prefix}-00-old-main",
             bytes(old_image["data"]), source, base, args.validator,
             {"mode": "baseline", "source": "old-main"}))
+        program = morph(old_image, current_image, {"framing-noop"})
+        old_task = decoded_task(old_image)
+        framed_task = decoded_task(macho_bytes(program))
+        if (old_task["header"] != framed_task["header"] or
+                old_task["registers"] != framed_task["registers"]):
+            raise RuntimeError(f"{prefix}: c01 is not a decoded no-op")
+        entries.append(write_case(args.output,
+            f"{prefix}-c01-framing-noop", program, source, base,
+            args.validator,
+            {"mode": "gate", "gate": f"{prefix}-00-old-main",
+             "requiredOutput": "bit-exact"}))
 
-        cumulative = set()
-        for index, (group, _) in enumerate(GROUPS, 1):
-            cumulative.add(group)
-            program = morph(old_image, current_image, cumulative)
-            if index == 1:
-                old_task = decoded_task(old_image)
-                framed_task = decoded_task(macho_bytes(program))
-                if (old_task["header"] != framed_task["header"] or
-                        old_task["registers"] != framed_task["registers"]):
-                    raise RuntimeError(f"{case_name}: c01 is not a decoded no-op")
+    for prefix in ("exp", "reduce-max"):
+        _, source, base, old_image, current_image, probe_image = cases[prefix]
+        for index, (field_name, address) in enumerate(FIELD_PROBES[prefix], 1):
             entries.append(write_case(args.output,
-                f"{prefix}-c{index:02d}-{group.lower()}",
-                program,
+                f"{prefix}-f{index:02d}-{field_name}",
+                field_morph(current_image, old_image, probe_image, address),
                 source, base, args.validator,
-                {"mode": "cumulative", "step": index,
-                 "groups": sorted(cumulative),
-                 **({"gate": f"{prefix}-00-old-main",
-                     "requiredOutput": "bit-exact"} if index == 1 else {})}))
-        for index, (group, _) in enumerate(GROUPS, 1):
+                {"mode": "single-field", "step": index,
+                 "group": group_for(address), "field": field_name,
+                 "address": f"0x{address:04x}", "source": "rule-built-r4"}))
+        if prefix == "reduce-max":
             entries.append(write_case(args.output,
-                f"{prefix}-s{index:02d}-{group.lower()}",
-                morph(old_image, current_image, {group}),
+                "reduce-max-f19-task-control",
+                header_field_morph(current_image, old_image, probe_image, 0, 8),
                 source, base, args.validator,
-                {"mode": "single", "step": index, "groups": [group],
-                 **({"gate": f"{prefix}-00-old-main",
-                     "requiredOutput": "bit-exact"} if index == 1 else {})}))
+                {"mode": "single-field", "step": 19,
+                 "group": "task-header", "field": "task-control",
+                 "word": 8, "source": "rule-built-r4"}))
         entries.append(write_case(args.output, f"{prefix}-99-rule-built-exact",
             bytes(current_image["data"]), source, base, args.validator,
-            {"mode": "endpoint", "source": "rule-built-r4"}))
+            {"mode": "endpoint", "source": "rule-built-r5"}))
 
     for case_name in LOAD_ONLY_CASES:
         source = args.source_kit / case_name
@@ -401,41 +641,65 @@ def main() -> int:
         short = case_name.replace("reduce_", "reduce-").replace("-main-covered", "")
         old_path = source / "old-main.anec"
         if old_path.exists():
+            old_image = macho(old_path)
+            current_image = macho(source / "program.anec")
+            probe_image = macho(probe_kit / case_name / "program.anec")
             entries.append(write_case(args.output,
                 f"load-{short}-00-old-main", old_path.read_bytes(),
                 source, base, args.validator,
                 {"mode": "load-only", "source": "old-main",
                  "execute": False}))
+            old_stream = section_bytes(old_image, (b"__TEXT", b"__text"))
+            probe_stream = section_bytes(probe_image, (b"__TEXT", b"__text"))
+            old_positions = task_positions(old_stream)
+            probe_positions = task_positions(probe_stream)
+            for task_index, (old_position, probe_position) in enumerate(
+                    zip(old_positions, probe_positions)):
+                for word_index, field_name in HEADER_NAMES.items():
+                    if (u32(old_stream, old_position + word_index * 4) ==
+                            u32(probe_stream, probe_position + word_index * 4)):
+                        continue
+                    name = (f"load-{short}-t{task_index}-h{word_index}-"
+                            f"{field_name}")
+                    entries.append(write_case(args.output, name,
+                        header_field_morph(current_image, old_image, probe_image,
+                                           task_index, word_index),
+                        source, base, args.validator,
+                        {"mode": "load-only-single-header-field",
+                         "source": "rule-built-r4", "task": task_index,
+                         "word": word_index, "field": field_name,
+                         "execute": False}))
         current_path = source / "program.anec"
         entries.append(write_case(args.output,
             f"load-{short}-99-rule-built-exact", current_path.read_bytes(),
             source, base, args.validator,
-            {"mode": "load-only", "source": "rule-built-r4",
+            {"mode": "load-only", "source": "rule-built-r5",
              "execute": False}))
 
     (args.output / "cases.json").write_text(json.dumps(entries, indent=2) + "\n")
-    readme = """# H16G LUT/reduce one-field-group morph kit
+    readme = """# H16G LUT/reduce one-field morph kit
 
-This private kit is composed only from our old-main and rule-built compiler
-outputs. Run one case per boot, smallest/ordered first, and reboot after every
-LOAD or EXECUTE failure. `cNN` cases are cumulative; `sNN` cases switch only
-the named group. `00` and `99` are the exact input objects.
+This private kit is composed only from our old-main, r4 rule-built, and r5
+rule-built compiler outputs. Run one case per boot, smallest/ordered first,
+and recover after every LOAD or EXECUTE failure. `fNN` cases switch exactly
+one named r4 field into the old-main task. `00` and `99` are exact old-main
+and fixed r5 endpoints.
 
-`c01-framing-noop` and `s01-framing-noop` retain the exact old-main task
+`c01-framing-noop` retains the exact old-main task
 header, records, field presence, values, BAR flags and relocation target in a
 roomier container. Their decoded fields are checked equal to `00` while the
 kit is built. On device, c01 must reproduce 00's output bit-exactly with zero
 DART faults before any later morph result counts. Stop the ladder if it does
 not. No absent-side register is ever materialized as an explicit zero write.
 
-The order is least likely to wedge first. Constant bytes affect LUT accuracy,
-not task scheduling. Store is unchanged in both observed one-task failures.
-Task header, Other, Kernel/Source/NE then test data-path setup. L2 and Common
-carry the largest geometry/allocation deltas. ResultDMA remains last.
+Only the r4 failing groups are split: exp L2 and Common; reduction task
+control, Other, SourceDMA, ResultDMA and Common. Wrong-output fields precede
+known hang fields. Every case carries its field name and register address.
 
-The `load-*` cases cover all axis-2 LOAD-timeout shapes and operations. Their
-manifest says `execute: false`: load and immediately unload them; do not issue
-EXECUTE in that phase.
+The `load-*` cases cover all axis-2 LOAD-timeout shapes and operations. Where
+an old-main object exists, each task-header word that differed in r4 is
+switched separately on the old-main task body. Their manifests say
+`execute: false`: load and immediately unload; do not issue EXECUTE.
 """
     (args.output / "README.md").write_text(readme)
     sums = []

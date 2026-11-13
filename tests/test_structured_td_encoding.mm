@@ -315,6 +315,20 @@ static NSUInteger linearTaskCount(NSData *data, BOOL *headersValid) {
     return count;
 }
 
+static NSArray<NSNumber *> *linearTaskControls(NSData *data) {
+    NSMutableArray<NSNumber *> *controls=[NSMutableArray array];
+    NSUInteger position=16;
+    while(position<data.length) {
+        position=(position+15)&~(NSUInteger)15;
+        if(position==data.length)break;
+        NSUInteger words=word(data,position)>>16;
+        if(words<9||position+words*4>data.length)return @[];
+        [controls addObject:@(word(data,position+32))];
+        position+=words*4;
+    }
+    return controls;
+}
+
 static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
     // 192 and 320 were not among the captured programs used by the old
     // position-selected encoder. They exercise the common constructor.
@@ -380,6 +394,18 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
            expProgram.kernelRelocationOffsets[0].unsignedIntegerValue==
                kernelBaseOffset,
            @"rule-built KernelDMA relocates the named lookup-table base");
+    std::size_t l2InputPlaneOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x4118);
+    std::size_t l2OutputBaseOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x414c);
+    std::size_t l2OutputRowOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x4150);
+    expect(l2InputPlaneOffset!=SIZE_MAX && l2OutputBaseOffset!=SIZE_MAX &&
+           word(expProgram.data,l2InputPlaneOffset)==256 &&
+           word(expProgram.data,l2OutputBaseOffset)==
+               ane::h16::rule::fields::unaryOutputTileBase() &&
+           l2OutputRowOffset==SIZE_MAX,
+           @"unary L2 fields describe tile strides instead of whole surfaces");
     error = nil;
     H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
         inputShape:@[@1,@1,@192,@192] error:&error];
@@ -438,6 +464,33 @@ static void testReductionPacketsAreRuleBuilt(void) {
            height.outputBatchStrideBytes == 448 &&
            height.outputStorageByteLength == 448,
            @"height reduction derives output storage without a shape table");
+    H16GReduceEncoding *widthMax = [H16GReduceEncoder
+        encodeOperationName:@"reduce_max" inputShape:@[@1,@1,@64,@64]
+        axis:3 error:&error];
+    NSData *widthPacket=widthMax.tdProgram.data;
+    const auto fieldOffset=[&](uint32_t address) {
+        return ane::h16::rule::registerValueOffset(
+            (const uint8_t *)widthPacket.bytes,widthPacket.length,address);
+    };
+    expect([linearTaskControls(widthPacket) isEqualToArray:
+               @[@(ane::h16::rule::fields::taskControl(0,true))]] &&
+           fieldOffset(0x4500)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x4500))==2 &&
+           fieldOffset(0x4d18)==SIZE_MAX && fieldOffset(0x4d24)==SIZE_MAX &&
+           fieldOffset(0x4d1c)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x4d1c))==128 &&
+           fieldOffset(0x5110)==SIZE_MAX && fieldOffset(0x511c)==SIZE_MAX &&
+           fieldOffset(0x5114)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x5114))==64,
+           @"direct width-max uses its phase engine set and contiguous DMA geometry");
+    H16GReduceEncoding *heightMax = [H16GReduceEncoder
+        encodeOperationName:@"reduce_max" inputShape:@[@1,@32,@64,@16]
+        axis:2 error:&error];
+    expect([linearTaskControls(heightMax.tdProgram.data) isEqualToArray:
+               @[@(ane::h16::rule::fields::taskControl(5,false)),
+                 @(ane::h16::rule::fields::taskControl(0,false)),
+                 @(ane::h16::rule::fields::taskControl(4,true))]],
+           @"height reduction selects reorder, partial, and store engine sets");
     expect([H16GReduceEncoder encodeOperationName:@"reduce_sum"
         inputShape:@[@1,@1,@8,@8] axis:1 error:&error] == nil && error != nil,
         @"unit reduction axes fail closed");

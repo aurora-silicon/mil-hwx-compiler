@@ -46,6 +46,13 @@ constexpr std::uint32_t l2Transfer(std::uint32_t cacheHint,
            (dependencyClass << 4) | format;
 }
 
+// Standalone unary tasks stage one output tile immediately after the input
+// tile in local storage.  This is an L2 byte offset, not a process address or
+// a whole-surface allocation.
+constexpr std::uint32_t unaryOutputTileBase() {
+    return std::uint32_t(1) << 12;
+}
+
 // NE input format: enable, unary dependency class, and fp16 element format.
 constexpr std::uint32_t neuralInput(bool enable = true) {
     return (enable ? std::uint32_t(1) << 16 : 0) |

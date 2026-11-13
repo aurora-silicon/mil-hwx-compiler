@@ -85,6 +85,12 @@ static NSUInteger alignUp(NSUInteger value, NSUInteger alignment) {
     return (value + alignment - 1) / alignment * alignment;
 }
 
+static uint32_t nextPowerOfTwo(uint32_t value) {
+    uint32_t result=1;
+    while(result<value) result<<=1;
+    return result;
+}
+
 static void setError(NSError **error, NSString *message) {
     if (error) *error = [NSError errorWithDomain:H16GLUTEncoderErrorDomain
         code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
@@ -116,6 +122,10 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     uint64_t elements = (uint64_t)size * size;
     uint64_t surfaceBytes = elements * sizeof(uint16_t);
     uint32_t rowBytes = (uint32_t)(size * sizeof(uint16_t));
+    // L2 walks one hardware tile at a time.  The row is power-of-two padded,
+    // but a tile never exposes more than 256 fp16 lanes; whole-surface byte
+    // counts here make every 32nd row bypass the unary unit.
+    uint32_t l2RowBytes=std::min(nextPowerOfTwo(rowBytes),uint32_t(512));
     constexpr uint32_t allocationPageBytes=uint32_t(1)<<14;
     constexpr uint32_t tableBytes=128;
     constexpr uint32_t tableAlignment=64;
@@ -151,15 +161,12 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     registers[0x004c]=surfaceLimit(1u << 20);
     registers[0x4104]=l2Transfer(5,7,2);
     registers[0x4108]=l2Transfer(5,3,0);
-    registers[0x4114]=rowBytes;
-    registers[0x4118]=(uint32_t)surfaceBytes;
-    registers[0x411c]=(uint32_t)surfaceBytes;
-    registers[0x4120]=(uint32_t)surfaceBytes;
+    registers[0x4114]=l2RowBytes;
+    registers[0x4118]=l2RowBytes;
+    registers[0x411c]=l2RowBytes;
+    registers[0x4120]=l2RowBytes;
     registers[0x4148]=l2Transfer(5,7,10);
-    registers[0x4150]=rowBytes;
-    registers[0x4154]=(uint32_t)surfaceBytes;
-    registers[0x4158]=(uint32_t)surfaceBytes;
-    registers[0x415c]=(uint32_t)surfaceBytes;
+    registers[0x414c]=unaryOutputTileBase();
     registers[0x4900]=family == H16GUnaryPacketFamilyDirectReLU
         ? 0u : neuralInput();
     registers[0x4904]=unaryOpcode(operation,family);

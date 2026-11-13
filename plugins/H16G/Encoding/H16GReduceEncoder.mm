@@ -122,6 +122,26 @@ typedef struct {
     H16GReductionPhase phase;
 } H16GReductionTaskRule;
 
+static uint32_t reductionEngineCount(H16GReductionPhase phase,
+                                     H16GReductionKind kind,
+                                     NSUInteger axis,
+                                     bool writesExternal) {
+    // The task-control engine set describes the pipeline phase, not the NE
+    // opcode.  Direct/final tasks use no additional engine set, a reorder and
+    // an axis-1 partial use the vector set, and the axis-2 store has its own
+    // set.  A one-task channel maximum is the only external max partial.
+    switch(phase) {
+        case H16GReductionPhaseDirect:
+        case H16GReductionPhaseFinalize: return 0;
+        case H16GReductionPhaseReorder: return 5;
+        case H16GReductionPhaseStore: return 4;
+        case H16GReductionPhasePartial:
+            if(kind==H16GReductionKindMax && writesExternal) return 1;
+            return axis==1 ? 5 : 0;
+    }
+    return 0;
+}
+
 // One task may expose at most the Common.surface_limit resident bytes to L2.
 // Axis 1 is accumulated in channel chunks and finalized; axis 2 uses the
 // reorder/reduce/store pipeline because H is not contiguous in NCHW; axis 3
@@ -239,23 +259,39 @@ static H16GEncodedTDProgram *encodeReductionPacket(
         registers[0x4904]=reductionCommand((uint32_t)kind);
         registers[0x4910]=kind == H16GReductionKindMean
             ? floatToHalf(1.0f/(float)reductionLength) : floatToHalf(1.0f);
+        if (taskRule.phase==H16GReductionPhaseDirect &&
+            kind==H16GReductionKindMax)
+            registers[0x4500]=(uint32_t)kind;
         if (readsExternal) {
             registers[0x4d00]=endpoint(2);
             registers[0x4d08]=sourceDMAFlags();
             registers[0x4d10]=(uint32_t)(taskRule.channelStart*inputPlaneBytes);
             registers[0x4d14]=0;
-            registers[0x4d18]=(uint32_t)inputRowBytes;
-            registers[0x4d1c]=(uint32_t)inputPlaneBytes;
-            registers[0x4d24]=(uint32_t)localInputBytes;
+            if(axis==1) {
+                registers[0x4d18]=(uint32_t)inputRowBytes;
+                registers[0x4d1c]=(uint32_t)inputPlaneBytes;
+            } else if(axis==2) {
+                // Height reduction transposes row and plane traversal in its
+                // external reorder phase.
+                registers[0x4d18]=(uint32_t)inputPlaneBytes;
+                registers[0x4d1c]=(uint32_t)inputRowBytes;
+            } else {
+                // A contiguous width reduction advances one padded input row
+                // per output value and has no independent row stride.
+                registers[0x4d1c]=(uint32_t)inputRowBytes;
+            }
             registers[0x4d68]=surfaceDescriptor(0,2);
         }
         if (writesExternal) {
             registers[0x5100]=resultEndpoint(3);
             registers[0x5108]=(uint32_t)(taskRule.channelStart*outputPlaneBytes);
             registers[0x510c]=0;
-            registers[0x5110]=(uint32_t)outputRowBytes;
-            registers[0x5114]=(uint32_t)outputPlaneBytes;
-            registers[0x511c]=(uint32_t)outputBatchBytes;
+            if(taskRule.phase==H16GReductionPhaseFinalize)
+                registers[0x511c]=(uint32_t)outputRowBytes;
+            else if(axis==3)
+                registers[0x5114]=(uint32_t)outputRowBytes;
+            else
+                registers[0x5110]=(uint32_t)outputRowBytes;
             registers[0x5138]=surfaceDescriptor(3,2);
             registers[0x5900]=storeFlags();
             registers[0x5904]=storeGeometry();
@@ -264,7 +300,8 @@ static H16GEncodedTDProgram *encodeReductionPacket(
             registers[0x592c]=outputSurface();
         }
         tasks.push_back({std::move(registers),
-            kind==H16GReductionKindMax ? 1u : 5u,false});
+            reductionEngineCount(taskRule.phase,kind,axis,writesExternal),
+            false});
     }
     try {
         ane::h16::rule::Packet packet=ane::h16::rule::build(tasks);
