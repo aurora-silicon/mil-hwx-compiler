@@ -355,6 +355,15 @@ static BOOL parityPlan(ANEGraphOperation *operation, H14ParityPlan *plan) {
     NSString *name = operation.operationName;
     H14ParityPlan candidate{};
     ane::h14::ElementwiseShape shapes[2];
+    // The decoded elementwise envelope covers rank-4 batch-one surfaces
+    // only: the campaign showed batch-two and batch-eight runtime broadcasts
+    // flatten to task words that differ from Apple's, and rank-3 surfaces
+    // tile differently than their rank-4 same-extent twins.
+    NSArray<NSNumber *> *resultShape = operation.result.type.shape;
+    if (resultShape.count != 4 || resultShape[0].unsignedIntegerValue != 1)
+        return NO;
+    if (y && !constantValue(y) && (y.type.shape.count != 4 ||
+        y.type.shape[0].unsignedIntegerValue != 1)) return NO;
     NSUInteger shapeCount = parityShapes(operation.result, shapes);
     if (!shapeCount || !tensor(x, operation.result.type.shape)) return NO;
     BOOL leaky = [name isEqualToString:@"leaky_relu"];
@@ -727,6 +736,14 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     BOOL chain = sourceOperations.count > 1;
     BOOL chainSchedule = [schedule isEqualToString:@"chain"];
     ANEGraphOperation *lastOperation = sourceOperations.lastObject;
+    // Per-op scheduling is decoded for single-operation programs only: the
+    // campaign showed every multi-operation per-op compile diverges from its
+    // Apple oracle in task count or task words. Composed producer-relu chains
+    // (schedule=chain) carry the only decoded multi-operation fusions.
+    if (chain && !chainSchedule)
+        return reject(diagnostics,
+            @"H14 decodes multi-operation programs only as composed producer-relu chains; pass schedule=chain, or split the program",
+            lastOperation, @"h14.outside-parity-envelope");
     if (function.returnValues.count != 1 ||
         function.returnValues[0] != lastOperation.result)
         return reject(diagnostics,

@@ -5,7 +5,6 @@
   "chain_pair_mm_add_d256_s64",
   "chain_pair_mm_mm_d256_s64",
   "chain_serial_d256_s64",
-  "conv_k3_c64_n64_s8_bias0",
   "env_bcast_add_2x1024x1x1_runtime_2x1024x1x1",
   "env_bcast_add_2x512x1x1_runtime_2x512x1x1",
   "env_bcast_add_2x64x1x1_runtime_2x64x1x1",

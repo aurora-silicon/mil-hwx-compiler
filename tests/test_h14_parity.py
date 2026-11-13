@@ -30,7 +30,7 @@ MATVEC_ENCODER = "apple-parity-matvec"
 NORM_ENCODER = "apple-parity-norm"
 ELEMENTWISE_ENCODER = "h14-oracle-parity"
 CONV_ENCODER = "apple-parity-conv"
-CONV_FAMILIES = {"env_conv", "conv_probe"}
+CONV_FAMILIES = {"env_conv", "conv_probe", "conv", "convolution"}
 
 
 def encoder(oracle):
