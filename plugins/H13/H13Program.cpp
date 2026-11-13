@@ -4590,10 +4590,34 @@ enum class ResidualInputMorph {
     SourceGroup,
 };
 
+enum class ResidualAddMorph {
+    Coherent,
+    Round16Baseline,
+    DeadMainSourceGroup,
+    L2SecondEnable,
+    PipelineSecondEnable,
+    SecondDMAConfig,
+    ResultConfig,
+    MainL2Row,
+    MainSourceBase,
+    MainSourceRow,
+    MainSourcePlane,
+    MainSourceDepth,
+    SkipL2Row,
+    SkipSourceBase,
+    SkipSourceRow,
+    SkipSourcePlane,
+    SkipSourceDepth,
+    ResultRow,
+    ResultPlane,
+};
+
 ResidualInputMorph residualInputMorph(const std::string &boundary) {
     constexpr const char *prefix = "-morph-";
     const auto marker = boundary.find(prefix);
     if (marker == std::string::npos) return ResidualInputMorph::Fixed;
+    const auto base = boundary.substr(0, marker);
+    if (base == "block01-add-only") return ResidualInputMorph::Fixed;
     const auto name = boundary.substr(marker + std::strlen(prefix));
     if (name == "r14-baseline")
         return ResidualInputMorph::Round14Baseline;
@@ -4605,6 +4629,35 @@ ResidualInputMorph residualInputMorph(const std::string &boundary) {
     if (name == "source-group") return ResidualInputMorph::SourceGroup;
     throw std::invalid_argument(
         "h13.residual-boundary: unknown input morph " + name);
+}
+
+ResidualAddMorph residualAddMorph(const std::string &boundary) {
+    constexpr const char *prefix = "block01-add-only-morph-";
+    if (boundary.rfind(prefix, 0) != 0) return ResidualAddMorph::Coherent;
+    const auto name = boundary.substr(std::strlen(prefix));
+    if (name == "r16-baseline") return ResidualAddMorph::Round16Baseline;
+    if (name == "dead-main-source-group")
+        return ResidualAddMorph::DeadMainSourceGroup;
+    if (name == "l2-second-enable") return ResidualAddMorph::L2SecondEnable;
+    if (name == "pipeline-second-enable")
+        return ResidualAddMorph::PipelineSecondEnable;
+    if (name == "second-dma-config")
+        return ResidualAddMorph::SecondDMAConfig;
+    if (name == "result-config") return ResidualAddMorph::ResultConfig;
+    if (name == "main-l2-row") return ResidualAddMorph::MainL2Row;
+    if (name == "main-source-base") return ResidualAddMorph::MainSourceBase;
+    if (name == "main-source-row") return ResidualAddMorph::MainSourceRow;
+    if (name == "main-source-plane") return ResidualAddMorph::MainSourcePlane;
+    if (name == "main-source-depth") return ResidualAddMorph::MainSourceDepth;
+    if (name == "skip-l2-row") return ResidualAddMorph::SkipL2Row;
+    if (name == "skip-source-base") return ResidualAddMorph::SkipSourceBase;
+    if (name == "skip-source-row") return ResidualAddMorph::SkipSourceRow;
+    if (name == "skip-source-plane") return ResidualAddMorph::SkipSourcePlane;
+    if (name == "skip-source-depth") return ResidualAddMorph::SkipSourceDepth;
+    if (name == "result-row") return ResidualAddMorph::ResultRow;
+    if (name == "result-plane") return ResidualAddMorph::ResultPlane;
+    throw std::invalid_argument(
+        "h13.residual-boundary: unknown add morph " + name);
 }
 
 std::string residualInputMorphBoundary(const std::string &boundary) {
@@ -4807,12 +4860,18 @@ std::uint32_t residualPEColumnTileConfig(ResidualRole role,
 constexpr std::uint32_t residualPipelineConfig(ResidualRole role) {
     // Common Cfg on PE tasks is the executing pipeline form, distinct from
     // the convolution width form in the same register.  Bit 0 enables the
-    // pipeline and bits 6:3 select the pool, binary, or reduction stage.
+    // pipeline, bit 1 admits the binary second source, and bits 6:3 select
+    // the pool, binary, or reduction stage.  Every decoded two-source H13
+    // task uses 0x33 for add; leaving bit 1 clear makes the PE consume stale
+    // L2 contents instead of the routed shortcut.
     constexpr std::uint32_t pipelineEnable = 1u;
+    constexpr std::uint32_t binarySecondSourceEnable = 1u << 1;
     constexpr std::uint32_t stageShift = 3u;
     const std::uint32_t stage = role == ResidualRole::Pool ? 2u
         : role == ResidualRole::Add ? 6u : 10u;
-    return pipelineEnable | (stage << stageShift);
+    return pipelineEnable |
+           (role == ResidualRole::Add ? binarySecondSourceEnable : 0u) |
+           (stage << stageShift);
 }
 
 constexpr std::uint32_t disabledKernelDMAPath(std::uint32_t cacheHint) {
@@ -4971,6 +5030,26 @@ constexpr std::uint32_t residualDestinationFormat(bool external) {
 constexpr std::uint32_t residualSecondSourceDMAConfig() {
     // TileDMA second-source Cfg: dependency class 1, scratch hint class 9.
     return (9u << 8) | (3u << 12) | (1u << 16);
+}
+
+constexpr std::uint32_t residualSecondExternalSourceDMAConfig() {
+    // TileDMA source 2 uses the live two-source form decoded by every H13
+    // runtime binary task.  Unlike source 1's 0x33881, its bit 0 stays clear:
+    // the second path is admitted by Common and L2, not by duplicating the
+    // source-1 transfer-enable bit.
+    return residualSourceDMAConfig(true) & ~1u;
+}
+
+constexpr std::uint32_t residualL2SecondSourceEnable() {
+    // L2 SourceCfg bit 24 names the routed binary second operand.
+    return 1u << 24;
+}
+
+constexpr std::uint32_t residualL2PEExternalResultConfig() {
+    // The decoded PE binary result form: fp16 result, external traversal,
+    // output-DMA class, and the PE result policy.  Convolution and pool
+    // outputs keep their existing result configuration.
+    return 2u | (1u << 3) | (7u << 4) | (1u << 8) | (5u << 20);
 }
 
 constexpr std::uint32_t residualSecondSourceFormat() {
@@ -5734,7 +5813,7 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
     const std::uint32_t depth = external ? externalLayout.depth
         : plane * ((value.shape.channels + 7) / 8);
     putRegister(stream, at, bytes, 0x13804,
-                external ? residualSourceDMAConfig(true)
+                external ? residualSecondExternalSourceDMAConfig()
                          : residualSecondSourceDMAConfig());
     putRegister(stream, at, bytes, 0x1381c, value.scratchOffset);
     putRegister(stream, at, bytes, 0x13820, row);
@@ -5749,8 +5828,99 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
                 residualSecondSourceExtension());
 }
 
+void applyResidualAddMorph(std::vector<std::uint8_t> &stream,
+                           std::size_t at, std::size_t bytes,
+                           ResidualAddMorph morph) {
+    if (morph == ResidualAddMorph::Coherent) return;
+
+    // Every diagnostic starts at the byte-exact round-16 add.  The six
+    // coherent fixes are reverted first; each non-baseline object then
+    // changes exactly its named 32-bit word.  Geometry probes deliberately
+    // select the former 112-byte class (or one-row base displacement) to test
+    // whether hardware consumes a field that is already coherent in r16.
+    auto common = loadLE32(stream,
+        h13RegisterOffset(stream, at, bytes, 0x00034));
+    putRegister(stream, at, bytes, 0x00034, common & ~(1u << 1));
+    auto l2Source = loadLE32(stream,
+        h13RegisterOffset(stream, at, bytes, 0x04804));
+    putRegister(stream, at, bytes, 0x04804,
+                l2Source & ~residualL2SecondSourceEnable());
+    putRegister(stream, at, bytes, 0x04830,
+                residualL2ExternalResultConfig());
+    putRegister(stream, at, bytes, 0x13804, residualSourceDMAConfig(true));
+
+    constexpr std::uint32_t legacyRow = 112;
+    constexpr std::uint32_t fixedRow = 128;
+    constexpr std::uint32_t legacyPlane = legacyRow * 56;
+    constexpr std::uint32_t legacyDepth = legacyPlane * 256;
+    constexpr std::uint32_t round16L2Row = 112 * 256;
+    constexpr std::uint32_t peL2Row = 112 * 256 + 2 * 16;
+    putRegister(stream, at, bytes, 0x04810, round16L2Row);
+    putRegister(stream, at, bytes, 0x04824, round16L2Row);
+    switch (morph) {
+    case ResidualAddMorph::Coherent:
+    case ResidualAddMorph::Round16Baseline:
+        break;
+    case ResidualAddMorph::DeadMainSourceGroup:
+        putRegister(stream, at, bytes, 0x13818, legacyDepth);
+        break;
+    case ResidualAddMorph::L2SecondEnable:
+        putRegister(stream, at, bytes, 0x04804,
+                    l2Source | residualL2SecondSourceEnable());
+        break;
+    case ResidualAddMorph::PipelineSecondEnable:
+        putRegister(stream, at, bytes, 0x00034, common);
+        break;
+    case ResidualAddMorph::SecondDMAConfig:
+        putRegister(stream, at, bytes, 0x13804,
+                    residualSecondExternalSourceDMAConfig());
+        break;
+    case ResidualAddMorph::ResultConfig:
+        putRegister(stream, at, bytes, 0x04830,
+                    residualL2PEExternalResultConfig());
+        break;
+    case ResidualAddMorph::MainL2Row:
+        putRegister(stream, at, bytes, 0x04810, peL2Row);
+        break;
+    case ResidualAddMorph::MainSourceBase:
+        putRegister(stream, at, bytes, 0x13808, fixedRow);
+        break;
+    case ResidualAddMorph::MainSourceRow:
+        putRegister(stream, at, bytes, 0x1380c, legacyRow);
+        break;
+    case ResidualAddMorph::MainSourcePlane:
+        putRegister(stream, at, bytes, 0x13810, legacyPlane);
+        break;
+    case ResidualAddMorph::MainSourceDepth:
+        putRegister(stream, at, bytes, 0x13814, legacyDepth);
+        break;
+    case ResidualAddMorph::SkipL2Row:
+        putRegister(stream, at, bytes, 0x04824, peL2Row);
+        break;
+    case ResidualAddMorph::SkipSourceBase:
+        putRegister(stream, at, bytes, 0x1381c, fixedRow);
+        break;
+    case ResidualAddMorph::SkipSourceRow:
+        putRegister(stream, at, bytes, 0x13820, legacyRow);
+        break;
+    case ResidualAddMorph::SkipSourcePlane:
+        putRegister(stream, at, bytes, 0x13824, legacyPlane);
+        break;
+    case ResidualAddMorph::SkipSourceDepth:
+        putRegister(stream, at, bytes, 0x13828, legacyDepth);
+        break;
+    case ResidualAddMorph::ResultRow:
+        putRegister(stream, at, bytes, 0x17808, legacyRow);
+        break;
+    case ResidualAddMorph::ResultPlane:
+        putRegister(stream, at, bytes, 0x1780c, legacyPlane);
+        break;
+    }
+}
+
 void routeResidualTask(Program &program, PlannedResidualTask &planned,
-                       std::size_t at, bool last, ResidualInputMorph morph) {
+                       std::size_t at, bool last, ResidualInputMorph morph,
+                       ResidualAddMorph addMorph) {
     auto &task = planned.task;
     const auto bytes = task.encoded.firstTaskBytes;
     const bool initialAliasProducer = task.role == ResidualRole::Stem &&
@@ -5770,6 +5940,25 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
     if (planned.route.hasSecond)
         configureResidualSecond(program.task, at, bytes, planned.route.second,
                                 planned.route.secondStage);
+    if (task.role == ResidualRole::Add) {
+        // Binary adds require the Common/L2 second-source gates and the PE's
+        // 32-byte bank phase on both operands.  External-source setup uses
+        // the convolution DMA view (whose L2 row is unphased), so restore the
+        // consumer layouts here just as resident and scratch add operands do.
+        putRegister(program.task, at, bytes, 0x04810,
+                    planned.route.source.layout.words.row);
+        putRegister(program.task, at, bytes, 0x04824,
+                    planned.route.second.layout.words.row);
+        const auto l2SourceWord = h13RegisterOffset(
+            program.task, at, bytes, 0x04804);
+        storeLE32(program.task, l2SourceWord,
+                  loadLE32(program.task, l2SourceWord) |
+                      residualL2SecondSourceEnable());
+        if (planned.route.result.storage == ResidualStorage::External)
+            putRegister(program.task, at, bytes, 0x04830,
+                        residualL2PEExternalResultConfig());
+        applyResidualAddMorph(program.task, at, bytes, addMorph);
+    }
 
     // Every task closes its work with TSE+TSR.  The following task's L2 or
     // TileDMA dependency consumes that signal, serialising resident reads as
@@ -5822,6 +6011,7 @@ Program encodeResidualNetwork(
     const std::uint8_t *headBias, std::size_t headBiasBytes,
     const std::string &terminateAfter) {
     const auto inputMorph = residualInputMorph(terminateAfter);
+    const auto addMorph = residualAddMorph(terminateAfter);
     const auto inputBoundary = residualInputMorphBoundary(terminateAfter);
     if (convolutions.size() < 3)
         throw std::invalid_argument(
@@ -6383,7 +6573,7 @@ Program encodeResidualNetwork(
                               residualStemConvFlags());
             }
         }
-        routeResidualTask(program, entry, at, last, inputMorph);
+        routeResidualTask(program, entry, at, last, inputMorph, addMorph);
         if (entry.task.role == ResidualRole::Pool)
             applyResidualPoolSweep(program.task, at,
                                    entry.task.encoded.firstTaskBytes,

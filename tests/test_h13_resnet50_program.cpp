@@ -511,8 +511,13 @@ static void validateResidualPETasks(const ane::h13::Program &program) {
                     (ceilLog2(activeWidth) << columnClassShift)),
                "residual PE task has the wrong piece width or column class");
         const auto stage = role == "pool" ? 2u : role == "add+relu" ? 6u : 10u;
-        expect(reg(program, span, 0x00034) == (1u | (stage << 3)),
+        const auto secondSourceEnable = role == "add+relu" ? 1u << 1 : 0u;
+        expect(reg(program, span, 0x00034) ==
+                   (1u | secondSourceEnable | (stage << 3)),
                "residual PE task lost the executing pipeline config");
+        if (role == "add+relu")
+            expect(reg(program, span, 0x04804) & (1u << 24),
+                   "residual add L2 source does not admit operand two");
         expect(reg(program, span, 0x04818) == reg(program, span, 0x04814),
                "residual PE source group advance is not its depth advance");
         expect(reg(program, span, 0x1f800) == 0 &&
@@ -1000,8 +1005,10 @@ static void validateBlockSubRungs(
                ((selectors >> 6) & 31u) == 6u &&
                add.taskRecords.front().hasSecond,
            "add-only sub-rung does not bind both CPU-reference inputs");
-    expect(reg(add, addSpan, 0x04810) == reg(add, addSpan, 0x04814) &&
-               reg(add, addSpan, 0x04824) == reg(add, addSpan, 0x04828) &&
+    expect(reg(add, addSpan, 0x04810) - reg(add, addSpan, 0x04814) ==
+                   2u * 16u &&
+               reg(add, addSpan, 0x04824) - reg(add, addSpan, 0x04828) ==
+                   2u * 16u &&
                reg(add, addSpan, 0x04814) ==
                    reg(add, addSpan, 0x0480c) * reg(add, addSpan, 0x0000c) &&
                reg(add, addSpan, 0x04828) ==
@@ -1011,6 +1018,11 @@ static void validateBlockSubRungs(
                reg(add, addSpan, 0x13820) == add.inputs[1].nchw[5] &&
                reg(add, addSpan, 0x13824) == add.inputs[1].nchw[4],
            "add-only external sources lost their coherent DMA layouts");
+    expect(reg(add, addSpan, 0x00034) == 0x33u &&
+               reg(add, addSpan, 0x04804) == 0x01500172u &&
+               reg(add, addSpan, 0x04830) == 0x0050017au &&
+               reg(add, addSpan, 0x13804) == 0x00033880u,
+           "add-only lost the decoded H13 binary second-source gates");
 
     expect(rowOne.taskCount == 1 && rowOne.inputs.size() == 1 &&
                rowOne.inputs[0].nchw[2] == 1 &&
@@ -1070,6 +1082,44 @@ static void validateBlockSubRungs(
     };
     validateMorphs("block01-conv1-only");
     validateMorphs("block01-projection-only");
+
+    const auto addMorph = [&](const char *name) {
+        return encode((std::string("block01-add-only-morph-") + name).c_str());
+    };
+    const auto addBaseline = addMorph("r16-baseline");
+    const std::vector<std::pair<const char *, std::uint32_t>> addMorphs = {
+        {"dead-main-source-group", 0x13818},
+        {"l2-second-enable", 0x04804},
+        {"pipeline-second-enable", 0x00034},
+        {"second-dma-config", 0x13804},
+        {"result-config", 0x04830},
+        {"main-l2-row", 0x04810},
+        {"main-source-base", 0x13808},
+        {"main-source-row", 0x1380c},
+        {"main-source-plane", 0x13810},
+        {"main-source-depth", 0x13814},
+        {"skip-l2-row", 0x04824},
+        {"skip-source-base", 0x1381c},
+        {"skip-source-row", 0x13820},
+        {"skip-source-plane", 0x13824},
+        {"skip-source-depth", 0x13828},
+        {"result-row", 0x17808},
+        {"result-plane", 0x1780c},
+    };
+    for (const auto &[name, address] : addMorphs)
+        expectOnlyFirstTaskRegisterChanges(
+            addBaseline, addMorph(name), {address},
+            (std::string("add ") + name + " morph").c_str());
+    expectOnlyFirstTaskRegisterChanges(
+        addBaseline, add,
+        {0x00034, 0x04804, 0x04810, 0x04824, 0x04830, 0x13804},
+        "coherent binary second-source fix");
+    const auto baselineSpan = taskSpans(addBaseline).front();
+    expect(reg(addBaseline, baselineSpan, 0x00034) == 0x31u &&
+               reg(addBaseline, baselineSpan, 0x04804) == 0x00500172u &&
+               reg(addBaseline, baselineSpan, 0x04830) == 0x0000014au &&
+               reg(addBaseline, baselineSpan, 0x13804) == 0x00033881u,
+           "round-17 add morph baseline is not byte-exact round 16");
 }
 
 static std::uint32_t floatWord(float value) {
@@ -1291,8 +1341,9 @@ int main(int argc, char **argv) {
         const auto spans = taskSpans(*boundary);
         const auto terminal = spans.back();
         const auto fullTerminal = fullSpans.back();
-        expect(reg(*boundary, terminal, 0x04830) ==
-                   reg(full, fullTerminal, 0x04830) &&
+        const auto expectedL2Result = boundary == &block
+            ? 0x0050017au : reg(full, fullTerminal, 0x04830);
+        expect(reg(*boundary, terminal, 0x04830) == expectedL2Result &&
                reg(*boundary, terminal, 0x17800) ==
                    reg(full, fullTerminal, 0x17800) &&
                reg(*boundary, terminal, 0x17818) ==

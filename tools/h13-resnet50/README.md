@@ -54,6 +54,15 @@ source layout, the r14 and known-dead controls, every one-word conv1/projection
 morph, and the H=1 row probe. The generated kit publishes these under
 `morphs`, `morphOrder`, and `rowProbe`.
 
+tools/h13-resnet50/round17.py KIT --round16 ROUND16 audits the residual
+add's two inputs and result. It requires the r16 baseline plus every add
+diagnostic to differ in exactly one named register, checks the coherent
+binary-add gate values, and proves that the retained stem/pool/convolution
+sub-rungs and H=1 probe are byte-identical to round 16. The kit adds 18
+ordered morph-add entries: baseline, dead control, four configuration
+switches, the two L2 row fields, both operands' TileDMA geometry, and result
+row/plane probes.
+
 `sweep` starts from the measured round-12 control: Common `0x2c` low-nibble 4
 emits 16-column pieces, destination `+0x08` is the 128-byte row stride, and
 destination `+0x0c` is the plane stride. It tries low-nibble widths 5, 6, and

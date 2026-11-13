@@ -1,5 +1,11 @@
 # H13 residual linked ring
 
+Round 17 aligns the residual add with the decoded H13 binary second-source
+path: Common and L2 admit operand two, both branch rows carry the PE's 32-byte
+bank phase, source-2 uses its distinct DMA configuration, and a terminal PE
+result uses the PE external result class. See
+[the round-17 add field report](h13-resnet50-round17.md).
+
 Round 16 localizes the standalone residual-convolution row permutation to the
 external TileDMA source row class and adds single-word device morphs plus an
 H=1 probe. See [the round-16 field report](h13-resnet50-round16.md).

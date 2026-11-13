@@ -84,6 +84,45 @@ INPUT_MORPHS = [
      'Changes only TileDMA source row stride from 112 to the legal 128-byte row class.'),
 ]
 
+ADD_MORPHS = [
+    ('r16-baseline',
+     'Byte-exact round-16 add-only control: coherent physical surfaces, unphased L2 rows, and the four binary configuration words retain their r16 values.'),
+    ('dead-main-source-group',
+     'Dead-field control: only main source TileDMA group/extent takes the legacy 112-byte-row value; round 16 showed this word is not consumed.'),
+    ('l2-second-enable',
+     'Only L2 SourceCfg bit 24 changes to the decoded binary second-source form.'),
+    ('pipeline-second-enable',
+     'Only Common Cfg bit 1 changes, producing the decoded add pipeline word 0x33.'),
+    ('second-dma-config',
+     'Only TileDMA source-2 Cfg changes from source-1 0x33881 to decoded source-2 0x33880.'),
+    ('result-config',
+     'Only L2 ResultCfg changes from the r16 convolution-style value to decoded PE external result 0x50017a.'),
+    ('main-l2-row',
+     'Main/conv3 L2 row sensitivity probe: only the row takes the 32-byte PE bank phase.'),
+    ('skip-l2-row',
+     'Projected-skip L2 row sensitivity probe: only the row takes the 32-byte PE bank phase.'),
+    ('main-source-base',
+     'Main/conv3 TileDMA base sensitivity probe: only the base advances by one coherent 128-byte row.'),
+    ('main-source-row',
+     'Main/conv3 TileDMA row sensitivity probe: only row returns to the legacy 112-byte class.'),
+    ('main-source-plane',
+     'Main/conv3 TileDMA plane sensitivity probe: only plane returns to 6272 bytes.'),
+    ('main-source-depth',
+     'Main/conv3 TileDMA depth sensitivity probe: only depth returns to 1605632 bytes.'),
+    ('skip-source-base',
+     'Projected-skip TileDMA base sensitivity probe: only the base advances by one coherent 128-byte row.'),
+    ('skip-source-row',
+     'Projected-skip TileDMA row sensitivity probe: only row returns to the legacy 112-byte class.'),
+    ('skip-source-plane',
+     'Projected-skip TileDMA plane sensitivity probe: only plane returns to 6272 bytes.'),
+    ('skip-source-depth',
+     'Projected-skip TileDMA depth sensitivity probe: only depth returns to 1605632 bytes.'),
+    ('result-row',
+     'Add-result TileDMA row sensitivity probe: only row returns to the legacy 112-byte class.'),
+    ('result-plane',
+     'Add-result TileDMA plane sensitivity probe: only plane returns to 6272 bytes; run last among geometry probes.'),
+]
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -267,6 +306,24 @@ def main():
                 'judge': 'verify_cold.py',
             }
             morphs.append(entry)
+    for field, description in ADD_MORPHS:
+        name = f'morph-add-{field}'
+        directory = args.output / name
+        directory.mkdir()
+        morph_manifest, _ = compile_package(
+            args, directory / 'package',
+            f'block01-add-only-morph-{field}')
+        entry = materialize(
+            name, 'block01-add-only', morph_manifest, field, description,
+            input_values=[references['block01-main3'],
+                          references['projection01']])
+        entry['candidateField'] = field
+        entry['repeatability'] = {
+            'coldRuns': 3,
+            'comparison': 'uint16-bit-identical',
+            'judge': 'verify_cold.py',
+        }
+        morphs.append(entry)
 
     sweep = []
     for field, boundary, description in POOL_SWEEPS:
