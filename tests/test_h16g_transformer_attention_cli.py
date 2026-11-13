@@ -11,6 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(sys.argv[1]).resolve()
 VALIDATOR = Path(sys.argv[2]).resolve()
+CANDIDATE = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else None
 
 
 def typ(shape: tuple[int, ...]) -> str:
@@ -87,6 +88,8 @@ def main() -> None:
         "qkT_wbase": matmul("qkT", 1500, 8, 64),
         "pv_wtiny": matmul("pv", 1500, 6, 64),
         "softmax_wbase": softmax(1500, 8),
+        "softmax_wtiny": softmax(1500, 6),
+        "softmax_h1": softmax(1500, 1),
         "split_held_prediction": layout("split", 64, 2, 80),
         "qk_held_prediction": matmul("qk", 64, 2, 80),
         "pv_held_prediction": matmul("pv", 64, 2, 80),
@@ -108,14 +111,10 @@ def main() -> None:
             manifest = json.loads((output / "manifest.json").read_text())
             assert manifest["target"] == "H16G"
         refused_cases = {
-            "softmax_wtiny": (softmax(1500, 6),
+            "softmax_h12": (softmax(1500, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),
             "softmax_bert": (softmax(128, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),
-            "attn_wtiny": (fused(1500, 6, 64),
-                "h16g.encode.fused-attention-accuracy-unproved"),
-            "attn_wbase": (fused(1500, 8, 64),
-                "h16g.encode.fused-attention-accuracy-unproved"),
             "attn_held": (fused(64, 2, 80),
                 "h16g.encode.fused-attention-accuracy-unproved"),
         }
@@ -130,8 +129,43 @@ def main() -> None:
             assert refused.returncode != 0, name
             assert diagnostic in refused.stderr, (name, refused.stderr)
             assert not output.exists(), name
+        chain_count = 0
+        for name, heads in (("attn_chain_wtiny", 6),
+                            ("attn_chain_wbase", 8)):
+            images = []
+            for label, compiler in (("production", COMPILER),
+                                    ("candidate", CANDIDATE)):
+                if compiler is None:
+                    continue
+                source = root / f"{name}.mil"
+                source.write_text(fused(1500, heads, 64))
+                output = root / f"{name}-{label}"
+                result = subprocess.run([str(compiler), "--mil", str(source),
+                    "--model-root", str(root), "--target", "H16G",
+                    "--output", str(output)], capture_output=True, text=True,
+                    timeout=180)
+                assert result.returncode == 0, result.stdout + result.stderr
+                manifest = json.loads((output / "manifest.json").read_text())
+                assert manifest["dispatchPlan"] == [0, 1, 2]
+                assert [a["operations"] for a in manifest["artifacts"]] == [
+                    ["matmul", "mul"], ["softmax"], ["matmul"]]
+                assert len(manifest["sharedSurfaceIdentifiers"]) == 2
+                assert all((output / f"program-{i}.hwx").is_file()
+                           for i in range(3))
+                images.append([(output / f"program-{i}.hwx").read_bytes()
+                               for i in range(3)])
+                for i in range(3):
+                    validation = subprocess.run([sys.executable, str(VALIDATOR),
+                        str(output / f"program-{i}.hwx"), "--manifest",
+                        str(output / "manifest.json")], capture_output=True,
+                        text=True, timeout=60)
+                    assert validation.returncode == 0, (
+                        name + f"[{i}]: " + validation.stdout + validation.stderr)
+            if len(images) == 2:
+                assert images[0] == images[1], name
+            chain_count += 1
     print(f"H16G transformer attention CLI PASS: {len(cases)} validated, "
-          f"{len(refused_cases)} named refusals")
+          f"{len(refused_cases)} named refusals, {chain_count} qualified chains")
 
 
 if __name__ == "__main__":

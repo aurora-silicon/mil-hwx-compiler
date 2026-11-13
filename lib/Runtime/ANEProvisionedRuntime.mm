@@ -7,6 +7,8 @@
 #import <mach/mach_time.h>
 #import <objc/message.h>
 
+#include <cstring>
+
 NSErrorDomain const ANERuntimeErrorDomain = @"dev.maderix.ANERuntime";
 
 static double microsecondsBetween(uint64_t start, uint64_t stop) {
@@ -239,6 +241,7 @@ static BOOL validateDispatchBundle(
 @interface ANEIOSurfaceBuffer ()
 - (nullable instancetype)initWithBinding:(ANEHWXBinding *)binding
                                     error:(NSError **)error;
+- (BOOL)zeroAllocationWithError:(NSError **)error;
 @end
 
 @implementation ANEIOSurfaceBuffer {
@@ -272,6 +275,20 @@ static BOOL validateDispatchBundle(
 
 - (void)dealloc {
     if (_ioSurface) CFRelease(_ioSurface);
+}
+
+- (BOOL)zeroAllocationWithError:(NSError **)error {
+    IOReturn locked=IOSurfaceLock(_ioSurface,0,nullptr);
+    if(locked!=0) {
+        if(error) *error=runtimeError(ANERuntimeErrorSurfaceAllocation,
+            [NSString stringWithFormat:@"cannot clear IOSurface for '%@'",
+                                       self.identifier]);
+        return NO;
+    }
+    std::memset(IOSurfaceGetBaseAddress(_ioSurface),0,
+                IOSurfaceGetAllocSize(_ioSurface));
+    IOSurfaceUnlock(_ioSurface,0,nullptr);
+    return YES;
 }
 
 @end
@@ -506,6 +523,13 @@ static BOOL validateDispatchBundle(
         _surfaceBuffers[buffer.identifier] = buffer;
     for (ANEIOSurfaceBuffer *buffer in outputs)
         _surfaceBuffers[buffer.identifier] = buffer;
+    // Programs are allowed to expose a logical tensor inside a larger
+    // physical surface.  Clear shared intermediates before every dispatch
+    // sequence so padded planes and rows have deterministic zero semantics
+    // instead of retaining data from a previous evaluation.
+    for(NSString *identifier in _bundle.sharedSurfaceIdentifiers)
+        if(![_surfaceBuffers[identifier] zeroAllocationWithError:error])
+            return NO;
     Class requestClass = NSClassFromString(@"_ANERequest");
     Class surfaceClass = NSClassFromString(@"_ANEIOSurfaceObject");
     if (!requestClass || !surfaceClass)

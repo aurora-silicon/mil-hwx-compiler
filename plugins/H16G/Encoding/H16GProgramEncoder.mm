@@ -13,6 +13,7 @@
 #import "H16GLUTEncoder.h"
 #import "H16GMatmulEncoder.h"
 #import "H16GMixedTaskEncoder.h"
+#import "H16GProgramAssembler.h"
 #import "H16GRegularConvEncoder.h"
 #import "H16GReduceEncoder.h"
 #import "H16GTarget.h"
@@ -466,7 +467,22 @@ static BOOL fp16VectorIs(NSData *data,uint16_t expected) {
     return YES;
 }
 
-static BOOL standaloneLayerNormHardwareQualified(void) { return NO; }
+static BOOL transformerR2CandidateQualified(void) {
+#if defined(H16G_ENABLE_UNQUALIFIED_TRANSFORMER_R2)
+    return YES;
+#else
+    return NO;
+#endif
+}
+
+static BOOL standaloneLayerNormHardwareQualified(void) {
+    return transformerR2CandidateQualified();
+}
+static BOOL fusedAttentionChainHardwareQualified(void) {
+    // t-6549 qualified both three-program chains on J616s: H=6 and H=8
+    // completed without DART faults at relative L2 7.50e-4 and 7.49e-4.
+    return YES;
+}
 static BOOL fusedAttentionHardwareQualified(void) { return NO; }
 
 static ANEHWXArtifact *encodeTransformerLayerNormProgram(
@@ -514,7 +530,7 @@ static ANEHWXArtifact *encodeTransformerLayerNormProgram(
     if(!standaloneLayerNormHardwareQualified()) {
         emitError(diagnostics,
             @"h16g.encode.transformer-layer-norm-hardware-unproved",
-            @"standalone H16G layer_norm is disabled: BERT produced a constant output and the S=1500 form wedged EXECUTE on J616s",
+            @"standalone H16G layer_norm remains disabled: the identity-affine output boundary has not completed numerical J616s qualification",
             normalization);
         return nil;
     }
@@ -1927,16 +1943,21 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
     NSUInteger tokens=shape[2].unsignedIntegerValue;
     if (shape[0].unsignedIntegerValue!=1 ||
         shape[3].unsignedIntegerValue!=tokens) return nil;
-    if (tokens!=1500 || heads!=8) {
+    // Last-axis softmax normalizes each row on its own, so the heads are
+    // independent planes. The S=1500 program is proven for eight planes; a
+    // tensor with fewer heads runs as that program over its first planes and
+    // the trailing planes are zero padding whose results are discarded.
+    const NSUInteger programHeads=8;
+    if (tokens!=1500 || heads==0 || heads>programHeads) {
         emitError(diagnostics,
             @"h16g.encode.transformer-softmax-hardware-unproved",
-            @"standalone H16G softmax is enabled only for the measured S=1500, H=8 form; H=6 and other predictions are unsafe",
+            @"standalone H16G softmax is enabled only for S=1500 with at most eight heads (run as the measured eight-plane program)",
             output);
         return nil;
     }
     ane::h16::TransformerAttentionProgram encoded;
     try {
-        encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)heads);
+        encoded=ane::h16::encodeAttentionSoftmax((uint32_t)tokens,(uint32_t)programHeads);
     } catch (const std::exception &exception) {
         emitError(diagnostics,@"h16g.encode.transformer-softmax-fields",
             [NSString stringWithUTF8String:exception.what()],output);return nil;
@@ -1949,16 +1970,17 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
         return nil;
     }
     const NSUInteger row=alignUp(2*tokens,64),plane=tokens*row;
-    const NSUInteger storage=heads*plane,logical=tensorBytes(input.type);
+    const NSUInteger storage=programHeads*plane,logical=tensorBytes(input.type);
+    NSArray<NSNumber *> *programShape=@[@1,@(programHeads),@(tokens),@(tokens)];
     NSArray<HWXObjectBinding *> *objectBindings=@[
         [[HWXObjectBinding alloc]initWithSymbol:input.name shortName:input.name
             role:HWXObjectBindingRoleInput elementType:input.type.elementType
-            shape:shape rowStrideBytes:row planeStrideBytes:plane
+            shape:programShape rowStrideBytes:row planeStrideBytes:plane
             batchStrideBytes:storage storageByteLength:storage],
         [[HWXObjectBinding alloc]
             initWithSymbol:[output.identifier stringByAppendingString:@"@output"]
             shortName:output.identifier role:HWXObjectBindingRoleOutput
-            elementType:output.outputType.elementType shape:shape
+            elementType:output.outputType.elementType shape:programShape
             rowStrideBytes:row planeStrideBytes:plane
             batchStrideBytes:storage storageByteLength:storage],
     ];
@@ -1994,6 +2016,247 @@ static ANEHWXArtifact *encodeTransformerSoftmaxProgram(
     return [[ANEHWXArtifact alloc]initWithImage:image bindings:bindings];
 }
 
+static ANEHWXArtifact *attentionChainArtifact(
+    const ane::h16::TransformerAttentionProgram &encoded, NSData *constants,
+    NSArray<HWXObjectBinding *> *objectBindings,
+    NSArray<ANEHWXBinding *> *runtimeBindings, NSArray<NSString *> *operations,
+    NSString *diagnosticCode, ANEOperationNode *node,
+    ANEDiagnosticEngine *diagnostics) {
+    NSData *td=[NSData dataWithBytes:encoded.program.task.data()
+        length:encoded.program.task.size()];
+    NSMutableArray<NSNumber *> *relocations=[NSMutableArray array];
+    for(std::size_t offset:encoded.program.kernelRelocations)
+        [relocations addObject:@(offset)];
+    HWXObjectProgramInfo *info=[[HWXObjectProgramInfo alloc]
+        initWithTaskCount:encoded.program.taskCount
+        recordCount:encoded.programRecordCount formatCode:encoded.programFormatCode
+        scratchByteLength:encoded.scratchBytes
+        scratchAllocationByteLength:alignUp(
+            encoded.program.scratchAllocationBytes,0x4000)
+        descriptorLayout:HWXProgramDescriptorLayoutScratchBackedMixed];
+    NSError *error=nil;
+    NSData *image=[HWXObjectWriter buildObjectWithTaskDescriptor:td
+        constantRegion:constants bindings:objectBindings
+        kernelRelocationOffsets:relocations programInfo:info error:&error];
+    if(!image) {
+        emitError(diagnostics,diagnosticCode,
+            error.localizedDescription ?: @"cannot construct attention-chain HWX",
+            node);
+        return nil;
+    }
+    return [[ANEHWXArtifact alloc]initWithImage:image
+        bindings:runtimeBindings operations:operations];
+}
+
+static H16GAssembledProgram *encodeProvenAttentionChainProgram(
+    ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
+    if(graph.sourceFunction.inputs.count!=3 || graph.outputValueNames.count!=1)
+        return nil;
+    ANEOperationNode *pv=nodeNamed(graph,graph.outputValueNames.firstObject);
+    if(![pv.operationName isEqualToString:@"matmul"]) return nil;
+    ANEOperationNode *qk=nil,*scale=nil,*softmax=nil;
+    for(ANEOperationNode *node in graph.nodes) {
+        if([node.operationName isEqualToString:@"matmul"] && node!=pv) qk=node;
+        if([node.sourceOperation.operationName isEqualToString:@"mul"])
+            scale=node;
+        if([node.sourceOperation.operationName isEqualToString:@"softmax"] &&
+           [node.identifier isEqualToString:
+                pv.sourceOperation.operands[@"x"].value.name])
+            softmax=node;
+    }
+    if(!qk || !scale || !softmax) return nil;
+    ANEGraphValue *q=qk.sourceOperation.operands[@"x"].value;
+    ANEGraphValue *k=qk.sourceOperation.operands[@"y"].value;
+    ANEGraphValue *probabilities=pv.sourceOperation.operands[@"x"].value;
+    ANEGraphValue *v=pv.sourceOperation.operands[@"y"].value;
+    if(!q || !k || !probabilities || !v) return nil;
+    NSArray<NSNumber *> *qs=q.type.shape,*ks=k.type.shape,*vs=v.type.shape;
+    NSArray<NSNumber *> *scoreShape=qk.outputType.shape;
+    if(q.type.elementType!=ANEElementTypeFP16 ||
+       k.type.elementType!=ANEElementTypeFP16 ||
+       v.type.elementType!=ANEElementTypeFP16 ||
+       pv.outputType.elementType!=ANEElementTypeFP16 || qs.count!=4 ||
+       ![qs isEqualToArray:vs] || scoreShape.count!=4) return nil;
+    const NSUInteger heads=qs[1].unsignedIntegerValue;
+    const NSUInteger tokens=qs[2].unsignedIntegerValue;
+    const NSUInteger headDimension=qs[3].unsignedIntegerValue;
+    NSArray<NSNumber *> *expectedK=@[@1,@(heads),@(headDimension),@(tokens)];
+    NSArray<NSNumber *> *expectedScores=@[@1,@(heads),@(tokens),@(tokens)];
+    if(tokens!=1500 || headDimension!=64 || (heads!=6 && heads!=8) ||
+       ![ks isEqualToArray:expectedK] ||
+       ![scoreShape isEqualToArray:expectedScores] ||
+       ![probabilities.type.shape isEqualToArray:expectedScores] ||
+       ![pv.outputType.shape isEqualToArray:qs]) return nil;
+    ANEGraphArgument *sx=scale.sourceOperation.operands[@"x"];
+    ANEGraphArgument *sy=scale.sourceOperation.operands[@"y"];
+    ANEGraphArgument *scalar=[sx.value.name isEqualToString:qk.identifier]
+        ? sy : ([sy.value.name isEqualToString:qk.identifier] ? sx : nil);
+    uint16_t scaleBits=0;
+    if(!scalar || !fp16ScalarFromArgument(graph,scalar,&scaleBits)) return nil;
+    if(!fusedAttentionChainHardwareQualified()) {
+        emitError(diagnostics,
+            @"h16g.encode.fused-attention-chain-hardware-unproved",
+            @"the H16G QK -> eight-plane softmax -> PV chain is structurally complete but awaits H=6/H=8 numerical J616s qualification",
+            pv);
+        return nil;
+    }
+
+    const NSUInteger programHeads=8;
+    const NSUInteger headRow=2*headDimension;
+    const NSUInteger headPlane=tokens*headRow;
+    const NSUInteger headStorage=heads*headPlane;
+    const NSUInteger scoreRow=alignUp(2*tokens,64);
+    const NSUInteger scorePlane=tokens*scoreRow;
+    const NSUInteger scoreLogical=heads*tokens*tokens*2;
+    const NSUInteger scoreStorage=programHeads*scorePlane;
+    const NSUInteger kPlane=scoreRow*headDimension;
+    const NSUInteger kStorage=heads*kPlane;
+    NSArray<NSNumber *> *paddedScores=@[@1,@(programHeads),@(tokens),@(tokens)];
+
+    ane::h16::TransformerAttentionProgram qkEncoded;
+    ane::h16::TransformerAttentionProgram softmaxEncoded;
+    ane::h16::TransformerAttentionProgram pvEncoded;
+    try {
+        qkEncoded=ane::h16::encodeAttentionMatmul((uint32_t)tokens,
+            (uint32_t)heads,(uint32_t)headDimension,
+            ane::h16::AttentionMatmul::QK,scaleBits);
+        softmaxEncoded=ane::h16::encodeAttentionSoftmax(
+            (uint32_t)tokens,(uint32_t)programHeads);
+        pvEncoded=ane::h16::encodeAttentionMatmul((uint32_t)tokens,
+            (uint32_t)heads,(uint32_t)headDimension,
+            ane::h16::AttentionMatmul::PV);
+    } catch(const std::exception &exception) {
+        emitError(diagnostics,@"h16g.encode.fused-attention-chain-fields",
+            [NSString stringWithUTF8String:exception.what()],pv);
+        return nil;
+    }
+    NSError *tableError=nil;
+    NSData *softmaxConstants=[H16GLUTEncoder
+        constantRegionForOperationName:@"exp" error:&tableError];
+    if(!softmaxConstants || softmaxConstants.length!=128) {
+        emitError(diagnostics,@"h16g.encode.fused-attention-chain-table",
+            tableError.localizedDescription ?:
+                @"attention exponential table is unavailable",softmax);
+        return nil;
+    }
+
+    NSString *scores=scale.identifier;
+    NSString *probabilityName=softmax.identifier;
+    NSArray<HWXObjectBinding *> *qkObject=@[
+        [[HWXObjectBinding alloc]initWithSymbol:q.name shortName:q.name
+            role:HWXObjectBindingRoleInput elementType:q.type.elementType shape:qs
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage storageByteLength:headStorage],
+        [[HWXObjectBinding alloc]initWithSymbol:k.name shortName:k.name
+            role:HWXObjectBindingRoleInput elementType:k.type.elementType shape:ks
+            rowStrideBytes:scoreRow planeStrideBytes:kPlane
+            batchStrideBytes:kStorage storageByteLength:kStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[scores stringByAppendingString:@"@output"]
+            shortName:scores role:HWXObjectBindingRoleOutput
+            elementType:ANEElementTypeFP16 shape:paddedScores
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage storageByteLength:scoreStorage],
+    ];
+    NSArray<ANEHWXBinding *> *qkBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:q.name role:ANESurfaceRoleInput
+            logicalByteLength:tensorBytes(q.type)
+            allocationByteLength:alignUp(headStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:k.name role:ANESurfaceRoleInput
+            logicalByteLength:tensorBytes(k.type)
+            allocationByteLength:alignUp(kStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:scoreRow planeStrideBytes:kPlane
+            batchStrideBytes:kStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:scores role:ANESurfaceRoleOutput
+            logicalByteLength:scoreLogical
+            allocationByteLength:alignUp(scoreStorage,0x4000) ioSurfaceIndex:2
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage],
+    ];
+    ANEHWXArtifact *qkArtifact=attentionChainArtifact(qkEncoded,[NSData data],
+        qkObject,qkBindings,@[@"matmul",@"mul"],
+        @"h16g.encode.fused-attention-chain-qk-object",qk,diagnostics);
+    if(!qkArtifact) return nil;
+
+    NSArray<HWXObjectBinding *> *softmaxObject=@[
+        [[HWXObjectBinding alloc]initWithSymbol:scores shortName:scores
+            role:HWXObjectBindingRoleInput elementType:ANEElementTypeFP16
+            shape:paddedScores rowStrideBytes:scoreRow
+            planeStrideBytes:scorePlane batchStrideBytes:scoreStorage
+            storageByteLength:scoreStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[probabilityName stringByAppendingString:@"@output"]
+            shortName:probabilityName role:HWXObjectBindingRoleOutput
+            elementType:ANEElementTypeFP16 shape:paddedScores
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage storageByteLength:scoreStorage],
+    ];
+    NSArray<ANEHWXBinding *> *softmaxBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:scores role:ANESurfaceRoleInput
+            logicalByteLength:scoreLogical
+            allocationByteLength:alignUp(scoreStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:probabilityName
+            role:ANESurfaceRoleOutput logicalByteLength:scoreLogical
+            allocationByteLength:alignUp(scoreStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage],
+    ];
+    ANEHWXArtifact *softmaxArtifact=attentionChainArtifact(softmaxEncoded,
+        softmaxConstants,softmaxObject,softmaxBindings,@[@"softmax"],
+        @"h16g.encode.fused-attention-chain-softmax-object",softmax,diagnostics);
+    if(!softmaxArtifact) return nil;
+
+    NSArray<HWXObjectBinding *> *pvObject=@[
+        [[HWXObjectBinding alloc]initWithSymbol:probabilityName
+            shortName:probabilityName role:HWXObjectBindingRoleInput
+            elementType:ANEElementTypeFP16 shape:paddedScores
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage storageByteLength:scoreStorage],
+        [[HWXObjectBinding alloc]initWithSymbol:v.name shortName:v.name
+            role:HWXObjectBindingRoleInput elementType:v.type.elementType shape:vs
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage storageByteLength:headStorage],
+        [[HWXObjectBinding alloc]
+            initWithSymbol:[pv.identifier stringByAppendingString:@"@output"]
+            shortName:pv.identifier role:HWXObjectBindingRoleOutput
+            elementType:pv.outputType.elementType shape:pv.outputType.shape
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage storageByteLength:headStorage],
+    ];
+    NSArray<ANEHWXBinding *> *pvBindings=@[
+        [[ANEHWXBinding alloc]initWithIdentifier:probabilityName
+            role:ANESurfaceRoleInput logicalByteLength:scoreLogical
+            allocationByteLength:alignUp(scoreStorage,0x4000) ioSurfaceIndex:0
+            rowStrideBytes:scoreRow planeStrideBytes:scorePlane
+            batchStrideBytes:scoreStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:v.name role:ANESurfaceRoleInput
+            logicalByteLength:tensorBytes(v.type)
+            allocationByteLength:alignUp(headStorage,0x4000) ioSurfaceIndex:1
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage],
+        [[ANEHWXBinding alloc]initWithIdentifier:pv.identifier
+            role:ANESurfaceRoleOutput logicalByteLength:tensorBytes(pv.outputType)
+            allocationByteLength:alignUp(headStorage,0x4000) ioSurfaceIndex:2
+            rowStrideBytes:headRow planeStrideBytes:headPlane
+            batchStrideBytes:headStorage],
+    ];
+    ANEHWXArtifact *pvArtifact=attentionChainArtifact(pvEncoded,[NSData data],
+        pvObject,pvBindings,@[@"matmul"],
+        @"h16g.encode.fused-attention-chain-pv-object",pv,diagnostics);
+    if(!pvArtifact) return nil;
+    return [[H16GAssembledProgram alloc]
+        initWithArtifacts:@[qkArtifact,softmaxArtifact,pvArtifact]
+        dispatchPlan:@[@0,@1,@2] compositionTrace:@[
+            @"qualified DRAM chain: scaled QK -> measured eight-plane softmax -> PV",
+            heads==6 ? @"H=6 score intermediates use two zero-padded physical planes"
+                     : @"H=8 score intermediates use all physical planes",
+        ]];
+}
+
 static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
     ANEOperationGraph *graph, ANEDiagnosticEngine *diagnostics) {
     if (graph.sourceFunction.inputs.count!=3 || graph.outputValueNames.count!=1)
@@ -2022,7 +2285,7 @@ static ANEHWXArtifact *encodeTransformerFusedAttentionProgram(
     if(!fusedAttentionHardwareQualified()) {
         emitError(diagnostics,
             @"h16g.encode.fused-attention-accuracy-unproved",
-            @"fused H16G attention is disabled: the resident PV path failed numerical device qualification",
+            @"resident single-program H16G attention remains disabled: H=6 completed on J616s but measured relative L2 1.12",
             output);
         return nil;
     }
@@ -2193,6 +2456,11 @@ static ANEHWXArtifact *encodeLayoutProgram(
                                   modelRoot:(NSURL *)modelRoot
                                 diagnostics:(ANEDiagnosticEngine *)diagnostics {
     return encodeResNet50Program(graph,modelRoot,diagnostics);
+}
++ (H16GAssembledProgram *)encodeProvenAttentionChainGraph:
+                               (ANEOperationGraph *)graph
+                               diagnostics:(ANEDiagnosticEngine *)diagnostics {
+    return encodeProvenAttentionChainProgram(graph,diagnostics);
 }
 + (ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
                         scheduled:(ANEScheduledGraph * _Nullable)scheduled

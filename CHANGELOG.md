@@ -4,10 +4,57 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: open the three-program fused-attention-chain qualification gate after
+  task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
+  7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are
+  unchanged; standalone layer normalization remains gated.
+- H16G: correct the qualification-only transformer candidates after the
+  round-2 J616s per-stage dump. Both independent QK head-half tasks now fold
+  the graph's fp16 score scale; previously the high half was exactly 64x too
+  large while device-P times V was correct. Standalone layer norm restores
+  the measured normalization task between its reduction prefix and zero-beta
+  output writer; removing that task produced BERT zeros, a Whisper-tiny hang,
+  and an unnormalized Whisper-base result. The task-header dispatch-limit
+  words are named fields. The layer-normalization qualification gate remains
+  closed.
+- H16G: replace the inaccurate resident fused-attention candidate with a
+  three-program DRAM chain: QK folds the graph's fp16 score scale, the
+  device-qualified eight-plane S=1500 softmax supplies H=6 zero padding, and
+  the device-qualified P*128/1/128 PV program writes the result. Shared
+  intermediates are zeroed before dispatch so physical padding is
+  deterministic. Standalone identity-affine layer norm now omits the
+  unproved gamma multiply and connects its measured normalization producer
+  directly to the zero-beta output boundary (superseded 4-task BERT and
+  10-task Whisper forms). Both forms remain behind explicit qualification
+  gates; a separate candidate compiler builds the five-case reviewer kit.
+- H16G: emit S=1500 last-axis softmax with one to eight heads as the measured
+  eight-plane program, with the unused trailing planes as zero padding. The
+  H=6 (Whisper-tiny) object is byte-identical to the H=8 one and matches a
+  float64 reference on a J616s (relative L2 5.5e-4). The predicted H=6
+  schedule is no longer emitted.
+- H14: add the rule-built native MobileNetV1 `linked-ring` schedule. It emits
+  28 packed tasks, native k3/s2 stem/depthwise coefficients, one interleave-8
+  scratch spill, then geometry-allocated 2 MiB L2 residency; resident roles
+  omit TileDMA records and coefficient BAR addends follow the concatenated
+  section allocator. The same rules compile synthetic 224 and 192 frames,
+  fused ReLU6, and a 35-program smallest-first M2 kit. Every task record is
+  constructed from named fields and geometry rules. The compact-task probe
+  now covers ring prefixes and the full ReLU program, with its padding minimum
+  passed through an explicit research-only compiler option.
 - H13/H14: fuse a single-consumer finite fp16 `clip` into formula-built
   convolutions with the lookup-table NE selector, duplicated per-lane bounds
   descriptor and generation-specific kernel-DMA framing. MobileNetV1 now
-  emits fused ReLU6 and compiles as a 45-task linked-L2 program.
+  emits fused ReLU6; H14's native ring keeps one task per layer.
+- H16G: repair the gated layer-normalization and fused-attention research
+  constructors without exposing them prematurely. Standalone layer norm now
+  keeps the captured serialized schedule and connects its affine/output tail
+  to the normalization prefix's measured L2 producer base instead of zero.
+  Fused attention now stages resident probabilities at the exact fp16 scale
+  128 into the second score plane and folds 1/128 into every PV head, matching
+  the device-qualified standalone PV numerical fix. Offline validation and
+  simulation cover the superseded 5/11-task normalization and heads+12 fused forms;
+  the named compiler refusals remain until a device run proves completion,
+  numerical agreement, and zero translation faults.
 - H16G: fail closed on the three transformer forms that did not pass J616s
   qualification. Standalone softmax now admits only the measured S=1500,
   H=8 form; H=6 is refused after its prefixes failed LOAD or hung and its

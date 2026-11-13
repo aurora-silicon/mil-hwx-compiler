@@ -676,7 +676,7 @@ static BOOL convSurface(ANEGraphValue *value, ane::h14::ElementwiseShape *shape)
 /// square kernels, unit dilations, `same` and `valid`, and the explicit `pad`
 /// vector only when it is all zeroes, which is what those two spellings emit.
 static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan,
-                           BOOL generic = NO) {
+                           BOOL generic = NO, BOOL nativeRing = NO) {
     if (![operation.operationName isEqualToString:@"conv"]) return NO;
     ANEGraphValue *x = operation.operands[@"x"].value;
     ANEGraphValue *weight = operation.operands[@"weight"].value;
@@ -739,8 +739,11 @@ static BOOL convParityPlan(ANEGraphOperation *operation, H14ConvPlan *plan,
     if (bias && (!fp16Tensor(bias) || bias.type.shape.count != 1 ||
                  bias.type.shape[0].unsignedIntValue !=
                      candidate.shape.output.channels)) return NO;
-    if (generic ? !ane::h14::convGenericRefusal(candidate.shape).empty()
-                : !ane::h14::supportsConvParity(candidate.shape)) return NO;
+    if (nativeRing
+            ? !ane::h14::convLinkedRingRefusal(candidate.shape).empty()
+            : (generic ? !ane::h14::convGenericRefusal(candidate.shape).empty()
+                       : !ane::h14::supportsConvParity(candidate.shape)))
+        return NO;
     *plan = candidate;
     return YES;
 }
@@ -841,6 +844,7 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
                 format:(NSString *)format
        outputDirectory:(NSURL *)directory
               schedule:(NSString *)schedule
+researchCompactTaskMinimumBytes:(NSString *)researchCompactTaskMinimumBytes
            diagnostics:(ANEDiagnosticEngine *)diagnostics
                  error:(NSError **)error {
     ParityTarget target{};
@@ -866,9 +870,10 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
     if (target.generation != ane::h14::Generation::H17 &&
         ![schedule isEqualToString:@"per-op"] &&
         (!h14 || (![schedule isEqualToString:@"chain"] &&
-                  ![schedule isEqualToString:@"linked"])))
+                  ![schedule isEqualToString:@"linked"] &&
+                  ![schedule isEqualToString:@"linked-ring"])))
         return reject(diagnostics, h14
-            ? @"H14 schedule must be 'per-op', 'chain', or 'linked'"
+            ? @"H14 schedule must be 'per-op', 'chain', 'linked', or 'linked-ring'"
             : [NSString stringWithFormat:@"%@ schedule must be 'per-op'",
                   target.name], nil, code(target, @"unsupported-schedule"));
     MILLexer *lexer = [[MILLexer alloc] initWithData:milData
@@ -920,12 +925,15 @@ static BOOL matvecPlan(ANEGraphOperation *operation, NSURL *modelRoot,
         H14ConvPlan plan{};
         if (conv && !convParityPlan(op, &plan)) unknownConv = YES;
     }
-    const BOOL linkedConv = [schedule isEqualToString:@"linked"];
+    const BOOL linkedRing = [schedule isEqualToString:@"linked-ring"];
+    const BOOL linkedConv = [schedule isEqualToString:@"linked"] || linkedRing;
     const char *forceGeneric = std::getenv("MILHWXC_H14_CONV_GENERIC");
     if (allConv && hasConv && (linkedConv || hasPostOperation || unknownConv ||
         (forceGeneric && std::string(forceGeneric) != "0")))
         return emitConvGraph(function, sourceOperations, modelRoot, directory,
-                             format, linkedConv, diagnostics, error);
+                             format, linkedConv, linkedRing,
+                             researchCompactTaskMinimumBytes,
+                             diagnostics, error);
     if (linkedConv)
         return reject(diagnostics, @"H14 linked scheduling requires a straight convolution chain",
                       nil, @"h14.linked-outside-envelope");

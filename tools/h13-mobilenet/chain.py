@@ -60,7 +60,8 @@ def chain_ref(x, layers, params, per_layer_round=True):
         outs.append(cur)
     return outs
 
-def compile_chain(milc, mil, root, out, schedule, generic=True):
+def compile_chain(milc, mil, root, out, schedule, generic=True,
+                  compiler_options=()):
     env = dict(os.environ)
     if generic:
         env['MILHWXC_H13_CONV_GENERIC'] = '1'
@@ -70,6 +71,7 @@ def compile_chain(milc, mil, root, out, schedule, generic=True):
     cmd = [milc, '--target', target, '--mil', mil, '--model-root', root, '--output', out]
     if schedule:
         cmd += ['--schedule', schedule]
+    cmd += list(compiler_options)
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode:
         raise RuntimeError(f'{schedule or "per-op"} compile failed: {r.stderr.strip()[-600:]}')

@@ -135,5 +135,6 @@ intermediates in L2 inside one program.
 - **L2-resident chaining across layers.** Later tasks would read the previous
   task's L2 result, but the L2 `0x4804`/`0x4830` source and result configs
   that make this work have no formula.
-- **H14 linked-L2 chaining** is not derived; its formula-built per-op and
-  DRAM-linked convolution paths do support the same fused clip descriptor.
+- **H14 general linked-L2 chaining** remains outside the envelope. The native
+  MobileNet `linked-ring` path is derived separately and supports the same
+  fused clip descriptor.

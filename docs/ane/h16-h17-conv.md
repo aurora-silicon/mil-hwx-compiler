@@ -97,6 +97,35 @@ at the endpoints only; task IDs, local chunk offsets, cumulative kernel bases,
 L2 bases and chain flags are rebuilt. These L2 forms stay a descriptor API;
 executable chains use the DRAM edges described below.
 
+## Wide surfaces: the denoise grid (H16G)
+
+A 2x2 space-to-depth grid of a 1080p luma frame is 960x540. Five standalone
+biased layers at that size have measured rows: 1x1 4->32, depthwise 3x3 C32,
+1x1 32->32, dense 3x3 32->32 and 1x1 32->16. Wide surfaces add four named
+schedule facts:
+
+- Source tile width (`tileWidth`): the source row holds this many pixels
+  (128, 104, 256, 104 and 64 for the five rows) instead of the full width.
+  Source stride, plane and result base follow from it with the existing
+  formulas.
+- Outputs per kernel chunk (`chunkOutputs`): the 32-output dense layers put
+  4 outputs in each chunk and the 16-output layer 8, so each group of outputs
+  repeats over 16*G/Cout consecutive chunks. Inside a chunk the bias row comes
+  first, then one row per input channel and tap holding the group's outputs.
+  The 4->32 layer keeps Cout/16 = 2.
+- Result rows (`resultRows`): the depthwise row places its result base after
+  TileHeight+1 input rows (273), not TileHeight+k-1.
+- Header window (`headerWindow`): only the dense 3x3 row sets the 0xfff800
+  bits of header word 4.
+
+Output channel count 16 is the reset value of `0x1c` and is not written.
+`tests/test_h16g_denoise_grid_parity.py` checks every register, the header
+(except ExeCycles), the tensors and the kernel section hash of all six layers
+against `research/oracles/h16/denoise_grid_*.json`, decoded from the macOS
+compiler's output for the same MIL and weights. On a J616s with Linux, each
+layer matches a CPU fp16 reference (relL2 8e-5 to 2e-4) and the six-layer
+DRAM chain runs a 960x540 frame in 3.8 ms of firmware time (relL2 6e-4).
+
 ## Parity and report corrections
 
 Every register (including omitted/default fields), packed record, task size,
