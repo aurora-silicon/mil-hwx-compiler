@@ -53,6 +53,23 @@ constexpr std::uint32_t unaryOutputTileBase() {
     return std::uint32_t(1) << 12;
 }
 
+// Table/direct unary tasks use seven groups of eight local completion tiles.
+// This is a scheduler count, not a count of allocation pages in the tensor.
+constexpr std::uint32_t unaryCompletionTileCount() {
+    return std::uint32_t(7) << 3;
+}
+
+// A producer advertises one dependency bit for every inter-task consumer
+// slot.  All producers in the same linear pipeline carry that mask; the final
+// consumer has no successor and therefore carries zero.
+constexpr std::uint32_t consumerDependencyMask(std::size_t taskIndex,
+                                               std::size_t taskCount) {
+    if (taskIndex + 1 >= taskCount) return 0;
+    const unsigned consumerSlots = (unsigned)std::min<std::size_t>(
+        taskCount - 1,31);
+    return (std::uint32_t(1) << consumerSlots) - 1;
+}
+
 // NE input format: enable, unary dependency class, and fp16 element format.
 constexpr std::uint32_t neuralInput(bool enable = true) {
     return (enable ? std::uint32_t(1) << 16 : 0) |
@@ -259,10 +276,7 @@ inline void appendTask(Packet &packet, const TaskSpec &task,
         (std::uint32_t(8) << 8) | std::uint32_t(last ? 104 : 32));
     appendWord(packet.bytes,0); // No firmware-private scheduling hint.
     appendWord(packet.bytes,0); // No firmware-private scheduling hint.
-    // Every later task depends on all earlier rule-built phases.
-    const unsigned dependencyBits = (unsigned)std::min<std::size_t>(taskIndex,31);
-    appendWord(packet.bytes,dependencyBits ?
-        (std::uint32_t(1) << dependencyBits) - 1 : 0);
+    appendWord(packet.bytes,fields::consumerDependencyMask(taskIndex,taskCount));
     appendWord(packet.bytes,fields::taskControl(task.enabledEngines,last));
 
     const auto emitBlock = [&](std::uint32_t blockFirst,

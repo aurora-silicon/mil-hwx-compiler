@@ -142,6 +142,133 @@ static uint32_t reductionEngineCount(H16GReductionPhase phase,
     return 0;
 }
 
+static uint32_t ceilLog2(NSUInteger value) {
+    uint32_t result=0;
+    NSUInteger limit=1;
+    while(limit<value) { limit<<=1; ++result; }
+    return result;
+}
+
+static uint32_t packedPipelineWord(uint32_t family,
+                                   uint32_t dimensionClass,
+                                   uint32_t laneClass) {
+    return (family<<24) | (dimensionClass<<16) | (laneClass<<8);
+}
+
+static constexpr uint32_t partialPipelineFamily=3u<<4;
+static constexpr uint32_t storePipelineFamily=1u<<4;
+static constexpr uint32_t partialDimensionClassBase=39;
+static constexpr uint32_t reorderDimensionClassBase=41;
+static constexpr uint32_t packedLaneClassStep=(1u<<4)|1u;
+
+static uint32_t reductionAccumulatorBase(NSUInteger outputRowBytes) {
+    // The accumulator follows one output row plus its four-word control area.
+    return (uint32_t)(outputRowBytes+4*sizeof(uint32_t));
+}
+
+static uint32_t partialPipelineWord(NSUInteger channels,
+                                    NSUInteger height) {
+    const uint32_t dimensionClass=
+        partialDimensionClassBase-ceilLog2(height);
+    const uint32_t channelBits=ceilLog2(channels);
+    const uint32_t channelGroups=channelBits>=8 ? 1u : 8u-channelBits;
+    return packedPipelineWord(partialPipelineFamily,dimensionClass,
+                              channelGroups*packedLaneClassStep);
+}
+
+static uint32_t reorderPipelineWord(NSUInteger height, NSUInteger width) {
+    const uint32_t dimensionClass=
+        reorderDimensionClassBase-ceilLog2(height);
+    const uint32_t widthBits=ceilLog2(width);
+    const uint32_t widthGroups=widthBits>=6 ? 1u : 6u-widthBits;
+    return packedPipelineWord(partialPipelineFamily,dimensionClass,
+                              widthGroups*packedLaneClassStep);
+}
+
+static uint32_t maximumPartialPipelineWord(NSUInteger height,
+                                           NSUInteger width) {
+    const NSUInteger largeSpatialTile=16*16;
+    const uint32_t scheduleTier=height*width<=largeSpatialTile ? 4u : 3u;
+    return scheduleTier<<16;
+}
+
+static uint32_t storePipelineWord() {
+    // Store is pipeline family 0x10 with seven four-lane completion groups.
+    return packedPipelineWord(storePipelineFamily,7u<<2,0);
+}
+
+typedef struct {
+    uint32_t channels;
+    uint32_t outputWidth;
+    uint32_t outputHeight;
+    uint32_t outputChannels;
+    uint32_t kernelOrOutputBase;
+    bool emitsChannels;
+    bool emitsOutputChannels;
+} H16GReductionCommonGeometry;
+
+static H16GReductionCommonGeometry reductionCommonGeometry(
+    H16GReductionPhase phase, H16GReductionKind kind, NSUInteger axis,
+    NSUInteger channels, NSUInteger localChannels, NSUInteger height,
+    NSUInteger width, NSUInteger outputRowBytes, bool writesExternal) {
+    H16GReductionCommonGeometry result={
+        (uint32_t)localChannels,(uint32_t)(axis==1 ? width :
+            (axis==2 ? width : 1)),(uint32_t)(axis==1 ? height :
+            (axis==2 ? 1 : height)),(uint32_t)(axis==1 ? 1 : localChannels),
+        reductionAccumulatorBase(outputRowBytes),true,true};
+    switch(phase) {
+        case H16GReductionPhaseDirect:
+            // A width reduction presents H independent contiguous rows.
+            result.channels=(uint32_t)height;
+            result.outputWidth=(uint32_t)width;
+            result.outputHeight=1;
+            result.outputChannels=(uint32_t)height;
+            break;
+        case H16GReductionPhasePartial:
+            if(axis==1) {
+                result.outputWidth=(uint32_t)width;
+                result.outputHeight=(uint32_t)height;
+                result.outputChannels=(uint32_t)(writesExternal ? 1 :
+                                                   localChannels);
+                result.kernelOrOutputBase=
+                    kind==H16GReductionKindMax && writesExternal
+                    ? maximumPartialPipelineWord(height,width)
+                    : partialPipelineWord(localChannels,height);
+            } else {
+                result.outputWidth=(uint32_t)height;
+                result.outputHeight=1;
+                result.outputChannels=(uint32_t)localChannels;
+            }
+            break;
+        case H16GReductionPhaseReorder:
+            // Reorder swaps C and H while preserving each W-wide row.
+            result.channels=(uint32_t)height;
+            result.outputWidth=(uint32_t)width;
+            result.outputHeight=(uint32_t)localChannels;
+            result.outputChannels=(uint32_t)height;
+            result.kernelOrOutputBase=reorderPipelineWord(height,width);
+            break;
+        case H16GReductionPhaseFinalize: {
+            // Channel reductions pack C across a 64-wide single row, or
+            // 32-wide rows once C exceeds one hardware row. W is the lane set.
+            const NSUInteger packedWidth=channels<=64 ? channels : 32;
+            result.channels=(uint32_t)width;
+            result.outputWidth=(uint32_t)packedWidth;
+            result.outputHeight=(uint32_t)((channels+packedWidth-1)/packedWidth);
+            result.outputChannels=(uint32_t)width;
+            break;
+        }
+        case H16GReductionPhaseStore:
+            result.emitsChannels=false;
+            result.outputWidth=1;
+            result.outputHeight=(uint32_t)localChannels;
+            result.emitsOutputChannels=false;
+            result.kernelOrOutputBase=storePipelineWord();
+            break;
+    }
+    return result;
+}
+
 // One task may expose at most the Common.surface_limit resident bytes to L2.
 // Axis 1 is accumulated in channel chunks and finalized; axis 2 uses the
 // reorder/reduce/store pipeline because H is not contiguous in NCHW; axis 3
@@ -227,16 +354,20 @@ static H16GEncodedTDProgram *encodeReductionPacket(
         const uint32_t tiles=(uint32_t)((localElements+
             ((uint64_t(1)<<14)-1))/(uint64_t(1)<<14));
         totalTiles+=tiles;
+        const H16GReductionCommonGeometry common=reductionCommonGeometry(
+            taskRule.phase,kind,axis,channels,localChannels,height,width,
+            outputRowBytes,writesExternal);
         std::map<uint32_t,uint32_t> registers;
         registers[0x0004]=(uint32_t)width;
         registers[0x0008]=(uint32_t)height;
-        registers[0x000c]=(uint32_t)localChannels;
-        registers[0x0014]=(uint32_t)outputWidth;
-        registers[0x0018]=(uint32_t)outputHeight;
-        registers[0x001c]=(uint32_t)(axis==1 ? 1 : localChannels);
+        if(common.emitsChannels) registers[0x000c]=common.channels;
+        registers[0x0014]=common.outputWidth;
+        registers[0x0018]=common.outputHeight;
+        if(common.emitsOutputChannels)
+            registers[0x001c]=common.outputChannels;
         registers[0x0024]=(uint32_t)axis;
         registers[0x0034]=(uint32_t)((partial.offset+index*64)/64);
-        registers[0x003c]=(uint32_t)(output.offset/64);
+        registers[0x003c]=common.kernelOrOutputBase;
         registers[0x0040]=tiles;
         registers[0x004c]=surfaceLimit(1u<<20);
         registers[0x4104]=l2Transfer(5,7,2);
@@ -259,8 +390,9 @@ static H16GEncodedTDProgram *encodeReductionPacket(
         registers[0x4904]=reductionCommand((uint32_t)kind);
         registers[0x4910]=kind == H16GReductionKindMean
             ? floatToHalf(1.0f/(float)reductionLength) : floatToHalf(1.0f);
-        if (taskRule.phase==H16GReductionPhaseDirect &&
-            kind==H16GReductionKindMax)
+        if (kind==H16GReductionKindMax &&
+            (taskRule.phase==H16GReductionPhaseDirect ||
+             (taskRule.phase==H16GReductionPhasePartial && axis==2)))
             registers[0x4500]=(uint32_t)kind;
         if (readsExternal) {
             registers[0x4d00]=endpoint(2);

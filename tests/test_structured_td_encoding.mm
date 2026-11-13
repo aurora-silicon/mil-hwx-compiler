@@ -293,6 +293,7 @@ static uint32_t packTestHalves(float low,float high) {
 static NSUInteger linearTaskCount(NSData *data, BOOL *headersValid) {
     NSUInteger count=0,position=16;
     BOOL valid=data.length>=16&&((const uint8_t *)data.bytes)[0]==1;
+    std::vector<uint32_t> dependencyWords;
     while(valid&&position<data.length) {
         position=(position+15)&~(NSUInteger)15;
         if(position==data.length)break;
@@ -307,10 +308,13 @@ static NSUInteger linearTaskCount(NSData *data, BOOL *headersValid) {
         uint32_t control=word(data,position+32);
         valid&=!!(output&(1u<<26))==last;
         valid&=!!(control&(1u<<3))==last;
-        valid&=dependencies==(count?((1u<<count)-1):0);
+        dependencyWords.push_back(dependencies);
         position+=words*4;
         ++count;
     }
+    for(NSUInteger index=0;valid&&index<dependencyWords.size();++index)
+        valid&=dependencyWords[index]==
+            ane::h16::rule::fields::consumerDependencyMask(index,count);
     if(headersValid)*headersValid=valid&&position==data.length;
     return count;
 }
@@ -327,6 +331,20 @@ static NSArray<NSNumber *> *linearTaskControls(NSData *data) {
         position+=words*4;
     }
     return controls;
+}
+
+static NSArray<NSNumber *> *linearTaskDependencies(NSData *data) {
+    NSMutableArray<NSNumber *> *dependencies=[NSMutableArray array];
+    NSUInteger position=16;
+    while(position<data.length) {
+        position=(position+15)&~(NSUInteger)15;
+        if(position==data.length)break;
+        NSUInteger words=word(data,position)>>16;
+        if(words<9||position+words*4>data.length)return @[];
+        [dependencies addObject:@(word(data,position+28))];
+        position+=words*4;
+    }
+    return dependencies;
 }
 
 static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
@@ -400,12 +418,32 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
         (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x414c);
     std::size_t l2OutputRowOffset=ane::h16::rule::registerValueOffset(
         (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x4150);
+    std::size_t commonKernelBaseOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x003c);
+    std::size_t commonTileCountOffset=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)expProgram.data.bytes,expProgram.data.length,0x0040);
     expect(l2InputPlaneOffset!=SIZE_MAX && l2OutputBaseOffset!=SIZE_MAX &&
            word(expProgram.data,l2InputPlaneOffset)==256 &&
            word(expProgram.data,l2OutputBaseOffset)==
                ane::h16::rule::fields::unaryOutputTileBase() &&
+           commonKernelBaseOffset!=SIZE_MAX &&
+           word(expProgram.data,commonKernelBaseOffset)==
+               2*sizeof(uint16_t)*128*128 &&
+           commonTileCountOffset!=SIZE_MAX &&
+           word(expProgram.data,commonTileCountOffset)==
+               ane::h16::rule::fields::unaryCompletionTileCount() &&
            l2OutputRowOffset==SIZE_MAX,
-           @"unary L2 fields describe tile strides instead of whole surfaces");
+           @"exp-128 device-named fields equal old-main field-for-field");
+    H16GEncodedTDProgram *wideExp=[H16GLUTEncoder
+        encodeOperationName:@"exp" inputShape:@[@1,@1,@192,@192]
+        error:&error];
+    expect(ane::h16::rule::registerValueOffset(
+               (const uint8_t *)wideExp.data.bytes,wideExp.data.length,
+               0x003c)==SIZE_MAX &&
+           word(wideExp.data,ane::h16::rule::registerValueOffset(
+               (const uint8_t *)wideExp.data.bytes,wideExp.data.length,
+               0x0040))==ane::h16::rule::fields::unaryCompletionTileCount(),
+           @"wide unary rows omit the narrow kernel base but keep tile scheduling");
     error = nil;
     H16GEncodedTDProgram *log = [H16GLUTEncoder encodeOperationName:@"log"
         inputShape:@[@1,@1,@192,@192] error:&error];
@@ -474,6 +512,16 @@ static void testReductionPacketsAreRuleBuilt(void) {
     };
     expect([linearTaskControls(widthPacket) isEqualToArray:
                @[@(ane::h16::rule::fields::taskControl(0,true))]] &&
+           fieldOffset(0x000c)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x000c))==64 &&
+           fieldOffset(0x0014)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x0014))==64 &&
+           fieldOffset(0x0018)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x0018))==1 &&
+           fieldOffset(0x001c)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x001c))==64 &&
+           fieldOffset(0x003c)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x003c))==64+4*sizeof(uint32_t) &&
            fieldOffset(0x4500)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x4500))==2 &&
            fieldOffset(0x4d18)==SIZE_MAX && fieldOffset(0x4d24)==SIZE_MAX &&
@@ -482,15 +530,17 @@ static void testReductionPacketsAreRuleBuilt(void) {
            fieldOffset(0x5110)==SIZE_MAX && fieldOffset(0x511c)==SIZE_MAX &&
            fieldOffset(0x5114)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x5114))==64,
-           @"direct width-max uses its phase engine set and contiguous DMA geometry");
+           @"width-max device-named fields equal old-main field-for-field");
     H16GReduceEncoding *heightMax = [H16GReduceEncoder
         encodeOperationName:@"reduce_max" inputShape:@[@1,@32,@64,@16]
         axis:2 error:&error];
     expect([linearTaskControls(heightMax.tdProgram.data) isEqualToArray:
                @[@(ane::h16::rule::fields::taskControl(5,false)),
                  @(ane::h16::rule::fields::taskControl(0,false)),
-                 @(ane::h16::rule::fields::taskControl(4,true))]],
-           @"height reduction selects reorder, partial, and store engine sets");
+                 @(ane::h16::rule::fields::taskControl(4,true))]] &&
+           [linearTaskDependencies(heightMax.tdProgram.data)
+               isEqualToArray:@[@3,@3,@0]],
+           @"height reduction selects phase engines and producer dependency masks");
     expect([H16GReduceEncoder encodeOperationName:@"reduce_sum"
         inputShape:@[@1,@1,@8,@8] axis:1 error:&error] == nil && error != nil,
         @"unit reduction axes fail closed");

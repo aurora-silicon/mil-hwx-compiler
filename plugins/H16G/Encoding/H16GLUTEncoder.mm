@@ -127,6 +127,7 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     // counts here make every 32nd row bypass the unary unit.
     uint32_t l2RowBytes=std::min(nextPowerOfTwo(rowBytes),uint32_t(512));
     constexpr uint32_t allocationPageBytes=uint32_t(1)<<14;
+    constexpr uint32_t maximumTileRowBytes=512;
     constexpr uint32_t tableBytes=128;
     constexpr uint32_t tableAlignment=64;
     uint32_t tiles = (uint32_t)((elements + allocationPageBytes-1) /
@@ -153,11 +154,15 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     registers[0x0018]=(uint32_t)size;
     registers[0x001c]=1;
     registers[0x0034]=tiles;
-    registers[0x003c]=(uint32_t)((table.offset + table.length +
-        allocationPageBytes-1) / allocationPageBytes);
-    registers[0x0040]=(uint32_t)((output.offset + output.length) /
-        allocationPageBytes);
     using namespace ane::h16::rule::fields;
+    // The Common word is a byte base only for the narrow one-row table form.
+    // Wider rows select the table through KernelDMA and omit this field.
+    if (family != H16GUnaryPacketFamilyReciprocalUnit &&
+        l2RowBytes < maximumTileRowBytes)
+        registers[0x003c]=family == H16GUnaryPacketFamilyDirectReLU
+            ? output.offset+output.length : table.offset;
+    registers[0x0040]=family == H16GUnaryPacketFamilyReciprocalUnit
+        ? 0u : unaryCompletionTileCount();
     registers[0x004c]=surfaceLimit(1u << 20);
     registers[0x4104]=l2Transfer(5,7,2);
     registers[0x4108]=l2Transfer(5,3,0);
@@ -166,7 +171,9 @@ static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
     registers[0x411c]=l2RowBytes;
     registers[0x4120]=l2RowBytes;
     registers[0x4148]=l2Transfer(5,7,10);
-    registers[0x414c]=unaryOutputTileBase();
+    registers[0x414c]=family == H16GUnaryPacketFamilyReciprocalUnit
+        ? nextPowerOfTwo((uint32_t)size)*(uint32_t(1)<<8)
+        : unaryOutputTileBase();
     registers[0x4900]=family == H16GUnaryPacketFamilyDirectReLU
         ? 0u : neuralInput();
     registers[0x4904]=unaryOpcode(operation,family);
