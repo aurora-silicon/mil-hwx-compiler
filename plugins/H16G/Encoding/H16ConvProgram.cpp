@@ -1681,7 +1681,10 @@ constexpr U32 kResidualStemSourceGuardBytes=1u<<13;
 
 U32 residualChannelStride(U32 width) { return (2*width+15)&~U32(15); }
 U32 residualRowStride(ElementwiseShape shape) {
-    return align64(shape.channels*residualChannelStride(shape.width))+0x40;
+    // Resident residual tensors carry the native half-cacheline row skew.
+    // The previous whole-cacheline skew made every consumer start one half
+    // line after the producer and also inflated the allocator's live range.
+    return align64(shape.channels*residualChannelStride(shape.width))+0x20;
 }
 // The 7x7 sparse stem feeds its phase engine from a compact three-plane L2
 // view and leaves one 8-KiB guard after the result.  These are descriptor
@@ -1769,20 +1772,25 @@ U32 residualOutputGroups(U32 channels) {
 }
 
 void setResidualSource(std::map<U32,U32> &r,ElementwiseShape shape,
-                       U32 cfg,U32 base) {
+                       U32 cfg,U32 base,bool explicitSpans=true) {
     r[0x4104]=cfg;
     if (base) r[0x4110]=base;
     const U32 c=residualChannelStride(shape.width),row=residualRowStride(shape);
     r[0x4114]=c; r[0x4118]=row;
-    r[0x411c]=shape.channels*c; r[0x4120]=shape.channels*c;
+    if (explicitSpans) {
+        r[0x411c]=shape.channels*c; r[0x4120]=shape.channels*c;
+    }
 }
 void setResidualResult(std::map<U32,U32> &r,ElementwiseShape shape,
-                       U32 cfg,U32 base) {
-    r[0x4148]=cfg;
+                       U32 cfg,U32 base,bool explicitSpans=true,
+                       bool explicitConfig=true) {
+    if (explicitConfig) r[0x4148]=cfg;
     if (base) r[0x414c]=base;
     const U32 c=residualChannelStride(shape.width),row=residualRowStride(shape);
     r[0x4150]=c; r[0x4154]=row;
-    r[0x4158]=shape.channels*c; r[0x415c]=shape.channels*c;
+    if (explicitSpans) {
+        r[0x4158]=shape.channels*c; r[0x415c]=shape.channels*c;
+    }
 }
 
 enum class ResidualIO { Ring, Scratch, External };
@@ -1837,6 +1845,10 @@ constexpr U32 residualL2SourceConfig(ResidualIO storage) {
     const U32 interleave=storage==ResidualIO::Scratch?8u:1u;
     return 2u|(traversal<<4)|(interleave<<8)|(sourceClass<<20);
 }
+constexpr U32 residualMeanL2SourceConfig() {
+    // Resident reduction source: fp16, reduction traversal, L2 resident.
+    return (1u<<22)|(1u<<8);
+}
 constexpr U32 residualL2ExternalRecord() {
     // L2 source record: external class 5, valid bit 8, fp16 format class 3.
     return (5u<<20)|(1u<<8)|(3u<<4);
@@ -1869,6 +1881,10 @@ constexpr U32 residualTileFormat(ResidualIO storage,bool destination) {
                           (storage==ResidualIO::External?1u:8u);
     return (formatClass<<24)|(destination?(3u<<20):0u)|
            (2u<<12)|(3u<<4)|1u;
+}
+constexpr U32 residualTerminalTileFormat() {
+    // Direct fp16 NCHW terminal writer; no scratch-interleave class.
+    return (1u<<24)|(3u<<20)|(2u<<12)|(3u<<4)|1u;
 }
 constexpr U32 residualCompletionOpcode() {
     // Completion opcode: signal and store-enable events.
@@ -1956,14 +1972,19 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
                                            shape.stride);
     }
     r[0x34]=shape.output.height;r[0x3c]=residualSchedule(shape,role);
-    const U32 groups=residualOutputGroups(shape.output.channels);
+    const U32 groups=role==ResidualRole::Linear ?
+        std::min(4u,residualOutputGroups(shape.output.channels)):
+        residualOutputGroups(shape.output.channels);
     if (groups!=3) r[0x40]=groups;
     r[0x4c]=residualMacConfig();
     if (shape.stride==2) r[0x4900]=residualStrideTraversal();
     r[0x4904]=residualPostConfig(relu);r[0x4910]=residualHalfOne();
 
     if (source==ResidualIO::Ring) {
-        setResidualSource(r,shape.input,residualL2SourceConfig(source),sourceBase);
+        const U32 sourceConfig=role==ResidualRole::Linear ?
+            residualMeanL2SourceConfig():residualL2SourceConfig(source);
+        setResidualSource(r,shape.input,sourceConfig,sourceBase,false);
+        if (role==ResidualRole::Linear) r.erase(0x4118);
     } else {
         setResidualSource(r,shape.input,residualL2SourceConfig(source),sourceBase);
         if (stem) {
@@ -1985,7 +2006,7 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
     const U32 channelOffset=firstOutput*residualChannelStride(shape.output.width);
     if (result==ResidualIO::Ring) {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
-                          resultBase+channelOffset);
+                          resultBase+channelOffset,false);
         if (stem) {
             r[0x4148]=residualStemL2ResultConfig();
             r[0x4154]=residualStemResultRowStride(shape);
@@ -1996,12 +2017,18 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
         }
     } else {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
-                          resultBase+channelOffset);
+                          resultBase+channelOffset,!last);
+        if (last && role==ResidualRole::Linear) {
+            r.erase(0x4150);r.erase(0x4154);
+        }
         r[0x5100]=residualDMAChannel(id,false,false,last);
         setResidualAddress(r,0x5108,resultOffset);
-        r[0x5110]=align64(2*shape.output.width);
-        r[0x5114]=r[0x5110]*shape.output.height;
-        r[0x5138]=residualTileFormat(result,true);
+        if (!last) {
+            r[0x5110]=align64(2*shape.output.width);
+            r[0x5114]=r[0x5110]*shape.output.height;
+        }
+        r[0x5138]=last?residualTerminalTileFormat():
+                           residualTileFormat(result,true);
         task.resultSlotFlags=result==ResidualIO::External ? taskBar(7):taskBar(3);
         if (last) {
             r[0x5900]=residualCompletionOpcode();
@@ -2061,41 +2088,58 @@ void packResidualPE(Task &task) {
 Task residualPETask(U32 id,U32 taskCount,ResidualRole role,
                     ElementwiseShape input,ElementwiseShape output,
                     U32 sourceBase,U32 resultBase,U32 secondBase=0,
-                    U32 scratchOffset=0) {
+                    U32 scratchOffset=0,
+                    ResidualIO meanSource=ResidualIO::Scratch,
+                    U32 meanSourceRow=0) {
     const bool first=id==0,last=id+1==taskCount;
+    const U32 sourceBytes=role==ResidualRole::Mean && meanSourceRow ?
+        input.height*meanSourceRow:residualBytes(input);
+    const U32 meanCost=std::max<U32>(1,U32(
+        (std::uint64_t(input.channels)*input.height*input.width+32767)/32768));
     Task task;
-    task.header={id,1,residualHeaderRoute(first,last),0,
+    task.header={id,role==ResidualRole::Mean?meanCost:1,
+                 residualHeaderRoute(first,last),0,
                  residualHeaderEngineEvents(first),0,0,
-                 last?0u:residualBankMask(sourceBase,residualBytes(input))|
+                 last?0u:residualBankMask(sourceBase,sourceBytes)|
                             residualBankMask(resultBase,residualBytes(output))|
                             residualBankMask(secondBase,secondBase?
                                                         kResidualStageBytes:0),
                  residualPEHeaderCompletion(last)};
     auto &r=task.registers;
     r[4]=input.width;r[8]=input.height;r[12]=input.channels;
-    r[0x14]=output.width;r[0x18]=output.height;r[0x1c]=output.channels;
-    r[0x34]=output.height;r[0x3c]=residualPETileClass(role);
+    const ElementwiseShape commonOutput=role==ResidualRole::Mean?input:output;
+    r[0x14]=commonOutput.width;r[0x18]=commonOutput.height;
+    r[0x1c]=commonOutput.channels;
+    r[0x34]=commonOutput.height;r[0x3c]=residualPETileClass(role);
     r[0x44]=residualPEOperationClass(role);r[0x4c]=0;
     if (role==ResidualRole::Pool) {
         r[0x28]=residualConvolutionConfig(3,3,2);
         r[0x4100]=4;r[0x4500]=residualPEConfig(role);
         setResidualSource(r,input,residualL2SourceConfig(ResidualIO::Ring),
-                          sourceBase);
+                          sourceBase,false);
     } else if (role==ResidualRole::Mean) {
         r[0x4514]=fp32Bits(1.0f/float(input.height*input.width));
-        setResidualSource(r,input,residualL2SourceConfig(ResidualIO::Scratch),
-                          sourceBase);
-        r[0x4d00]=residualDMAChannel(id,true,false,false);
-        r[0x4d08]=residualDMAOpcode(false);
-        setResidualAddress(r,0x4d10,scratchOffset);
-        r[0x4d18]=align64(2*input.width);r[0x4d1c]=r[0x4d18]*input.height;
-        r[0x4d68]=residualTileFormat(ResidualIO::Scratch,false);
-        task.sourceSlotFlags=taskBar(3);
+        if (meanSource==ResidualIO::Ring) {
+            setResidualSource(r,input,residualMeanL2SourceConfig(),sourceBase,
+                              false);
+            if (meanSourceRow) r[0x4118]=meanSourceRow;
+        } else {
+            setResidualSource(r,input,residualL2SourceConfig(meanSource),
+                              sourceBase);
+            r[0x4d00]=residualDMAChannel(id,true,first,false);
+            r[0x4d08]=residualDMAOpcode(first);
+            setResidualAddress(r,0x4d10,scratchOffset);
+            r[0x4d18]=align64(2*input.width);
+            r[0x4d1c]=r[0x4d18]*input.height;
+            r[0x4d68]=residualTileFormat(meanSource,false);
+            task.sourceSlotFlags=meanSource==ResidualIO::External ?
+                taskBar(6):taskBar(3);
+        }
     } else {
         r[0x4500]=residualPEConfig(role);
         r[0x4518]=residualPEOperandMask();r[0x4520]=0;
         setResidualSource(r,input,residualL2SourceConfig(ResidualIO::Ring),
-                          sourceBase);
+                          sourceBase,false);
         r[0x4108]=residualL2SourceConfig(ResidualIO::Scratch);
         r[0x4124]=secondBase;
         r[0x4128]=residualChannelStride(input.width);
@@ -2109,8 +2153,20 @@ Task residualPETask(U32 id,U32 taskCount,ResidualRole role,
     }
     const ResidualIO resultStorage=role==ResidualRole::Pool?
         ResidualIO::Scratch:ResidualIO::Ring;
-    setResidualResult(r,output,residualL2ResultConfig(resultStorage,false),
-                      resultBase);
+    if (role==ResidualRole::Mean) {
+        // The reduction engine derives its 1x1 destination from the common
+        // shape and scale.  Only the resident base and fp16 channel stride
+        // are explicit in the native form.
+        if (resultBase) r[0x414c]=resultBase;
+        r[0x4150]=residualChannelStride(output.width);
+    } else {
+        setResidualResult(r,output,residualL2ResultConfig(resultStorage,false),
+                          resultBase,resultStorage!=ResidualIO::Ring);
+        if (role==ResidualRole::Pool) {
+            r.erase(0x4150);r.erase(0x4154);
+            r.erase(0x4158);r.erase(0x415c);
+        }
+    }
     if (role==ResidualRole::Pool) {
         r[0x5100]=residualDMAChannel(id,false,false,false);
         setResidualAddress(r,0x5108,0);
@@ -2196,6 +2252,11 @@ ResNet50Program encodeResidualNetwork(
 
     const auto &stem=convolutions.front().shape;
     const U32 stemBase=0;
+    ResidualIO finalStorage=ResidualIO::Ring;
+    U32 finalBase=stemBase;
+    U32 finalBytes=residualStemResultBytes(stem);
+    U32 finalRow=residualStemResultRowStride(stem);
+    U32 finalScratchOffset=0;
     emitConv(0,ResidualRole::Stem,ResidualIO::External,
              residualStemSourceBase(stem),0,
              ResidualIO::Ring,stemBase,0,true);
@@ -2205,6 +2266,10 @@ ResNet50Program encodeResidualNetwork(
         Task pool=residualPETask(id++,taskCount,ResidualRole::Pool,stem.output,pooled,
                                  stemBase,poolBase,0,0);
         appendResidualTask(program,pool,firstTaskBytes);
+        finalStorage=ResidualIO::Scratch;
+        finalBase=poolBase;
+        finalBytes=kResidualStageBytes;
+        finalRow=residualRowStride(pooled);
     }
 
     for (const auto &block:blocks) {
@@ -2254,14 +2319,21 @@ ResNet50Program encodeResidualNetwork(
                                 blockOutput,blockOutput,mainBase,mainBase,
                                 secondBase,shortcutOffset);
         appendResidualTask(program,add,firstTaskBytes);
+        finalStorage=ResidualIO::Ring;
+        finalBase=mainBase;
+        finalBytes=residualBytes(blockOutput);
+        finalRow=residualRowStride(blockOutput);
     }
 
-    const U32 meanBase=0;
     ElementwiseShape meanOutput{finalShape.channels,1,1};
+    const U32 meanBytes=residualBytes(meanOutput);
+    const U32 meanBase=finalStorage==ResidualIO::Ring ?
+        residualFirstFit(finalBase,finalBytes,meanBytes):0;
+    const U32 meanSourceBase=finalStorage==ResidualIO::Ring ? finalBase:
+        residualFirstFit(meanBase,meanBytes,kResidualStageBytes);
     Task mean=residualPETask(id++,taskCount,ResidualRole::Mean,finalShape,
-                             meanOutput,residualFirstFit(meanBase,
-                             residualBytes(meanOutput),kResidualStageBytes),
-                             meanBase,0,0);
+                             meanOutput,meanSourceBase,meanBase,0,
+                             finalScratchOffset,finalStorage,finalRow);
     appendResidualTask(program,mean,firstTaskBytes);
 
     std::array<U32,16> headChunks{};
@@ -2295,6 +2367,102 @@ ResNet50Program encodeResidualNetwork(
                     (std::uint64_t(2*headOutputs)+kResidualPageBytes-1)&
                     ~std::uint64_t(kResidualPageBytes-1)};
     result.programRecordCount=2*taskCount+1;result.programFormatCode=0x4c;
+    result.scratchBytes=program.scratchAllocationBytes;
+    return result;
+}
+
+ResNet50Program encodeResidualStemBoundary(const ResNet50ConvWeights &stem) {
+    const auto &shape=stem.shape;
+    const std::size_t reduction=std::size_t(shape.input.channels)*shape.kernel*
+                                shape.kernelWidth;
+    if (shape.groups!=1 || !shape.bias || !stem.weights || !stem.bias ||
+        stem.weightBytes!=std::size_t(shape.output.channels)*reduction*2 ||
+        stem.biasBytes!=std::size_t(shape.output.channels)*2 ||
+        shape.kernel!=7 || shape.kernelWidth!=7 || shape.stride!=2)
+        throw std::invalid_argument(
+            "h16g.residual-boundary: expected one biased 7x7 stride-two stem");
+
+    std::array<U32,16> chunks{};
+    auto packed=packResNetStem7x7(shape,stem.weights,stem.bias,chunks);
+    ResNet50Program result;auto &program=result.program;
+    program.task.assign(16,0);program.task[0]=1;
+    std::size_t firstTaskBytes=0;
+    const U32 resultBase=residualFirstFit(residualStemSourceBase(shape),
+        residualStemSourceBytes(shape),kResidualStageBytes);
+    Task task=residualConvTask(0,1,shape,ResidualRole::Stem,0,
+        shape.output.channels,0,chunks,ResidualIO::External,
+        residualStemSourceBase(shape),0,ResidualIO::External,resultBase,0,true);
+    appendResidualTask(program,task,firstTaskBytes);
+    program.constants=std::move(packed);
+    program.taskCount=1;program.firstTaskBytes=firstTaskBytes;
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=kResidualScratchBytes;program.formulaBuilt=true;
+    const std::uint64_t inputRow=2*shape.input.width;
+    const std::uint64_t inputPlane=inputRow*shape.input.height;
+    const std::uint64_t outputRow=align64(2*shape.output.width);
+    const std::uint64_t outputPlane=outputRow*shape.output.height;
+    program.inputs={{5,{1,shape.input.channels,shape.input.height,shape.input.width,
+                        inputPlane,inputRow},
+                        (inputPlane*shape.input.channels+kResidualPageBytes-1)&
+                        ~std::uint64_t(kResidualPageBytes-1)}};
+    program.output={4,{1,shape.output.channels,shape.output.height,
+                       shape.output.width,outputPlane,outputRow},
+                    (outputPlane*shape.output.channels+kResidualPageBytes-1)&
+                    ~std::uint64_t(kResidualPageBytes-1)};
+    result.programRecordCount=3;result.programFormatCode=0x4c;
+    result.scratchBytes=program.scratchAllocationBytes;
+    return result;
+}
+
+ResNet50Program encodeResidualHead(
+    ElementwiseShape input,const std::uint8_t *headWeights,
+    std::size_t headWeightBytes,const std::uint8_t *headBias,
+    std::size_t headBiasBytes) {
+    const U32 outputs=U32(headBiasBytes/2);
+    if (!input.channels || !input.height || !input.width || !headWeights ||
+        !headBias || !outputs ||
+        headWeightBytes!=std::size_t(input.channels)*outputs*2 ||
+        headBiasBytes!=std::size_t(outputs)*2)
+        throw std::invalid_argument(
+            "h16g.residual-head: constants disagree with input geometry");
+
+    ResNet50Program result;auto &program=result.program;
+    program.task.assign(16,0);program.task[0]=1;
+    std::size_t firstTaskBytes=0;
+    ElementwiseShape meanOutput{input.channels,1,1};
+    const U32 sourceBase=0;
+    const U32 meanBase=residualFirstFit(sourceBase,kResidualStageBytes,
+                                        residualBytes(meanOutput));
+    Task mean=residualPETask(0,2,ResidualRole::Mean,input,meanOutput,
+                             sourceBase,meanBase,0,0,ResidualIO::External,
+                             residualRowStride(input));
+    appendResidualTask(program,mean,firstTaskBytes);
+
+    std::array<U32,16> chunks{};
+    auto packed=packResNetLinearHead(input.channels,outputs,headWeights,
+                                     headBias,chunks);
+    ConvShape linearShape;linearShape.input=meanOutput;
+    linearShape.output={outputs,1,1};linearShape.kernel=linearShape.kernelWidth=1;
+    linearShape.stride=1;linearShape.groups=1;linearShape.bias=true;
+    const U32 resultBase=residualFirstFit(meanBase,residualBytes(meanOutput),
+        std::min<U32>(kResidualStageBytes,residualBytes(linearShape.output)));
+    Task linear=residualConvTask(1,2,linearShape,ResidualRole::Linear,0,outputs,
+        0,chunks,ResidualIO::Ring,meanBase,0,ResidualIO::External,
+        resultBase,0,false);
+    appendResidualTask(program,linear,firstTaskBytes);
+    program.constants=std::move(packed);
+    program.taskCount=2;program.firstTaskBytes=firstTaskBytes;
+    program.constantOffsetBytes=(program.task.size()+63)&~std::size_t(63);
+    program.scratchAllocationBytes=kResidualScratchBytes;program.formulaBuilt=true;
+    const std::uint64_t inputRow=align64(2*input.width);
+    const std::uint64_t inputPlane=inputRow*input.height;
+    program.inputs={{5,{1,input.channels,input.height,input.width,inputPlane,inputRow},
+                        (inputPlane*input.channels+kResidualPageBytes-1)&
+                        ~std::uint64_t(kResidualPageBytes-1)}};
+    program.output={4,{1,1,1,outputs,align64(2*outputs),align64(2*outputs)},
+                    (std::uint64_t(2*outputs)+kResidualPageBytes-1)&
+                    ~std::uint64_t(kResidualPageBytes-1)};
+    result.programRecordCount=5;result.programFormatCode=0x4c;
     result.scratchBytes=program.scratchAllocationBytes;
     return result;
 }

@@ -68,3 +68,18 @@ existing operand offsets. The differing result-span write set always comes
 from one of the two compiler-built endpoint objects; the tool never edits a
 record header or shifts a task by hand. It also requires a byte-exact accepted
 stem-task match and runs the container and LOAD-grammar gates on every output.
+
+## Resident probe-head boundary
+
+A prefix ending before max-pool leaves the stem result resident in the linked
+L2 layout. The reduction head must consume that resident base and the exact
+row stride published by the producer. Treating every prefix boundary as a
+scratch spill instead emits a source TileDMA for data which was never written
+to scratch; LOAD accepts that framing, but EXECUTE cannot make progress.
+
+The terminal linear task likewise uses the compact resident source/result
+record set. Generic plane-span writes and the scratch-interleaved terminal
+format are not valid substitutes. Qualification therefore separates the
+stem, accepted full object, resident stem/head, old scratch-reading head, and
+an external-input head into independent objects before running the prefix
+ladder.

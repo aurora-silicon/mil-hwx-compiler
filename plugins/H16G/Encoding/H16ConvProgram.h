@@ -241,6 +241,17 @@ ResNet50Program encodeResidualNetwork(
     const std::uint8_t *headWeights, std::size_t headWeightBytes,
     const std::uint8_t *headBias, std::size_t headBiasBytes,
     ResidualNetworkOptions options = {});
+// Diagnostic boundary forms used by the smallest-first ResNet qualification
+// ladder.  They use the same geometry-derived task constructors as the full
+// network, but expose either the stem result or the mean/linear head as a
+// complete standalone object so a device failure can be assigned to one side
+// of that boundary.
+ResNet50Program encodeResidualStemBoundary(
+    const ResNet50ConvWeights &stem);
+ResNet50Program encodeResidualHead(
+    h13::ElementwiseShape input, const std::uint8_t *headWeights,
+    std::size_t headWeightBytes, const std::uint8_t *headBias,
+    std::size_t headBiasBytes);
 // A chain of measured standalone tasks whose intermediates go through the
 // scratch BAR (slot 3) in DRAM, ping-ponging between two regions. Measured
 // uses the r2 DRAM-chain producer/consumer fields; DependencyOnly sets only

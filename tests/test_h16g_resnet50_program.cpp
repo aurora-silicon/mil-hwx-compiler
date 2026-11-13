@@ -44,9 +44,19 @@ static std::uint32_t read32(const std::vector<std::uint8_t> &bytes,
            std::uint32_t(bytes.at(at+3))<<24;
 }
 
-static std::map<std::uint32_t,std::uint32_t> firstTaskRegisters(
-    const std::vector<std::uint8_t> &stream) {
-    const std::size_t task=16;
+static std::size_t taskOffset(const std::vector<std::uint8_t> &stream,
+                              unsigned wanted) {
+    std::size_t task=16;
+    for (unsigned index=0;index<wanted;++index) {
+        task+=4*(read32(stream,task)>>16);
+        task=(task+15)&~std::size_t(15);
+    }
+    return task;
+}
+
+static std::map<std::uint32_t,std::uint32_t> taskRegisters(
+    const std::vector<std::uint8_t> &stream,unsigned index) {
+    const std::size_t task=taskOffset(stream,index);
     const std::size_t words=read32(stream,task)>>16;
     std::size_t cursor=task+9*4;
     const std::size_t end=task+words*4;
@@ -108,7 +118,7 @@ int main() {
                   << " records=" << encoded.programRecordCount << "\n";
         return 1;
     }
-    const auto stemRegisters=firstTaskRegisters(encoded.program.task);
+    const auto stemRegisters=taskRegisters(encoded.program.task,0);
     const std::size_t stemTask=16;
     constexpr std::uint32_t stemTaskWords=103,stemExecutionCost=12;
     constexpr std::uint32_t stemLiveBanks=(1u<<25)-1;
@@ -169,6 +179,37 @@ int main() {
     if (stemProbe.program.taskCount!=3 || poolProbe.program.taskCount!=4 ||
         stemProbe.program.kernelRelocations.size()!=2 ||
         poolProbe.program.kernelRelocations.size()!=2) return 4;
+    const auto stemMean=taskRegisters(stemProbe.program.task,1);
+    const auto stemLinear=taskRegisters(stemProbe.program.task,2);
+    const auto poolTask=taskRegisters(poolProbe.program.task,1);
+    if (stemMean.at(0x4104)!=((1u<<22)|(1u<<8)) ||
+        stemMean.at(0x4118)!=stemResultRowStride ||
+        stemMean.count(0x4d00) || stemMean.count(0x411c) ||
+        stemMean.count(0x4120) || stemMean.count(0x4148) ||
+        stemMean.count(0x4154) || stemMean.count(0x4158) ||
+        stemMean.count(0x415c) ||
+        stemLinear.at(0x4104)!=((1u<<22)|(1u<<8)) ||
+        stemLinear.count(0x4118) || stemLinear.count(0x411c) ||
+        stemLinear.count(0x4120) || stemLinear.count(0x4150) ||
+        stemLinear.count(0x4154) || stemLinear.count(0x4158) ||
+        stemLinear.count(0x415c) || stemLinear.at(0x5138)!=0x01302031 ||
+        poolTask.count(0x411c) || poolTask.count(0x4120) ||
+        poolTask.count(0x4150) || poolTask.count(0x4154) ||
+        poolTask.count(0x4158) || poolTask.count(0x415c)) {
+        std::cerr << "residual probe head does not preserve its resident boundary\n";
+        return 7;
+    }
+    auto stemBoundary=ane::h16::encodeResidualStemBoundary(convs[0]);
+    auto headOnly=ane::h16::encodeResidualHead(
+        convs[0].shape.output,stemHeadWeights.data(),stemHeadWeights.size(),
+        stemHeadBias.data(),stemHeadBias.size());
+    if (stemBoundary.program.taskCount!=1 ||
+        stemBoundary.program.kernelRelocations.size()!=1 ||
+        stemBoundary.program.output.nchw[1]!=64 ||
+        headOnly.program.taskCount!=2 ||
+        headOnly.program.kernelRelocations.size()!=1 ||
+        headOnly.program.inputs.front().nchw[1]!=64 ||
+        !taskRegisters(headOnly.program.task,0).count(0x4d00)) return 8;
 
     auto blockHeadWeights=nonzeroHalves(256*1000,603);
     auto blockHeadBias=nonzeroHalves(1000,604);
