@@ -109,6 +109,7 @@ def main() -> int:
     if args.output.exists():
         raise FileExistsError(f"output already exists: {args.output}")
     shutil.copytree(args.base_kit, args.output)
+    shutil.rmtree(args.output / "__pycache__", ignore_errors=True)
     cases_path = args.output / "cases.json"
     cases = json.loads(cases_path.read_text())
     cases["task"] = args.task
