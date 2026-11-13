@@ -4,6 +4,10 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: open the three-program fused-attention-chain qualification gate after
+  task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
+  7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are
+  unchanged; standalone layer normalization remains gated.
 - H16G: correct the qualification-only transformer candidates after the
   round-2 J616s per-stage dump. Both independent QK head-half tasks now fold
   the graph's fp16 score scale; previously the high half was exactly 64x too
@@ -11,7 +15,8 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   the measured normalization task between its reduction prefix and zero-beta
   output writer; removing that task produced BERT zeros, a Whisper-tiny hang,
   and an unnormalized Whisper-base result. The task-header dispatch-limit
-  words are named fields. Production qualification gates remain closed.
+  words are named fields. The layer-normalization qualification gate remains
+  closed.
 - H16G: replace the inaccurate resident fused-attention candidate with a
   three-program DRAM chain: QK folds the graph's fp16 score scale, the
   device-qualified eight-plane S=1500 softmax supplies H=6 zero padding, and

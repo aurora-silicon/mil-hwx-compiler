@@ -277,7 +277,7 @@ work; **facts** = needs new field facts for this geometry.
 | `linear` (6) | `384/512 -> 384/512, 1536/2048` | native formula | constant-weight 1x1 convolution over tokens | compiler; corrected device run pending | done |
 | `matmul` QK^T, PV (2) | `[1,h,1500,64]`, `[1,h,1500,1500]` | native formula | batched QK/PV programs | device-qualified separately | done for h=6/8, d=64 |
 | `softmax` (1) | `[1,h,1500,1500]` | eight-plane program | pad unused heads to eight | H=6 relL2 `5.5e-4` | done for h<=8 |
-| attention chain (1) | Q/K/V, h=6/8 | qualification gate closed | scaled QK -> softmax -> PV through DRAM | reviewer run pending | proven-program chain |
+| attention chain (1) | Q/K/V, h=6/8 | native three-program chain | scaled QK -> softmax -> PV through DRAM | J616s relL2 7.50e-4 / 7.49e-4, 0 DART | done |
 | `mul`, `reshape`, `transpose` | as BERT | refused | as BERT | as BERT | as BERT |
 
 ## Device results
@@ -309,7 +309,8 @@ change.
 
 The normalization dataflow and non-identity affine consumption remain open.
 S=1500 attention data movement and batched runtime matmul over heads have
-native encoders; fused attention remains a named refusal. The two
+native encoders; the qualified three-program chain is enabled while the
+resident single-program fusion remains a named refusal. The two
 Whisper stem convolutions and encoder-axis transpose have measured descriptor
 parity; the positional constant uses the established contiguous ALU packet
 with its constant in the fourth aperture.

@@ -479,7 +479,9 @@ static BOOL standaloneLayerNormHardwareQualified(void) {
     return transformerR2CandidateQualified();
 }
 static BOOL fusedAttentionChainHardwareQualified(void) {
-    return transformerR2CandidateQualified();
+    // t-6549 qualified both three-program chains on J616s: H=6 and H=8
+    // completed without DART faults at relative L2 7.50e-4 and 7.49e-4.
+    return YES;
 }
 static BOOL fusedAttentionHardwareQualified(void) { return NO; }
 

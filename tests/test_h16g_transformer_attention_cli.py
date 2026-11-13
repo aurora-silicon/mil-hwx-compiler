@@ -115,10 +115,6 @@ def main() -> None:
                 "h16g.encode.transformer-softmax-hardware-unproved"),
             "softmax_bert": (softmax(128, 12),
                 "h16g.encode.transformer-softmax-hardware-unproved"),
-            "attn_wtiny": (fused(1500, 6, 64),
-                "h16g.encode.fused-attention-chain-hardware-unproved"),
-            "attn_wbase": (fused(1500, 8, 64),
-                "h16g.encode.fused-attention-chain-hardware-unproved"),
             "attn_held": (fused(64, 2, 80),
                 "h16g.encode.fused-attention-accuracy-unproved"),
         }
@@ -133,14 +129,18 @@ def main() -> None:
             assert refused.returncode != 0, name
             assert diagnostic in refused.stderr, (name, refused.stderr)
             assert not output.exists(), name
-        candidate_count = 0
-        if CANDIDATE:
-            for name, heads in (("attn_chain_wtiny", 6),
-                                ("attn_chain_wbase", 8)):
+        chain_count = 0
+        for name, heads in (("attn_chain_wtiny", 6),
+                            ("attn_chain_wbase", 8)):
+            images = []
+            for label, compiler in (("production", COMPILER),
+                                    ("candidate", CANDIDATE)):
+                if compiler is None:
+                    continue
                 source = root / f"{name}.mil"
                 source.write_text(fused(1500, heads, 64))
-                output = root / name
-                result = subprocess.run([str(CANDIDATE), "--mil", str(source),
+                output = root / f"{name}-{label}"
+                result = subprocess.run([str(compiler), "--mil", str(source),
                     "--model-root", str(root), "--target", "H16G",
                     "--output", str(output)], capture_output=True, text=True,
                     timeout=180)
@@ -152,6 +152,8 @@ def main() -> None:
                 assert len(manifest["sharedSurfaceIdentifiers"]) == 2
                 assert all((output / f"program-{i}.hwx").is_file()
                            for i in range(3))
+                images.append([(output / f"program-{i}.hwx").read_bytes()
+                               for i in range(3)])
                 for i in range(3):
                     validation = subprocess.run([sys.executable, str(VALIDATOR),
                         str(output / f"program-{i}.hwx"), "--manifest",
@@ -159,9 +161,11 @@ def main() -> None:
                         text=True, timeout=60)
                     assert validation.returncode == 0, (
                         name + f"[{i}]: " + validation.stdout + validation.stderr)
-                candidate_count += 1
+            if len(images) == 2:
+                assert images[0] == images[1], name
+            chain_count += 1
     print(f"H16G transformer attention CLI PASS: {len(cases)} validated, "
-          f"{len(refused_cases)} named refusals, {candidate_count} candidate chains")
+          f"{len(refused_cases)} named refusals, {chain_count} qualified chains")
 
 
 if __name__ == "__main__":
