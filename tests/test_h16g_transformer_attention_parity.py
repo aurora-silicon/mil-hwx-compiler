@@ -44,11 +44,11 @@ SOFTMAX_CASES = [
 ]
 FUSED_CASES = [
     (6, [216, 504, 504, 192, 188, 188, 184, 212, 300, 180, 236,
-         488, 488, 488, 488, 488, 516],
-     "9f7788742237b0599b55ce2edfb78b8a45e281daad9681a5d86380b270e0e1a4"),
+         224, 488, 488, 488, 488, 488, 516],
+     "e4a3833b549ee23fb90107d719657f13214fa591e276136f2237586c13f0d9e8"),
     (8, [216, 504, 504, 192, 188, 188, 184, 212, 300, 180, 236,
-         488, 488, 488, 488, 488, 488, 488, 516],
-     "b188ebf66aa204d05259b7938c2bbcec8b7e298c06ab2c938321dec5d428e5e5"),
+         224, 488, 488, 488, 488, 488, 488, 488, 516],
+     "5a40896f84c76424b0f12dcd92b4eb483af5b126ab8182e9e4e4670a94e5f9ab"),
 ]
 
 
@@ -95,9 +95,12 @@ def emit(operation: str, sequence: int, heads: int, head_dim: int) -> list[bytes
 
 
 def emit_matmul(operation: str, sequence: int, heads: int,
-                head_dim: int) -> list[bytes]:
-    stream = subprocess.check_output([
-        DUMP, "matmul", operation, str(sequence), str(heads), str(head_dim)])
+                head_dim: int, output_scale: int | None = None) -> list[bytes]:
+    arguments = [DUMP, "matmul", operation, str(sequence), str(heads),
+                 str(head_dim)]
+    if output_scale is not None:
+        arguments.append(hex(output_scale))
+    stream = subprocess.check_output(arguments)
     assert stream[:16] == b"\x01" + bytes(15)
     return split_h14_tasks(stream[16:])
 
@@ -120,6 +123,10 @@ def main() -> None:
             sort_keys=True,
             separators=(",", ":")).encode()
         assert hashlib.sha256(encoded).hexdigest() == digest
+    scaled_qk = [decode_task(task, "h16") for task in
+                 emit_matmul("qk", 1500, 6, 64, 0x2400)]
+    assert task_word(scaled_qk[-1], "0x04910") == "0x00002400"
+    assert task_word(scaled_qk[-2], "0x04910") == "0x00002400"
     for sequence, heads, sizes, digest in SOFTMAX_CASES:
         stream = subprocess.check_output([DUMP, "softmax", str(sequence), str(heads)])
         tasks = split_h14_tasks(stream[16:])
@@ -137,9 +144,21 @@ def main() -> None:
         stream = subprocess.check_output([DUMP, "fused", "1500", str(heads), "64"])
         tasks = split_h14_tasks(stream[16:])
         assert [len(task) for task in tasks] == sizes
-        encoded = json.dumps([json.loads(canonical(task)) for task in tasks],
-                             sort_keys=True, separators=(",", ":")).encode()
-        assert hashlib.sha256(encoded).hexdigest() == digest
+        # QK and softmax remain the sealed captured prefix.  PV deliberately
+        # diverges by inserting the exact standalone P*128 stage and folding
+        # 1/128 into every head result.
+        prefix = json.dumps([json.loads(canonical(task)) for task in tasks[:11]],
+                            sort_keys=True, separators=(",", ":")).encode()
+        assert hashlib.sha256(prefix).hexdigest() == digest
+        decoded = [decode_task(task, "h16") for task in tasks]
+        score_plane = 1500 * 3008
+        assert task_word(decoded[11], "0x04910") == "0x00005800"
+        assert task_word(decoded[11], "0x05108") == \
+            f"0x{heads * score_plane:08x}"
+        assert all(task_word(task, "0x04910") == "0x00002000"
+                   for task in decoded[12:])
+        assert task_word(decoded[12], "0x05510") == \
+            f"0x{(2 * heads - 1) * score_plane:08x}"
     for sequence, heads, head_dim in ((64, 2, 80), (256, 3, 128),
                                       (512, 5, 64)):
         for operation in ("qk", "qkT", "pv"):

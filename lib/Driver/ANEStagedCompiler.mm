@@ -69,6 +69,18 @@ static ANESourceRange syntheticRange(void) {
                               diagnostics:diagnostics] ||
         ![ANEFusionPass runOnGraph:graph target:target diagnostics:diagnostics])
         return nil;
+    NSUInteger errorsBeforeAttention=diagnostics.errorCount;
+    H16GAssembledProgram *attention=[H16GProgramEncoder
+        encodeProvenAttentionChainGraph:graph diagnostics:diagnostics];
+    if(attention)
+        return [[ANEExecutableBundle alloc] initWithTarget:targetName
+            artifacts:attention.artifacts dispatchPlan:attention.dispatchPlan
+            passTrace:@[
+                @"mil.import-operation-graph", @"ane.normalize", @"ane.decompose",
+                @"ane.fuse", @"h16g.legalize", @"h16g.proven-attention-chain",
+                @"h16g.write-object",
+            ] compositionTrace:attention.compositionTrace];
+    if(diagnostics.errorCount!=errorsBeforeAttention) return nil;
     // The native last-axis layer_norm formula owns its complete multi-task
     // schedule and bounded DRAM scratch.  The generic decomposed scheduler
     // counts all intermediate tensors simultaneously and rejects Whisper's
