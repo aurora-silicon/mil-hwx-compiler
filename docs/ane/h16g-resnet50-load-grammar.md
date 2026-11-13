@@ -83,3 +83,20 @@ format are not valid substitutes. Qualification therefore separates the
 stem, accepted full object, resident stem/head, old scratch-reading head, and
 an external-input head into independent objects before running the prefix
 ladder.
+
+## Stem and max-pool materialization
+
+A terminal stem still needs explicit output-DMA row and plane strides. The
+direct terminal format does not infer the 112x112 surface geometry from the
+output binding; omitting those fields can complete while leaving nearly the
+entire surface untouched.
+
+The max-pool consumes the stem's resident sparse-phase tuple without changing
+its 3x3 window, stride-two SAME padding, or source layout. Its result starts
+immediately after the stem result rather than at the next allocator bank. The
+scratch spill is eight-channel blocked, so its DMA row is `16 * output_width`
+bytes and its plane is that row times the output height. A compact planar row
+at this internal boundary shifts channels and rows even though LOAD and
+EXECUTE complete. Diagnostic boundary objects may instead terminate after
+the stem, pool, or residual add; those objects materialize an ordinary planar
+NCHW surface and are not used by production graphs.

@@ -30,6 +30,7 @@ RUNGS = (
     ("06-through-stage4", "relu_39", 1024),
     ("07-full", "relu_48", 2048),
 )
+DUMP_RUNGS = RUNGS[:4]
 BLOB_MAGIC = int.from_bytes(b"\xef\xbe\xad\xde", "little")
 
 
@@ -130,6 +131,58 @@ def prefix_mil(lines: list[str], target: str, channels: int,
     return "\n".join(declarations + operations) + "\n"
 
 
+def boundary_graph(graph: dict, arrays, target: str) -> tuple[dict, dict]:
+    target_index = next(index for index, op in enumerate(graph["operations"])
+                        if op["name"] == target)
+    operations = [dict(op) for op in graph["operations"][:target_index + 1]]
+    boundary = operations[-1]["result"]
+    used = {value for op in operations for value in op["inputs"].values()}
+    constants = {name: graph["constants"][name]
+                 for name in sorted(used & set(graph["constants"]))}
+    payload = {entry["array"]: arrays[entry["array"]]
+               for entry in constants.values() if "array" in entry}
+    variables = {name: graph["variables"][name]
+                 for name in {graph["inputs"][0], boundary} | used |
+                              {op["result"] for op in operations}}
+    return {"inputs": graph["inputs"], "outputs": [boundary],
+            "variables": variables, "constants": constants,
+            "operations": operations}, payload
+
+
+def boundary_mil(lines: list[str], target: str) -> str:
+    first_op = operation_line(lines, "conv_0")
+    target_op = operation_line(lines, target)
+    boundary = lines[target_op].split(" = ", 1)[0].split()[-1]
+    return "\n".join(lines[:first_op] + lines[first_op:target_op + 1] +
+                     [f"  }} -> ({boundary});", "}"]) + "\n"
+
+
+def make_boundary_references(reference, model: Path, output: Path,
+                             count: int, seed: int) -> dict:
+    ref = reference.Reference(model)
+    input_name = ref.graph["inputs"][0]
+    output_name = ref.graph["outputs"][0]
+    shape = ref.graph["variables"][input_name]["shape"]
+    output.mkdir(parents=True)
+    rng = np.random.default_rng(seed)
+    traces = []
+    output_shape = None
+    for index in range(count):
+        x = rng.uniform(-1, 1, shape).astype("<f2")
+        trace = []
+        y = ref.evaluate({input_name: x}, trace)[output_name]
+        if y.ndim != 4 or y.shape[0] != 1:
+            raise ValueError(f"boundary {output_name} is not batch-one NCHW")
+        (output / f"input_{index:02d}.bin").write_bytes(reference.surface(x))
+        (output / f"boundary_{index:02d}.surface.fp16").write_bytes(
+            reference.surface(y))
+        traces.append(trace)
+        output_shape = list(y.shape)
+    (output / "trace.json").write_text(json.dumps(traces, indent=2) + "\n")
+    return {"output": output_name, "shape": output_shape,
+            "reference": "boundary_00.surface.fp16"}
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -172,7 +225,8 @@ def main() -> int:
     lines = (args.source / "model.mil").read_text().splitlines()
     reference = load_module(args.cpu_reference)
     rng = np.random.default_rng(6486)
-    manifest = {"seed": 6486, "probe_outputs": 1000, "rungs": []}
+    manifest = {"seed": 6486, "probe_outputs": 1000, "rungs": [],
+                "boundary_dumps": []}
     with np.load(args.source / "constants.npz", allow_pickle=False) as arrays:
         for rung_index, (name, target, channels) in enumerate(RUNGS):
             rung = args.out_dir / "ladder" / name
@@ -208,6 +262,31 @@ def main() -> int:
             manifest["rungs"].append({"name": name, "target": target,
                                       "channels": channels,
                                       "model_sha256": sha256(model / "model.mil")})
+        for name, target, channels in DUMP_RUNGS:
+            dump = args.out_dir / "boundary-dumps" / name
+            model = dump / "source"
+            model.mkdir(parents=True)
+            os.symlink(Path("../../../source/weights"), model / "weights")
+            built_graph, payload = boundary_graph(graph, arrays, target)
+            (model / "model.mil").write_text(boundary_mil(list(lines), target))
+            (model / "graph.json").write_text(
+                json.dumps(built_graph, indent=2) + "\n")
+            np.savez(model / "constants.npz", **payload)
+            reference_facts = make_boundary_references(
+                reference, model, dump / "refs", args.images, 1234)
+            if args.compiler:
+                package = dump / "program"
+                subprocess.run([str(args.compiler), "--target", "H16G",
+                                "--mil", str(model / "model.mil"),
+                                "--model-root", str(model), "--output", str(package)],
+                               check=True)
+                if args.validator:
+                    subprocess.run([sys.executable, str(args.validator),
+                                    str(package / "program-0.hwx")], check=True)
+            manifest["boundary_dumps"].append({
+                "name": name, "target": target, "channels": channels,
+                "model_sha256": sha256(model / "model.mil"),
+                **reference_facts})
     (args.out_dir / "ladder.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))
     return 0

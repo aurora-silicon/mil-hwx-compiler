@@ -225,6 +225,9 @@ struct ResidualNetworkOptions {
     // Prefix probes may end immediately after the stem.  Full residual
     // networks retain the canonical 3x3 stride-two max-pool.
     bool maxPool = true;
+    // Diagnostic boundary objects omit the mean/linear probe and materialize
+    // the final stem, pool, or residual-add tensor on the output surface.
+    bool boundaryOutput = false;
 };
 // Compatibility entry point for the public ResNet-50 topology.  It delegates
 // to the geometry-driven residual-network encoder below.

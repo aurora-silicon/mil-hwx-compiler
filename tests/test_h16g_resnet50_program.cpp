@@ -182,6 +182,10 @@ int main() {
     const auto stemMean=taskRegisters(stemProbe.program.task,1);
     const auto stemLinear=taskRegisters(stemProbe.program.task,2);
     const auto poolTask=taskRegisters(poolProbe.program.task,1);
+    const std::size_t poolOffset=taskOffset(poolProbe.program.task,1);
+    constexpr std::uint32_t poolResultBase=112*stemResultRowStride;
+    constexpr std::uint32_t poolResultRow=16*56;
+    constexpr std::uint32_t poolResultPlane=poolResultRow*56;
     if (stemMean.at(0x4104)!=((1u<<22)|(1u<<8)) ||
         stemMean.at(0x4118)!=stemResultRowStride ||
         stemMean.count(0x4d00) || stemMean.count(0x411c) ||
@@ -193,6 +197,11 @@ int main() {
         stemLinear.count(0x4120) || stemLinear.count(0x4150) ||
         stemLinear.count(0x4154) || stemLinear.count(0x4158) ||
         stemLinear.count(0x415c) || stemLinear.at(0x5138)!=0x01302031 ||
+        read32(poolProbe.program.task,poolOffset+4)!=11 ||
+        read32(poolProbe.program.task,poolOffset+28)!=0x01ffffff ||
+        poolTask.at(0x414c)!=poolResultBase ||
+        poolTask.at(0x5110)!=poolResultRow ||
+        poolTask.at(0x5114)!=poolResultPlane ||
         poolTask.count(0x411c) || poolTask.count(0x4120) ||
         poolTask.count(0x4150) || poolTask.count(0x4154) ||
         poolTask.count(0x4158) || poolTask.count(0x415c)) {
@@ -200,12 +209,15 @@ int main() {
         return 7;
     }
     auto stemBoundary=ane::h16::encodeResidualStemBoundary(convs[0]);
+    const auto stemBoundaryTask=taskRegisters(stemBoundary.program.task,0);
     auto headOnly=ane::h16::encodeResidualHead(
         convs[0].shape.output,stemHeadWeights.data(),stemHeadWeights.size(),
         stemHeadBias.data(),stemHeadBias.size());
     if (stemBoundary.program.taskCount!=1 ||
         stemBoundary.program.kernelRelocations.size()!=1 ||
         stemBoundary.program.output.nchw[1]!=64 ||
+        stemBoundaryTask.at(0x5110)!=256 ||
+        stemBoundaryTask.at(0x5114)!=28672 ||
         headOnly.program.taskCount!=2 ||
         headOnly.program.kernelRelocations.size()!=1 ||
         headOnly.program.inputs.front().nchw[1]!=64 ||
@@ -226,6 +238,33 @@ int main() {
     if (blockProbe.program.taskCount!=9 || stageProbe.program.taskCount!=17 ||
         blockProbe.program.kernelRelocations.size()!=6 ||
         stageProbe.program.kernelRelocations.size()!=12) return 5;
+
+    ane::h16::ResidualNetworkOptions boundaryOptions;
+    boundaryOptions.boundaryOutput=true;
+    boundaryOptions.maxPool=false;
+    auto stemDump=ane::h16::encodeResidualNetwork(
+        {convs[0]},nullptr,0,nullptr,0,boundaryOptions);
+    boundaryOptions.maxPool=true;
+    auto poolDump=ane::h16::encodeResidualNetwork(
+        {convs[0]},nullptr,0,nullptr,0,boundaryOptions);
+    auto blockDump=ane::h16::encodeResidualNetwork(
+        firstBlock,nullptr,0,nullptr,0,boundaryOptions);
+    auto stageDump=ane::h16::encodeResidualNetwork(
+        firstStage,nullptr,0,nullptr,0,boundaryOptions);
+    const auto poolDumpTask=taskRegisters(poolDump.program.task,1);
+    const auto blockDumpTask=taskRegisters(blockDump.program.task,6);
+    const auto stageDumpTask=taskRegisters(stageDump.program.task,14);
+    if (stemDump.program.taskCount!=1 || poolDump.program.taskCount!=2 ||
+        blockDump.program.taskCount!=7 || stageDump.program.taskCount!=15 ||
+        poolDump.program.output.nchw[1]!=64 ||
+        blockDump.program.output.nchw[1]!=256 ||
+        stageDump.program.output.nchw[1]!=256 ||
+        poolDumpTask.at(0x5110)!=128 || poolDumpTask.at(0x5114)!=7168 ||
+        poolDumpTask.at(0x5138)!=0x01302031 ||
+        blockDumpTask.at(0x5110)!=128 || blockDumpTask.at(0x5114)!=7168 ||
+        blockDumpTask.at(0x5138)!=0x01302031 ||
+        stageDumpTask.at(0x5110)!=128 || stageDumpTask.at(0x5114)!=7168 ||
+        stageDumpTask.at(0x5138)!=0x01302031) return 9;
 
     // A basic-block ResNet-18 geometry takes the same topology discovery,
     // allocator, DMA, and descriptor constructors.  It deliberately has no

@@ -398,11 +398,13 @@ static ANEHWXArtifact *encodeResidualDiagnosticProgram(
         poolCount += [node.operationName isEqualToString:@"max_pool"];
         addCount += [node.operationName isEqualToString:@"add"];
     }
-    const BOOL stemBoundary=convCount==1 && !meanCount && !linearCount &&
-        !poolCount && !addCount;
+    const BOOL residualBoundary=convCount>=1 && convCount<=11 &&
+        !meanCount && !linearCount && poolCount<=1 && addCount<=3 &&
+        (convCount==1 || poolCount==1);
     const BOOL headOnly=!convCount && meanCount==1 && linearCount==1 &&
         !poolCount && !addCount;
-    if ((!stemBoundary && !headOnly) || graph.sourceFunction.inputs.count!=1 ||
+    if ((!residualBoundary && !headOnly) ||
+        graph.sourceFunction.inputs.count!=1 ||
         graph.outputValueNames.count!=1) return nil;
     ANEGraphValue *input=graph.sourceFunction.inputs.firstObject;
     ANEOperationNode *output=[graph nodeForValueName:graph.outputValueNames.firstObject];
@@ -412,39 +414,75 @@ static ANEHWXArtifact *encodeResidualDiagnosticProgram(
 
     ane::h16::ResNet50Program encoded;
     try {
-        if (stemBoundary) {
-            ANEOperationNode *conv=nodeWithLabel(graph,@"conv_0");
-            if (!conv || ![conv.operationName isEqualToString:@"conv"] ||
-                inputShape[1].unsignedIntegerValue!=3 ||
-                conv.outputType.shape.count!=4) return nil;
-            ANEOperationNode *weight=producerForOperand(graph,conv,@"weight");
-            ANEOperationNode *bias=producerForOperand(graph,conv,@"bias");
-            NSArray<NSNumber *> *weightShape=weight.outputType.shape;
-            NSArray<NSNumber *> *outputShape=conv.outputType.shape;
-            if (!weight || !bias || weightShape.count!=4 ||
-                weightShape[0].unsignedIntegerValue!=64 ||
-                weightShape[1].unsignedIntegerValue!=3 ||
-                weightShape[2].unsignedIntegerValue!=7 ||
-                weightShape[3].unsignedIntegerValue!=7 ||
-                outputShape[1].unsignedIntegerValue!=64) return nil;
-            const NSUInteger weightBytes=64*3*7*7*2;
-            NSData *rawWeight=[ANEBlobResolver loadConstantForOperation:
-                weight.sourceOperation expectedBytes:weightBytes modelRoot:modelRoot
-                diagnostics:diagnostics];
-            NSData *rawBias=[ANEBlobResolver loadConstantForOperation:
-                bias.sourceOperation expectedBytes:64*2 modelRoot:modelRoot
-                diagnostics:diagnostics];
-            if (!rawWeight || !rawBias) return nil;
-            ane::h16::ConvShape shape;
-            shape.input={3,uint32_t(inputShape[2].unsignedIntegerValue),
-                         uint32_t(inputShape[3].unsignedIntegerValue)};
-            shape.output={64,uint32_t(outputShape[2].unsignedIntegerValue),
-                          uint32_t(outputShape[3].unsignedIntegerValue)};
-            shape.kernel=shape.kernelWidth=7;shape.stride=2;
-            shape.groups=1;shape.bias=true;
-            encoded=ane::h16::encodeResidualStemBoundary({shape,
-                static_cast<const uint8_t *>(rawWeight.bytes),rawWeight.length,
-                static_cast<const uint8_t *>(rawBias.bytes),rawBias.length});
+        if (residualBoundary) {
+            struct BoundarySpec {
+                __unsafe_unretained NSString *name;
+                uint32_t cin,cout,spatial,kernel,stride;
+            };
+            static const BoundarySpec specs[] = {
+                {@"conv_0",3,64,224,7,2},
+                {@"conv_1",64,64,56,1,1},
+                {@"conv_2",64,64,56,3,1},
+                {@"conv_3",64,256,56,1,1},
+                {@"conv_4",64,256,56,1,1},
+                {@"conv_5",256,64,56,1,1},
+                {@"conv_6",64,64,56,3,1},
+                {@"conv_7",64,256,56,1,1},
+                {@"conv_8",256,64,56,1,1},
+                {@"conv_9",64,64,56,3,1},
+                {@"conv_10",64,256,56,1,1},
+            };
+            if (inputShape[1].unsignedIntegerValue!=3 ||
+                inputShape[2].unsignedIntegerValue!=
+                    inputShape[3].unsignedIntegerValue) return nil;
+            const NSUInteger modelSpatial=inputShape[2].unsignedIntegerValue;
+            if (modelSpatial!=224 && modelSpatial!=192) return nil;
+            NSMutableArray<NSData *> *storage=[NSMutableArray array];
+            std::vector<ane::h16::ResNet50ConvWeights> convolutions;
+            convolutions.reserve(convCount);
+            for (NSUInteger index=0;index<convCount;++index) {
+                const auto &spec=specs[index];
+                ANEOperationNode *conv=nodeWithLabel(graph,spec.name);
+                if (!conv || ![conv.operationName isEqualToString:@"conv"])
+                    return nil;
+                ANEOperationNode *weight=producerForOperand(graph,conv,@"weight");
+                ANEOperationNode *bias=producerForOperand(graph,conv,@"bias");
+                if (!weight || !bias || weight.outputType.shape.count!=4 ||
+                    bias.outputType.shape.count!=1) return nil;
+                const uint32_t spatial=uint32_t(
+                    (uint64_t(spec.spatial)*modelSpatial)/224);
+                const uint32_t out=(spatial+spec.stride-1)/spec.stride;
+                if (![conv.sourceOperation.operands[@"x"].value.type.shape
+                        isEqualToArray:@[@1,@(spec.cin),@(spatial),@(spatial)]] ||
+                    ![conv.outputType.shape
+                        isEqualToArray:@[@1,@(spec.cout),@(out),@(out)]] ||
+                    ![weight.outputType.shape isEqualToArray:
+                        @[@(spec.cout),@(spec.cin),@(spec.kernel),@(spec.kernel)]] ||
+                    ![bias.outputType.shape isEqualToArray:@[@(spec.cout)]])
+                    return nil;
+                const NSUInteger weightBytes=(NSUInteger)spec.cout*spec.cin*
+                                             spec.kernel*spec.kernel*2;
+                NSData *rawWeight=[ANEBlobResolver loadConstantForOperation:
+                    weight.sourceOperation expectedBytes:weightBytes
+                    modelRoot:modelRoot diagnostics:diagnostics];
+                NSData *rawBias=[ANEBlobResolver loadConstantForOperation:
+                    bias.sourceOperation expectedBytes:spec.cout*2
+                    modelRoot:modelRoot diagnostics:diagnostics];
+                if (!rawWeight || !rawBias) return nil;
+                [storage addObject:rawWeight];[storage addObject:rawBias];
+                ane::h16::ConvShape shape;
+                shape.input={spec.cin,spatial,spatial};
+                shape.output={spec.cout,out,out};
+                shape.kernel=shape.kernelWidth=spec.kernel;
+                shape.stride=spec.stride;shape.groups=1;shape.bias=true;
+                convolutions.push_back({shape,
+                    static_cast<const uint8_t *>(rawWeight.bytes),rawWeight.length,
+                    static_cast<const uint8_t *>(rawBias.bytes),rawBias.length});
+            }
+            ane::h16::ResidualNetworkOptions options;
+            options.maxPool=poolCount==1;options.boundaryOutput=true;
+            encoded=ane::h16::encodeResidualNetwork(
+                convolutions,nullptr,0,nullptr,0,options);
         } else {
             ANEOperationNode *linear=nodeWithLabel(graph,@"linear_0");
             if (!linear || ![linear.operationName isEqualToString:@"linear"] ||
