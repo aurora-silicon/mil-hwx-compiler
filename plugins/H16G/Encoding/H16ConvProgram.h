@@ -116,10 +116,17 @@ struct LayerNormPrefixBoundary {
     std::uint32_t tokenStart = 0;
     const char *expectedStage = nullptr;
 };
+enum class LayerNormPrefixControl {
+    None,
+    /// Negative control: repeat the mean divisor write with the same value.
+    /// The decoded register state is unchanged, but the task bytes differ.
+    RepeatMeanDivisor,
+};
 std::vector<LayerNormPrefixBoundary> transformerLayerNormPrefixBoundaries(
     std::uint32_t tokens, std::uint32_t channels);
 TransformerLayerNormProgram encodeTransformerLayerNormPrefixDump(
-    std::uint32_t tokens, std::uint32_t channels, std::uint32_t taskCount);
+    std::uint32_t tokens, std::uint32_t channels, std::uint32_t taskCount,
+    LayerNormPrefixControl control = LayerNormPrefixControl::None);
 
 std::string attentionLayoutRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,

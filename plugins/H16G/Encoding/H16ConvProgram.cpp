@@ -953,7 +953,8 @@ Task layerNormNormalizeTask(U32 tokens,U32 channels,U32 index) {
 }
 
 Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
-                         U32 normalizationBase,U32 sourceRow=0) {
+                         U32 normalizationBase,U32 sourceRow=0,
+                         U32 affineChannels=0) {
     Task task;task.header={index,0,0x04000000,0,kDispatchLimitFinal,0,0,0,9};auto &r=task.registers;
     const U32 row=2*channels;r[0x5500]=0x80;r[4]=r[0x14]=channels;
     r[8]=r[0x18]=tokens;r[12]=r[0x1c]=1;r[0x34]=tokens;r[0x3c]=0x30;
@@ -961,13 +962,22 @@ Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
     // Identity gamma is a no-op.  Add only the packaged zero beta while the
     // full-program output writer materializes the normalized L2 view.
     if(!sourceRow)sourceRow=row;
+    if(!affineChannels)affineChannels=channels;
     r[0x4118]=row;r[0x4124]=normalizationBase;
     r[0x4128]=r[0x412c]=r[0x4130]=r[0x4134]=sourceRow;
     r[0x4148]=0x14a;r[0x414c]=normalizationBase+sourceRow+0x40;r[0x4500]=0x80000;
     r[0x4d04]=index<<16|0x21;r[0x4d0c]=0xce;
-    r[0x4d28]=2*channels;r[0x4d2c]=0;
+    // The affine table is sized for the original model width.  A compact
+    // prefix writer may expose fewer L2 lanes, but beta still starts after
+    // the complete identity-gamma vector.
+    r[0x4d28]=2*affineChannels;r[0x4d2c]=0;
     r[0x4d6c]=0x1002031;r[0x5100]=0x01000031|index<<16;
-    r[0x5108]=r[0x510c]=0;r[0x5110]=row;r[0x5138]=0x1302031;
+    r[0x5108]=r[0x510c]=0;r[0x5110]=row;
+    // Full-width rows happened to inherit a sufficient result-DMA default.
+    // Compact mean views did not: without the plane span the cache writer
+    // stopped after one 64-byte line, leaving 2752/2784 Whisper lanes in the
+    // output poison.  Name the complete contiguous external result plane.
+    r[0x5114]=tokens*row;r[0x5138]=0x1302031;
     r[0x5900]=0x12;r[0x5904]=0xa000a0;r[0x5908]=index<<16|0xe0;
     r[0x5918]=0;r[0x5928]=0x7f0000;r[0x592c]=0x20010701;
     task.bytes.clear();for(U32 value:task.header)word(task.bytes,value);
@@ -975,7 +985,7 @@ Task layerNormOutputTask(U32 tokens,U32 channels,U32 index,
     record(task,{0x14,0x18,0x1c,0x34,0x3c,0x44,0x48,0x4c});record(task,{0x4d0c});
     record(task,{0x4d6c});record(task,{0x4104,0x4108});
     record(task,{0x4118,0x4124,0x4128,0x412c,0x4130,0x4134,0x4148,0x414c});
-    record(task,{0x4500});record(task,{0x5110,0x5138});
+    record(task,{0x4500});record(task,{0x5110,0x5114,0x5138});
     record(task,{0x5900,0x5904,0x5908,0x5918,0x5928,0x592c});
     record(task,{0x4d28,0x4d2c},taskBar(8));record(task,{0x5108,0x510c},taskBar(7));
     record(task,{0x4d04},0x22000000);record(task,{0x5100},0x22000000);
@@ -1080,7 +1090,7 @@ std::vector<LayerNormPrefixBoundary> transformerLayerNormPrefixBoundaries(
 }
 
 TransformerLayerNormProgram encodeTransformerLayerNormPrefixDump(
-    U32 tokens,U32 channels,U32 taskCount) {
+    U32 tokens,U32 channels,U32 taskCount,LayerNormPrefixControl control) {
     const auto boundaries=transformerLayerNormPrefixBoundaries(tokens,channels);
     const auto found=std::find_if(boundaries.begin(),boundaries.end(),
         [taskCount](const auto &item){return item.taskCount==taskCount;});
@@ -1088,9 +1098,20 @@ TransformerLayerNormProgram encodeTransformerLayerNormPrefixDump(
         throw std::invalid_argument("layer_norm prefix task count is out of range");
     std::vector<Task> tasks=layerNormPrefixTasks(tokens,channels);
     tasks.resize(taskCount);
+    if(control==LayerNormPrefixControl::RepeatMeanDivisor) {
+        // A same-value rewrite is a byte-distinct framing control with an
+        // identical decoded register state.  Keep it on the first mean task
+        // so a reviewer can distinguish the writer-field fix from a generic
+        // task-size or record-count effect.
+        Task &mean=tasks.front();
+        record(mean,{0x4514});
+        mean.header[0]=U32(mean.bytes.size()/4)<<16|
+            (mean.header[0]&0xffff);
+        store(mean.bytes,0,mean.header[0]);
+    }
     const U32 elements=found->resultRowBytes/2;
     tasks.push_back(layerNormOutputTask(found->resultRows,elements,
-        U32(tasks.size()),found->resultBase,found->resultRowBytes));
+        U32(tasks.size()),found->resultBase,found->resultRowBytes,channels));
     TransformerLayerNormProgram out;
     finishLayerNormProgram(out,tasks,tokens,channels,false);
     return out;

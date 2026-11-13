@@ -22,13 +22,13 @@ DUMP = str(Path(sys.argv[1] if len(sys.argv) > 1 else
                 ROOT / "build/h16_transformer_layer_norm_dump").resolve())
 
 CASES = [
-    (128, 768, 3, [180, 132, 132, 124, 248],
+    (128, 768, 3, [180, 132, 132, 124, 252],
      "1b9fe62201bfab3bf23e00fa7d9db9a89118e0ba5de670c45a48e3be4467d061"),
     (1500, 384, 9,
-     [180, 172, 172, 168, 196, 196, 192, 192, 200, 140, 248],
+     [180, 172, 172, 168, 196, 196, 192, 192, 200, 140, 252],
      "8f1107a90c61a18787b6c8a7e266af65fc6a6adddbe43eeb37478479db932d2a"),
     (1500, 512, 9,
-     [180, 172, 172, 168, 196, 196, 192, 192, 184, 156, 248],
+     [180, 172, 172, 168, 196, 196, 192, 192, 184, 156, 252],
      "b95ec9b09570c0b57ad532181f3f2e804cc19ad3c138729f96eac024b533f4f6"),
 ]
 def canonical(task: bytes) -> dict:
@@ -123,8 +123,25 @@ def main() -> None:
             assert task_word(final, 0x4128) == item["result_row_bytes"]
             assert task_word(final, 4) == item["result_row_bytes"] // 2
             assert task_word(final, 8) == item["result_rows"]
+            assert task_word(final, 0x4d28) == 2 * channels
+            assert task_word(final, 0x5114) == \
+                item["result_rows"] * item["result_row_bytes"]
             assert bar_slot(final, "0x04d28") == 8
             assert bar_slot(final, "0x05108") == 7
+        control_stream = subprocess.check_output(
+            [DUMP, str(tokens), str(channels), "prefix-1-dead-control"])
+        ordinary_stream = subprocess.check_output(
+            [DUMP, str(tokens), str(channels), "prefix-1"])
+        control_tasks = split_h14_tasks(control_stream[16:])
+        ordinary_tasks = split_h14_tasks(ordinary_stream[16:])
+        assert len(control_tasks) == len(ordinary_tasks) == 2
+        assert control_tasks[0] != ordinary_tasks[0]
+        assert control_tasks[1] == ordinary_tasks[1]
+        control_mean = decode_task(control_tasks[0], "h16")
+        ordinary_mean = decode_task(ordinary_tasks[0], "h16")
+        assert task_word(control_mean, 0x4514) == task_word(
+            ordinary_mean, 0x4514)
+        assert control_mean["blocks"] == ordinary_mean["blocks"]
         stream = subprocess.check_output(
             [DUMP, str(tokens), str(channels), "normalized"])
         normalized_tasks = split_h14_tasks(stream[16:])

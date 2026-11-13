@@ -8,7 +8,8 @@
 int main(int argc,char **argv) {
     if(argc!=3&&argc!=4) {
         std::cerr << "usage: h16_transformer_layer_norm_dump S C "
-                     "[mean|variance|normalized|prefix-N|prefix-info]\n";
+                     "[mean|variance|normalized|prefix-N|"
+                     "prefix-N-dead-control|prefix-info]\n";
         return 64;
     }
     const auto tokens=std::strtoul(argv[1],nullptr,0);
@@ -38,8 +39,11 @@ int main(int argc,char **argv) {
         }
         if(stage.rfind("prefix-",0)==0) {
             const auto count=std::strtoul(stage.c_str()+7,nullptr,0);
+            const bool control=stage.find("-dead-control")!=std::string::npos;
             encoded=ane::h16::encodeTransformerLayerNormPrefixDump(
-                tokens,channels,count);
+                tokens,channels,count,control
+                    ? ane::h16::LayerNormPrefixControl::RepeatMeanDivisor
+                    : ane::h16::LayerNormPrefixControl::None);
             std::cout.write(reinterpret_cast<const char *>(encoded.program.task.data()),
                             encoded.program.task.size());
             return 0;

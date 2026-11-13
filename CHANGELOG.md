@@ -4,6 +4,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: repair the compact layer-normalization prefix writer after the r5
+  device bisect. It now addresses zero beta with the original model width
+  and names the complete result-DMA plane instead of inheriting a one-cache-
+  line default. The r6 kit retains every producer prefix, adds a same-value
+  mean-divisor negative control, runs three cold loads per layer-normalization
+  object, and keeps the qualified attention objects byte-identical.
 - H16G: replace unsafe logical-stage layer-normalization dumps with a
   producer-by-producer reduction-prefix bisect. Compact writers now consume
   each task's named L2 result base and row stride; no centered or reciprocal-
