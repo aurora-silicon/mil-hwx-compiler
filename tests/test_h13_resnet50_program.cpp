@@ -902,6 +902,12 @@ static void validateFirstBlockAccessGraph(
                add.second.storage == "l2" &&
                add.result.storage == "external",
            "first block add does not read both initialized branches into a fresh result");
+    const auto addSpan = taskSpans(program).back();
+    expect(reg(program, addSpan, 0x04810) -
+               reg(program, addSpan, 0x04814) == 2u * 16u &&
+               reg(program, addSpan, 0x04824) -
+               reg(program, addSpan, 0x04828) == 2u * 16u,
+           "first block add branches lost the PE bank phase");
 }
 
 static void validateBlockSubRungs(
@@ -941,6 +947,27 @@ static void validateBlockSubRungs(
     expect(projection.taskRecords.front().role == "projection" &&
                projection.output.nchw[1] == 256,
            "projection-only sub-rung has the wrong task or output");
+    const auto externalBankedRow = [](std::uint32_t channels,
+                                      std::uint32_t width) {
+        const auto channel = (2 * width + 15) & ~15u;
+        const auto bankPhase = width >= 64 ? 0u : width > 16 ? 5u * 16u
+            : channels >= 32 ? 3u * 16u : 2u * 16u;
+        return channels * channel + bankPhase;
+    };
+    for (const auto *program : {&conv1, &projection}) {
+        const auto span = taskSpans(*program).front();
+        const auto channels = reg(*program, span, 0x0000c);
+        const auto width = reg(*program, span, 0x00000) & 0xffffu;
+        expect(reg(*program, span, 0x04810) ==
+                   externalBankedRow(channels, width) &&
+                   reg(*program, span, 0x04814) ==
+                       reg(*program, span, 0x0480c) * channels &&
+                   reg(*program, span, 0x1380c) ==
+                       program->inputs.front().nchw[5] &&
+                   reg(*program, span, 0x13810) ==
+                       program->inputs.front().nchw[4],
+               "standalone convolution lost its external-source bank phase");
+    }
     const auto addSpan = taskSpans(add).front();
     const auto selectors = word(add.task, addSpan.offset + 32);
     expect(add.inputs.size() == 2 && add.inputBoundaries ==
@@ -949,6 +976,17 @@ static void validateBlockSubRungs(
                ((selectors >> 6) & 31u) == 6u &&
                add.taskRecords.front().hasSecond,
            "add-only sub-rung does not bind both CPU-reference inputs");
+    const auto addChannels = reg(add, addSpan, 0x0000c);
+    const auto addWidth = reg(add, addSpan, 0x00000) & 0xffffu;
+    const auto addChannel = (2 * addWidth + 15) & ~15u;
+    const auto addBankedRow = addChannel * addChannels + 2u * 16u;
+    expect(reg(add, addSpan, 0x04810) == addBankedRow &&
+               reg(add, addSpan, 0x04824) == addBankedRow &&
+               reg(add, addSpan, 0x04814) ==
+                   reg(add, addSpan, 0x0480c) * addChannels &&
+               reg(add, addSpan, 0x04828) ==
+                   reg(add, addSpan, 0x04820) * addChannels,
+           "add-only external sources lost their independent bank phases");
 }
 
 static std::uint32_t floatWord(float value) {

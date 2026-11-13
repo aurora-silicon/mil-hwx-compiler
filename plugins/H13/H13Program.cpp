@@ -5293,7 +5293,8 @@ struct ResidualTensorLayout {
 };
 
 ResidualTensorLayout residualTensorLayout(ElementwiseShape shape,
-                                          std::uint32_t consumerStride = 1) {
+                                          std::uint32_t consumerStride = 1,
+                                          bool processingElementConsumer = false) {
     const std::uint64_t channel = align16(2ull * shape.width);
     const std::uint64_t plane = channel * shape.channels;
     // L2 advances one spatial row across all channels, then rotates banks by
@@ -5302,9 +5303,20 @@ ResidualTensorLayout residualTensorLayout(ElementwiseShape shape,
     // 0x1c00 plane into a 0x1c70 row.  The consumer expects the stride-class
     // skew, not another pixel row; the oversized stride made resident PE
     // results differ from their following convolution's source layout.
-    const std::uint64_t row = plane +
+    // PE add consumes the two branch surfaces with the PE bank rotation.
+    // Convolutions use the stride/width rotation shared with their generic
+    // encoder.  Treating an add like a stride-1 convolution gives W=56 the
+    // convolution's 0x50 phase instead of the PE phase and makes the add walk
+    // unrelated bank rows.
+    const auto convolutionPhase =
         l2Skew(consumerStride, shape.width, shape.channels);
-    const std::uint64_t bytes = row * shape.height;
+    const std::uint64_t bankPhase = processingElementConsumer
+        ? 2u * 16u : convolutionPhase;
+    const std::uint64_t row = plane + bankPhase;
+    // Keep allocation capacity independent of which consumer views the value.
+    // The larger convolution phase is the conservative ring footprint; the
+    // PE phase changes only the hardware row walk, not live-range placement.
+    const std::uint64_t bytes = (plane + convolutionPhase) * shape.height;
     if (!shape.channels || !shape.height || !shape.width ||
         bytes >= kL2Bytes || row > UINT32_MAX || plane > UINT32_MAX)
         throw std::invalid_argument(
@@ -5440,10 +5452,12 @@ ResidualValue allocateResidualValue(ElementwiseShape shape,
                                     std::uint32_t &scratchCursor,
                                     const std::vector<ResidualRange> &live,
                                     bool allowScratch = true,
-                                    std::uint32_t consumerStride = 1) {
+                                    std::uint32_t consumerStride = 1,
+                                    bool processingElementConsumer = false) {
     ResidualValue value;
     value.shape = shape;
-    value.layout = residualTensorLayout(shape, consumerStride);
+    value.layout = residualTensorLayout(shape, consumerStride,
+                                        processingElementConsumer);
     if (ring.allocate(value.layout.bytes, live, &value.base)) return value;
     if (!allowScratch)
         throw std::invalid_argument(
@@ -5534,12 +5548,27 @@ void disableResidualDestinationDMA(std::vector<std::uint8_t> &stream,
                             0, 0, 0, 0, residualNeutralFormat());
 }
 
+ResidualL2Layout residualExternalSourceLayout(const ResidualValue &value,
+                                              bool nativeStem) {
+    const auto channel = static_cast<std::uint32_t>(
+        align16(2ull * value.shape.width));
+    const auto depth = channel * value.shape.channels;
+    // The native stem is the independently device-proven exception: its
+    // external three-channel row repeats the unskewed pixel-row span.  Every
+    // later spatial consumer needs the bank phase already derived in the
+    // value's consumer layout.  Dropping that phase on a 64x56 source changes
+    // the H13 row walk from 56 pixels to one 32-pixel bank half-row.
+    const auto row = nativeStem ? depth : value.layout.words.row;
+    return {channel, row, depth, depth};
+}
+
 void configureResidualSource(std::vector<std::uint8_t> &stream,
                              std::size_t at, std::size_t bytes,
                              const ResidualValue &value,
                              std::uint32_t stage,
                              bool initialAlias,
-                             bool producerHandoff) {
+                             bool producerHandoff,
+                             bool nativeStem) {
     if (value.storage == ResidualStorage::Ring) {
         residualL2Source(stream, at, bytes,
                          initialAlias ? l2InitialAliasSourceConfig()
@@ -5561,17 +5590,8 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
     }
     const bool external = value.storage == ResidualStorage::External;
     auto l2 = value.layout.words;
-    if (external) {
-        // An external NCHW source is staged as one complete pixel row across
-        // channels.  The device-proven linked-ring stem repeats that span in
-        // all three extent fields; it does not append the resident bank skew
-        // and it never leaves the final extent zero.
-        l2.channel = static_cast<std::uint32_t>(
-            align16(2ull * value.shape.width));
-        l2.row = l2.channel * value.shape.channels;
-        l2.depth = l2.row;
-        l2.group = l2.row;
-    }
+    if (external)
+        l2 = residualExternalSourceLayout(value, nativeStem);
     residualL2Source(stream, at, bytes,
                      external ? residualL2ExternalSourceConfig()
                               : residualL2ScratchSourceConfig(),
@@ -5637,13 +5657,8 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
                              const ResidualValue &value,
                              std::uint32_t stage) {
     auto l2 = value.layout.words;
-    if (value.storage == ResidualStorage::External) {
-        l2.channel = static_cast<std::uint32_t>(
-            align16(2ull * value.shape.width));
-        l2.row = l2.channel * value.shape.channels;
-        l2.depth = l2.row;
-        l2.group = l2.row;
-    }
+    if (value.storage == ResidualStorage::External)
+        l2 = residualExternalSourceLayout(value, false);
     residualL2Second(stream, at, bytes,
                      value.storage == ResidualStorage::Ring ? value.base : stage,
                      l2);
@@ -5682,7 +5697,8 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
         task.slice == 0;
     configureResidualSource(program.task, at, bytes, planned.route.source,
                             planned.route.sourceStage,
-                            initialAliasConsumer, scratchProducerHandoff);
+                            initialAliasConsumer, scratchProducerHandoff,
+                            task.role == ResidualRole::Stem);
     configureResidualResult(program.task, at, bytes, planned.route.result,
                             planned.route.resultStage, task.firstOutput,
                             initialAliasProducer);
@@ -5895,7 +5911,8 @@ Program encodeResidualNetwork(
         if (block.projection != kNoConvolution) {
             const auto output = convolutions[block.projection].shape.output;
             shortcut = allocateResidualValue(output, ring, scratchCursor,
-                                              ringRanges({&blockInput}));
+                                              ringRanges({&blockInput}), true,
+                                              1, true);
             emitConv(block.projection, ResidualRole::Projection,
                      blockName, "projection", blockInput,
                      shortcut, false, ringRanges({&blockInput, &shortcut}));
@@ -5912,7 +5929,8 @@ Program encodeResidualNetwork(
             const auto consumerStride = position + 1 < block.main.size()
                 ? convolutions[block.main[position + 1]].shape.stride : 1u;
             auto next = allocateResidualValue(output, ring, scratchCursor,
-                                              live, true, consumerStride);
+                                              live, true, consumerStride,
+                                              position + 1 == block.main.size());
             const auto role = residualMainRole(block.main.size(), position);
             const std::string roleName = block.main.size() == 2
                 ? (position ? "basic2" : "basic1")

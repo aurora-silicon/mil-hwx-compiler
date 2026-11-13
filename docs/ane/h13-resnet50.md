@@ -137,6 +137,16 @@ scratch source, result, and second source cannot reuse the same staging tile.
 The package manifest exposes each task's surface and L2 ranges for the offline
 audit tool.
 
+Round 15 separates external surface geometry from the L2 bank phase.  The
+standalone 64x56 1x1 task had correct 112-byte NCHW source rows but discarded
+the consumer layout's 80-byte L2 bank rotation.  Its deterministic 32-pixel
+row walk reproduces the device dump offline; retaining the rotation restores
+the 56-pixel walk.  The native stem remains the proven unskewed exception.
+Values consumed by a PE add use the PE's 32-byte bank rotation on both branch
+layouts instead of the convolution rotation.  The decoded field table and
+offline model are in `h13-resnet50-round15.md` and
+`tools/h13-resnet50/round15.py`.
+
 The dependency-free numeric reference explicitly executes TensorFlow-SAME
 max-pool with the odd padding cell after the surface. Its asymmetric test case
 would produce a different first window under torchvision-style symmetric

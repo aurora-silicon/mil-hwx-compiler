@@ -39,6 +39,13 @@ The generated `verify_cold.py` performs both checks from three output NPYs.
 The task manifests can be audited offline with
 `tools/h13-resnet50/task_graph.py`.
 
+`tools/h13-resnet50/round15.py KIT` decodes the stem, pool, and first-block
+geometry fields.  For conv1-only it also unpacks the ANEC's own dense 1x1
+weights and models the L2 bank-phase row walk.  Pass `--device output.npy` to
+measure the prediction against a retained output; without it the tool is
+entirely package/input based.  A corrected kit reports a 56-pixel walk, while
+the round-14 zero-phase task reports 32.
+
 `sweep` starts from the measured round-12 control: Common `0x2c` low-nibble 4
 emits 16-column pieces, destination `+0x08` is the 128-byte row stride, and
 destination `+0x0c` is the plane stride. It tries low-nibble widths 5, 6, and
