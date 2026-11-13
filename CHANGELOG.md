@@ -8,6 +8,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
   task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
   7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are
   unchanged; standalone layer normalization remains gated.
+- H16G: replace the round-3 layer-normalization boundary with the exact
+  measured normalization task that feeds projection. The former task read
+  the reduction source base through an affine/materialization form; it was
+  not byte-identical to the measured normalizer. Named source/result L2
+  fields now preserve the in-place BERT path and both distinct Whisper
+  result bases, including the base model's interleave-8 spill. Research-only
+  mean, centered, variance, reciprocal-standard-deviation, and normalized
+  dump variants support the round-4 reviewer kit; the production gate stays
+  closed.
 - H16G: correct the qualification-only transformer candidates after the
   round-2 J616s per-stage dump. Both independent QK head-half tasks now fold
   the graph's fp16 score scale; previously the high half was exactly 64x too

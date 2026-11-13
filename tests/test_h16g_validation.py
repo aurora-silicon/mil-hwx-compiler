@@ -251,12 +251,24 @@ class ValidationTests(unittest.TestCase):
         tasks = [dict(registers={0x450c: 0x37280000},
                       dma=[dict(address=0x4d10)]),
                  *[dict(registers={}, dma=[]) for _ in range(3)],
-                 dict(registers={}, dma=[dict(address=0x4d28),
-                                         dict(address=0x5108)])]
+                 dict(registers={0x4500: 0x80000},
+                      dma=[dict(address=0x4d28), dict(address=0x5108)])]
         self.assertTrue(layer_norm_program(tasks, 5, 0x10, 20))
         self.assertEqual(dma_extent(
             dict(address=0x4d28, offset=1536), {4: 768},
             dict(kind='kernel', size=3072), 'layer_norm'), 3072)
+        dump = [dict(registers={}, dma=[dict(address=0x4d10)]),
+                dict(registers={0x4500: 0x80000},
+                     dma=[dict(address=0x4d28), dict(address=0x5108)])]
+        self.assertTrue(layer_norm_program(dump, 2, 0x10, 20))
+
+    def test_layer_norm_wbase_interleave_spill_extent(self):
+        registers = {4: 512, 12: 1500, 0x14: 512, 0x1c: 1500,
+                     0x5114: 0x5dc0, 0x5138: 0x08302031}
+        self.assertEqual(dma_extent(
+            dict(address=0x5108, offset=0), registers,
+            dict(kind='scratch', size=1500 * 512 * 2), 'layer_norm'),
+            1500 * 512 * 2)
     def test_unpadded_final_task(self):
         raw, _ = fixture()
         task = raw[0x4000:0x403c]
