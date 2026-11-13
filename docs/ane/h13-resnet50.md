@@ -1,5 +1,9 @@
 # H13 residual linked ring
 
+Round 16 localizes the standalone residual-convolution row permutation to the
+external TileDMA source row class and adds single-word device morphs plus an
+H=1 probe. See [the round-16 field report](h13-resnet50-round16.md).
+
 `mil-hwxc --target H13 --schedule linked-ring` recognizes a residual graph
 with a convolution stem, max-pool, basic (3x3,3x3) or bottleneck
 (1x1,3x3,1x1) blocks, global mean, and a linear classifier. It emits one

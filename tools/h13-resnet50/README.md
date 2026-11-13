@@ -44,7 +44,15 @@ geometry fields.  For conv1-only it also unpacks the ANEC's own dense 1x1
 weights and models the L2 bank-phase row walk.  Pass `--device output.npy` to
 measure the prediction against a retained output; without it the tool is
 entirely package/input based.  A corrected kit reports a 56-pixel walk, while
-the round-14 zero-phase task reports 32.
+the round-14 zero-phase task reports 32. Device follow-up showed that this L2
+word was inert; `round16.py` below models the causal TileDMA row instead.
+
+`tools/h13-resnet50/round16.py KIT` corrects the causal assignment: external
+TileDMA consumes source rows in 64-byte beats, so the old 112-byte W=56 row
+advanced only 64 bytes (32 fp16 pixels). It audits the coherent 128-byte
+source layout, the r14 and known-dead controls, every one-word conv1/projection
+morph, and the H=1 row probe. The generated kit publishes these under
+`morphs`, `morphOrder`, and `rowProbe`.
 
 `sweep` starts from the measured round-12 control: Common `0x2c` low-nibble 4
 emits 16-column pieces, destination `+0x08` is the 128-byte row stride, and

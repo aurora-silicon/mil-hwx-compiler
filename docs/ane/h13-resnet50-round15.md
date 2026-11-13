@@ -1,5 +1,11 @@
 # H13 ResNet-50 round 15: external-source bank phase
 
+> Device follow-up: the one-byte L2 source-row change below was inert. Round
+> 15 and round 14 produced byte-identical conv1 output. The reproduction was
+> accurate, but its causal assignment was not; round 16 localizes the
+> 32-pixel walk to the 112-byte external TileDMA row. See
+> [round 16](h13-resnet50-round16.md).
+
 Round 15 starts from the one-task `block01-conv1-only` result.  Its kernel
 payload is correct: unpacking the emitted dense 1x1 section and evaluating it
 against the kit input reproduces the CPU reference at relative L2

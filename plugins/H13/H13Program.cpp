@@ -4580,6 +4580,38 @@ enum class ResidualPoolSweep {
     Width28BestGuess,
 };
 
+enum class ResidualInputMorph {
+    Fixed,
+    Round14Baseline,
+    DeadL2RowControl,
+    SourceRow,
+    SourcePlane,
+    SourceDepth,
+    SourceGroup,
+};
+
+ResidualInputMorph residualInputMorph(const std::string &boundary) {
+    constexpr const char *prefix = "-morph-";
+    const auto marker = boundary.find(prefix);
+    if (marker == std::string::npos) return ResidualInputMorph::Fixed;
+    const auto name = boundary.substr(marker + std::strlen(prefix));
+    if (name == "r14-baseline")
+        return ResidualInputMorph::Round14Baseline;
+    if (name == "dead-l2-row")
+        return ResidualInputMorph::DeadL2RowControl;
+    if (name == "source-row") return ResidualInputMorph::SourceRow;
+    if (name == "source-plane") return ResidualInputMorph::SourcePlane;
+    if (name == "source-depth") return ResidualInputMorph::SourceDepth;
+    if (name == "source-group") return ResidualInputMorph::SourceGroup;
+    throw std::invalid_argument(
+        "h13.residual-boundary: unknown input morph " + name);
+}
+
+std::string residualInputMorphBoundary(const std::string &boundary) {
+    const auto marker = boundary.find("-morph-");
+    return marker == std::string::npos ? boundary : boundary.substr(0, marker);
+}
+
 ResidualPoolSweep residualPoolSweep(const std::string &boundary) {
     if (boundary == "pool-sweep-control")
         return ResidualPoolSweep::Control;
@@ -5549,17 +5581,42 @@ void disableResidualDestinationDMA(std::vector<std::uint8_t> &stream,
 }
 
 ResidualL2Layout residualExternalSourceLayout(const ResidualValue &value,
-                                              bool nativeStem) {
+                                              bool nativeStem,
+                                              ResidualInputMorph morph) {
     const auto channel = static_cast<std::uint32_t>(
         align16(2ull * value.shape.width));
     const auto depth = channel * value.shape.channels;
-    // The native stem is the independently device-proven exception: its
-    // external three-channel row repeats the unskewed pixel-row span.  Every
-    // later spatial consumer needs the bank phase already derived in the
-    // value's consumer layout.  Dropping that phase on a 64x56 source changes
-    // the H13 row walk from 56 pixels to one 32-pixel bank half-row.
-    const auto row = nativeStem ? depth : value.layout.words.row;
+    // External TileDMA owns the spatial walk.  Its L2 row phase is inert for
+    // this source class: round 15 changed only this word and the device result
+    // stayed byte-identical.  Preserve the unskewed round-14 value in normal
+    // programs and retain the phased value only as the named dead-field
+    // control in the round-16 morph kit.
+    const auto row = !nativeStem && morph == ResidualInputMorph::DeadL2RowControl
+        ? value.layout.words.row : depth;
     return {channel, row, depth, depth};
+}
+
+struct ResidualExternalSurfaceLayout {
+    std::uint32_t row, plane, depth, group;
+};
+
+ResidualExternalSurfaceLayout residualExternalSurfaceLayout(
+    ElementwiseShape shape, ResidualInputMorph morph) {
+    const auto legacyRow = static_cast<std::uint32_t>(align16(2ull * shape.width));
+    const auto fixedRow = static_cast<std::uint32_t>(
+        alignUp(2ull * shape.width, 64));
+    const auto legacyPlane = legacyRow * shape.height;
+    const auto fixedPlane = fixedRow * shape.height;
+    const auto legacyDepth = legacyPlane * shape.channels;
+    const auto fixedDepth = fixedPlane * shape.channels;
+    if (morph == ResidualInputMorph::Fixed)
+        return {fixedRow, fixedPlane, fixedDepth, fixedDepth};
+    return {
+        morph == ResidualInputMorph::SourceRow ? fixedRow : legacyRow,
+        morph == ResidualInputMorph::SourcePlane ? fixedPlane : legacyPlane,
+        morph == ResidualInputMorph::SourceDepth ? fixedDepth : legacyDepth,
+        morph == ResidualInputMorph::SourceGroup ? fixedDepth : legacyDepth,
+    };
 }
 
 void configureResidualSource(std::vector<std::uint8_t> &stream,
@@ -5568,7 +5625,8 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
                              std::uint32_t stage,
                              bool initialAlias,
                              bool producerHandoff,
-                             bool nativeStem) {
+                             bool nativeStem,
+                             ResidualInputMorph morph) {
     if (value.storage == ResidualStorage::Ring) {
         residualL2Source(stream, at, bytes,
                          initialAlias ? l2InitialAliasSourceConfig()
@@ -5591,21 +5649,23 @@ void configureResidualSource(std::vector<std::uint8_t> &stream,
     const bool external = value.storage == ResidualStorage::External;
     auto l2 = value.layout.words;
     if (external)
-        l2 = residualExternalSourceLayout(value, nativeStem);
+        l2 = residualExternalSourceLayout(value, nativeStem, morph);
     residualL2Source(stream, at, bytes,
                      external ? residualL2ExternalSourceConfig()
                               : residualL2ScratchSourceConfig(),
                      stage, l2);
-    const std::uint32_t row = external
-        ? static_cast<std::uint32_t>(align16(2ull * value.shape.width))
+    const auto externalLayout = residualExternalSurfaceLayout(value.shape, morph);
+    const std::uint32_t row = external ? externalLayout.row
         : static_cast<std::uint32_t>(align16(16ull * value.shape.width));
-    const std::uint32_t plane = row * value.shape.height;
-    const std::uint32_t depth = external
-        ? plane * value.shape.channels
+    const std::uint32_t plane = external ? externalLayout.plane
+                                         : row * value.shape.height;
+    const std::uint32_t depth = external ? externalLayout.depth
         : plane * ((value.shape.channels + 7) / 8);
     residualTileSource(stream, at, bytes,
         residualSourceDMAConfig(external, producerHandoff), value.scratchOffset,
         row, plane, depth, residualSourceFormat(external));
+    if (external)
+        putRegister(stream, at, bytes, 0x13818, externalLayout.group);
 }
 
 void configureResidualResult(std::vector<std::uint8_t> &stream,
@@ -5658,17 +5718,21 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
                              std::uint32_t stage) {
     auto l2 = value.layout.words;
     if (value.storage == ResidualStorage::External)
-        l2 = residualExternalSourceLayout(value, false);
+        l2 = residualExternalSourceLayout(
+            value, false, ResidualInputMorph::Fixed);
     residualL2Second(stream, at, bytes,
                      value.storage == ResidualStorage::Ring ? value.base : stage,
                      l2);
     if (value.storage == ResidualStorage::Ring) return;
     const bool external = value.storage == ResidualStorage::External;
-    const std::uint32_t row = static_cast<std::uint32_t>(align16(
-        (external ? 2ull : 16ull) * value.shape.width));
-    const std::uint32_t plane = row * value.shape.height;
-    const std::uint32_t depth = plane * (external
-        ? value.shape.channels : (value.shape.channels + 7) / 8);
+    const auto externalLayout = residualExternalSurfaceLayout(
+        value.shape, ResidualInputMorph::Fixed);
+    const std::uint32_t row = external ? externalLayout.row
+        : static_cast<std::uint32_t>(align16(16ull * value.shape.width));
+    const std::uint32_t plane = external ? externalLayout.plane
+                                         : row * value.shape.height;
+    const std::uint32_t depth = external ? externalLayout.depth
+        : plane * ((value.shape.channels + 7) / 8);
     putRegister(stream, at, bytes, 0x13804,
                 external ? residualSourceDMAConfig(true)
                          : residualSecondSourceDMAConfig());
@@ -5676,7 +5740,8 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
     putRegister(stream, at, bytes, 0x13820, row);
     putRegister(stream, at, bytes, 0x13824, plane);
     putRegister(stream, at, bytes, 0x13828, depth);
-    putRegister(stream, at, bytes, 0x1382c, depth);
+    putRegister(stream, at, bytes, 0x1382c,
+                external ? externalLayout.group : depth);
     putRegister(stream, at, bytes, 0x13838,
                 external ? residualSourceFormat(true)
                          : residualSecondSourceFormat());
@@ -5685,7 +5750,7 @@ void configureResidualSecond(std::vector<std::uint8_t> &stream,
 }
 
 void routeResidualTask(Program &program, PlannedResidualTask &planned,
-                       std::size_t at, bool last) {
+                       std::size_t at, bool last, ResidualInputMorph morph) {
     auto &task = planned.task;
     const auto bytes = task.encoded.firstTaskBytes;
     const bool initialAliasProducer = task.role == ResidualRole::Stem &&
@@ -5698,7 +5763,7 @@ void routeResidualTask(Program &program, PlannedResidualTask &planned,
     configureResidualSource(program.task, at, bytes, planned.route.source,
                             planned.route.sourceStage,
                             initialAliasConsumer, scratchProducerHandoff,
-                            task.role == ResidualRole::Stem);
+                            task.role == ResidualRole::Stem, morph);
     configureResidualResult(program.task, at, bytes, planned.route.result,
                             planned.route.resultStage, task.firstOutput,
                             initialAliasProducer);
@@ -5756,6 +5821,8 @@ Program encodeResidualNetwork(
     const std::uint8_t *headWeights, std::size_t headWeightBytes,
     const std::uint8_t *headBias, std::size_t headBiasBytes,
     const std::string &terminateAfter) {
+    const auto inputMorph = residualInputMorph(terminateAfter);
+    const auto inputBoundary = residualInputMorphBoundary(terminateAfter);
     if (convolutions.size() < 3)
         throw std::invalid_argument(
             "h13.residual-shape: network needs a stem and one block");
@@ -6049,11 +6116,12 @@ Program encodeResidualNetwork(
     std::uint32_t boundaryExternalPlane = 0;
     bool boundaryOutput = false;
     const bool firstBlockSubRung =
-        terminateAfter == "block01-conv1-only" ||
-        terminateAfter == "block01-conv1-conv2" ||
-        terminateAfter == "block01-conv1-conv2-conv3" ||
-        terminateAfter == "block01-projection-only" ||
-        terminateAfter == "block01-add-only";
+        inputBoundary == "block01-conv1-only" ||
+        inputBoundary == "block01-conv1-row1" ||
+        inputBoundary == "block01-conv1-conv2" ||
+        inputBoundary == "block01-conv1-conv2-conv3" ||
+        inputBoundary == "block01-projection-only" ||
+        inputBoundary == "block01-add-only";
     if (firstBlockSubRung) {
         const auto roleRange = [&](const std::string &role) {
             std::size_t first = kNoConvolution, last = kNoConvolution;
@@ -6070,19 +6138,43 @@ Program encodeResidualNetwork(
             return std::pair<std::size_t, std::size_t>{first, last};
         };
         std::size_t first = 0, last = 0;
-        if (terminateAfter == "block01-projection-only") {
+        if (inputBoundary == "block01-projection-only") {
             std::tie(first, last) = roleRange("projection");
-        } else if (terminateAfter == "block01-add-only") {
+        } else if (inputBoundary == "block01-add-only") {
             std::tie(first, last) = roleRange("add+relu");
         } else {
             std::tie(first, last) = roleRange("main1");
-            if (terminateAfter != "block01-conv1-only")
+            if (inputBoundary != "block01-conv1-only" &&
+                inputBoundary != "block01-conv1-row1")
                 last = roleRange("main2").second;
-            if (terminateAfter == "block01-conv1-conv2-conv3")
+            if (inputBoundary == "block01-conv1-conv2-conv3")
                 last = roleRange("main3").second;
         }
 
-        if (terminateAfter == "block01-add-only") {
+        if (inputBoundary == "block01-conv1-row1") {
+            if (first != last)
+                throw std::logic_error(
+                    "h13.residual-boundary: row-one probe split unexpectedly");
+            auto &probe = planned[first];
+            probe.task.shape.input.height = 1;
+            probe.task.shape.output.height = 1;
+            probe.route.source.shape.height = 1;
+            probe.route.source.layout = residualTensorLayout(
+                probe.route.source.shape);
+            probe.route.result.shape.height = 1;
+            probe.route.result.layout = residualTensorLayout(
+                probe.route.result.shape);
+            putRegister(probe.task.encoded.task, 0,
+                        probe.task.encoded.firstTaskBytes, 0x00000,
+                        (1u << 16) | probe.task.shape.input.width);
+            putRegister(probe.task.encoded.task, 0,
+                        probe.task.encoded.firstTaskBytes, 0x00014,
+                        (1u << 16) | probe.task.shape.output.width);
+            putRegister(probe.task.encoded.task, 0,
+                        probe.task.encoded.firstTaskBytes, 0x00028, 1u);
+        }
+
+        if (inputBoundary == "block01-add-only") {
             auto &add = planned[first];
             add.route.source.storage = ResidualStorage::External;
             add.route.source.scratchOffset = 0;
@@ -6291,7 +6383,7 @@ Program encodeResidualNetwork(
                               residualStemConvFlags());
             }
         }
-        routeResidualTask(program, entry, at, last);
+        routeResidualTask(program, entry, at, last, inputMorph);
         if (entry.task.role == ResidualRole::Pool)
             applyResidualPoolSweep(program.task, at,
                                    entry.task.encoded.firstTaskBytes,
@@ -6320,13 +6412,26 @@ Program encodeResidualNetwork(
     program.constantOffsetBytes = alignUp(program.task.size(), 0x40);
     for (const auto &programInput : programInputs) {
         const auto input = programInput.value.shape;
-        const std::uint64_t inputRow = align16(2ull * input.width);
-        const std::uint64_t inputPlane = inputRow * input.height;
+        const auto legacyRow = align16(2ull * input.width);
+        const auto fixedRow = alignUp(2ull * input.width, 64);
+        const bool fixedPhysicalRow =
+            inputMorph == ResidualInputMorph::Fixed ||
+            inputMorph == ResidualInputMorph::SourceRow;
+        const bool fixedPhysicalPlane = fixedPhysicalRow ||
+            inputMorph == ResidualInputMorph::SourcePlane;
+        const std::uint64_t inputRow = fixedPhysicalRow ? fixedRow : legacyRow;
+        const std::uint64_t inputPlane = (fixedPhysicalPlane
+            ? fixedRow : legacyRow) * input.height;
+        const bool fixedExtent = fixedPhysicalPlane ||
+            inputMorph == ResidualInputMorph::SourceDepth ||
+            inputMorph == ResidualInputMorph::SourceGroup;
+        const std::uint64_t inputBytes = (fixedExtent
+            ? fixedRow * input.height : inputPlane) * input.channels;
         program.inputs.push_back(
             {programInput.channel,
              {1, input.channels, input.height, input.width,
               inputPlane, inputRow},
-             alignUp(inputPlane * input.channels, 0x4000)});
+             alignUp(inputBytes, 0x4000)});
     }
     if (boundaryOutput) {
         const std::uint64_t outputRow = boundaryExternalRow;

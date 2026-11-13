@@ -3336,6 +3336,13 @@ static BOOL writeH13ResidualNetwork(
     if (standaloneSmallSpatialBlock && !program.taskRecords.empty())
         selectedOutputKey = [NSString stringWithUTF8String:
             program.taskRecords.back().boundary.c_str()];
+    NSRange morphMarker = [outputKey rangeOfString:@"-morph-"];
+    if (morphMarker.location != NSNotFound)
+        selectedOutputKey = [outputKey substringToIndex:morphMarker.location];
+    const BOOL rowOneProbe =
+        [outputKey isEqualToString:@"block01-conv1-row1"];
+    if (rowOneProbe)
+        selectedOutputKey = @"block01-conv1-only";
     ANEGraphValue *selectedOutput =
         [outputKey isEqualToString:@"pool-via-dram"] ||
         [outputKey hasPrefix:@"pool-sweep-"]
@@ -3347,11 +3354,22 @@ static BOOL writeH13ResidualNetwork(
             nil, @"h13.residual-boundary");
     NSMutableArray<NSMutableDictionary *> *inputRecords =
         [NSMutableArray arrayWithCapacity:selectedInputs.count];
-    for (NSUInteger index = 0; index != selectedInputs.count; ++index)
+    for (NSUInteger index = 0; index != selectedInputs.count; ++index) {
+        NSArray<NSNumber *> *shape = selectedInputs[index].type.shape;
+        if (rowOneProbe) {
+            const auto &layout = program.inputs[index].nchw;
+            shape = @[@(layout[0]), @(layout[1]), @(layout[2]), @(layout[3])];
+        }
         [inputRecords addObject:[binding(selectedInputs[index],
-            selectedInputs[index].type.shape, program.inputs[index]) mutableCopy]];
+            shape, program.inputs[index]) mutableCopy]];
+    }
+    NSArray<NSNumber *> *outputShape = selectedOutput.type.shape;
+    if (rowOneProbe) {
+        const auto &layout = program.output.nchw;
+        outputShape = @[@(layout[0]), @(layout[1]), @(layout[2]), @(layout[3])];
+    }
     NSMutableDictionary *outputRecord =
-        [binding(selectedOutput, selectedOutput.type.shape,
+        [binding(selectedOutput, outputShape,
                  program.output) mutableCopy];
     NSString *file = [NSString stringWithFormat:@"program-0.%@", format];
     NSDictionary *programRecord = @{

@@ -751,6 +751,35 @@ static void expectOnlyRegisterChanges(
            "pool sweep lost the round-10 PE grammar or pipeline guard");
 }
 
+static void expectOnlyFirstTaskRegisterChanges(
+    const ane::h13::Program &control, const ane::h13::Program &variant,
+    const std::vector<std::uint32_t> &addresses, const std::string &name) {
+    const auto controlSpan = taskSpans(control).front();
+    const auto variantSpan = taskSpans(variant).front();
+    expect(control.taskCount == 1 && variant.taskCount == 1 &&
+               controlSpan.bytes == variantSpan.bytes,
+           "input morph changed the descriptor grammar");
+    std::set<std::size_t> allowed;
+    for (const auto address : addresses) {
+        const auto offset = regOffset(control, controlSpan, address) -
+                            controlSpan.offset;
+        for (std::size_t byte = 0; byte != 4; ++byte)
+            allowed.insert(offset + byte);
+    }
+    bool changed = false;
+    for (std::size_t byte = 0; byte != controlSpan.bytes; ++byte) {
+        if (control.task[controlSpan.offset + byte] ==
+            variant.task[variantSpan.offset + byte])
+            continue;
+        changed = true;
+        expect(allowed.count(byte),
+               "input morph changed a field outside its named word");
+    }
+    if (!changed)
+        throw std::runtime_error("input morph " + name +
+                                 " is byte-identical to its control");
+}
+
 static void validatePoolSweeps(
     const OwnedNetwork &network,
     const std::pair<std::vector<std::uint8_t>,
@@ -924,6 +953,7 @@ static void validateBlockSubRungs(
     const auto conv3 = encode("block01-conv1-conv2-conv3");
     const auto projection = encode("block01-projection-only");
     const auto add = encode("block01-add-only");
+    const auto rowOne = encode("block01-conv1-row1");
     expect(conv1.taskCount == 1 && conv2.taskCount == 2 &&
                conv3.taskCount == 3 && projection.taskCount == 1 &&
                add.taskCount == 1,
@@ -947,26 +977,20 @@ static void validateBlockSubRungs(
     expect(projection.taskRecords.front().role == "projection" &&
                projection.output.nchw[1] == 256,
            "projection-only sub-rung has the wrong task or output");
-    const auto externalBankedRow = [](std::uint32_t channels,
-                                      std::uint32_t width) {
-        const auto channel = (2 * width + 15) & ~15u;
-        const auto bankPhase = width >= 64 ? 0u : width > 16 ? 5u * 16u
-            : channels >= 32 ? 3u * 16u : 2u * 16u;
-        return channels * channel + bankPhase;
-    };
     for (const auto *program : {&conv1, &projection}) {
         const auto span = taskSpans(*program).front();
         const auto channels = reg(*program, span, 0x0000c);
-        const auto width = reg(*program, span, 0x00000) & 0xffffu;
         expect(reg(*program, span, 0x04810) ==
-                   externalBankedRow(channels, width) &&
+                       reg(*program, span, 0x04814) &&
                    reg(*program, span, 0x04814) ==
                        reg(*program, span, 0x0480c) * channels &&
                    reg(*program, span, 0x1380c) ==
                        program->inputs.front().nchw[5] &&
                    reg(*program, span, 0x13810) ==
-                       program->inputs.front().nchw[4],
-               "standalone convolution lost its external-source bank phase");
+                       program->inputs.front().nchw[4] &&
+                   reg(*program, span, 0x13814) ==
+                       program->inputs.front().nchw[4] * channels,
+               "standalone convolution lost its external-source DMA geometry");
     }
     const auto addSpan = taskSpans(add).front();
     const auto selectors = word(add.task, addSpan.offset + 32);
@@ -976,17 +1000,76 @@ static void validateBlockSubRungs(
                ((selectors >> 6) & 31u) == 6u &&
                add.taskRecords.front().hasSecond,
            "add-only sub-rung does not bind both CPU-reference inputs");
-    const auto addChannels = reg(add, addSpan, 0x0000c);
-    const auto addWidth = reg(add, addSpan, 0x00000) & 0xffffu;
-    const auto addChannel = (2 * addWidth + 15) & ~15u;
-    const auto addBankedRow = addChannel * addChannels + 2u * 16u;
-    expect(reg(add, addSpan, 0x04810) == addBankedRow &&
-               reg(add, addSpan, 0x04824) == addBankedRow &&
+    expect(reg(add, addSpan, 0x04810) == reg(add, addSpan, 0x04814) &&
+               reg(add, addSpan, 0x04824) == reg(add, addSpan, 0x04828) &&
                reg(add, addSpan, 0x04814) ==
-                   reg(add, addSpan, 0x0480c) * addChannels &&
+                   reg(add, addSpan, 0x0480c) * reg(add, addSpan, 0x0000c) &&
                reg(add, addSpan, 0x04828) ==
-                   reg(add, addSpan, 0x04820) * addChannels,
-           "add-only external sources lost their independent bank phases");
+                   reg(add, addSpan, 0x04820) * reg(add, addSpan, 0x0000c) &&
+               reg(add, addSpan, 0x1380c) == add.inputs[0].nchw[5] &&
+               reg(add, addSpan, 0x13810) == add.inputs[0].nchw[4] &&
+               reg(add, addSpan, 0x13820) == add.inputs[1].nchw[5] &&
+               reg(add, addSpan, 0x13824) == add.inputs[1].nchw[4],
+           "add-only external sources lost their coherent DMA layouts");
+
+    expect(rowOne.taskCount == 1 && rowOne.inputs.size() == 1 &&
+               rowOne.inputs[0].nchw[2] == 1 &&
+               rowOne.inputs[0].nchw[3] == 56 &&
+               rowOne.inputs[0].nchw[5] == 128 &&
+               rowOne.inputs[0].nchw[4] == 128 &&
+               rowOne.output.nchw[2] == 1 && rowOne.output.nchw[3] == 56,
+           "row-one probe does not expose exactly one logical input row");
+    const auto rowOneSpan = taskSpans(rowOne).front();
+    expect(reg(rowOne, rowOneSpan, 0x00000) == ((1u << 16) | 56u) &&
+               reg(rowOne, rowOneSpan, 0x00014) == ((1u << 16) | 56u) &&
+               reg(rowOne, rowOneSpan, 0x00028) == 1u &&
+               reg(rowOne, rowOneSpan, 0x1380c) == 128u &&
+               reg(rowOne, rowOneSpan, 0x13810) == 128u &&
+               reg(rowOne, rowOneSpan, 0x13814) == 128u * 64u,
+           "row-one probe retained multi-row source geometry");
+
+    const auto validateMorphs = [&](const std::string &base) {
+        const auto baseline = encode((base + "-morph-r14-baseline").c_str());
+        const auto dead = encode((base + "-morph-dead-l2-row").c_str());
+        const auto sourceRow = encode((base + "-morph-source-row").c_str());
+        const auto sourcePlane = encode((base + "-morph-source-plane").c_str());
+        const auto sourceDepth = encode((base + "-morph-source-depth").c_str());
+        const auto sourceGroup = encode((base + "-morph-source-group").c_str());
+        const auto fixed = base == "block01-conv1-only" ? conv1 : projection;
+        expectOnlyFirstTaskRegisterChanges(baseline, dead, {0x04810},
+                                           "dead L2-row control");
+        expectOnlyFirstTaskRegisterChanges(baseline, sourceRow, {0x1380c},
+                                           "source-row morph");
+        expectOnlyFirstTaskRegisterChanges(baseline, sourcePlane, {0x13810},
+                                           "source-plane morph");
+        expectOnlyFirstTaskRegisterChanges(baseline, sourceDepth, {0x13814},
+                                           "source-depth morph");
+        expectOnlyFirstTaskRegisterChanges(baseline, sourceGroup, {0x13818},
+                                           "source-group morph");
+        expectOnlyFirstTaskRegisterChanges(
+            baseline, fixed, {0x1380c, 0x13810, 0x13814, 0x13818},
+            "coherent external-source fix");
+        const auto baselineSpan = taskSpans(baseline).front();
+        const auto fixedSpan = taskSpans(fixed).front();
+        expect(reg(baseline, baselineSpan, 0x1380c) == 112u &&
+                   reg(baseline, baselineSpan, 0x13810) == 6272u &&
+                   reg(fixed, fixedSpan, 0x1380c) == 128u &&
+                   reg(fixed, fixedSpan, 0x13810) == 7168u &&
+                   baseline.inputs.front().nchw[5] == 112u &&
+                   fixed.inputs.front().nchw[5] == 128u,
+               "round-16 source morph endpoints lost their named geometry");
+        expect(sourceGroup.inputs.front().nchw[5] == 112u &&
+                   sourceGroup.inputs.front().nchw[4] == 6272u &&
+                   sourceDepth.inputs.front().nchw[5] == 112u &&
+                   sourceDepth.inputs.front().nchw[4] == 6272u &&
+                   sourcePlane.inputs.front().nchw[5] == 112u &&
+                   sourcePlane.inputs.front().nchw[4] == 7168u &&
+                   sourceRow.inputs.front().nchw[5] == 128u &&
+                   sourceRow.inputs.front().nchw[4] == 7168u,
+               "single-word morph input bindings do not isolate their axis");
+    };
+    validateMorphs("block01-conv1-only");
+    validateMorphs("block01-projection-only");
 }
 
 static std::uint32_t floatWord(float value) {

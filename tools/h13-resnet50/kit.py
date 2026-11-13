@@ -69,6 +69,21 @@ BLOCK_SUBRUNGS = [
      'Standalone fused residual add+ReLU with CPU main3 and projection inputs.'),
 ]
 
+INPUT_MORPHS = [
+    ('r14-baseline',
+     'Round-14 control: 112/6272/401408 TileDMA source geometry and zero L2 row phase.'),
+    ('dead-l2-row',
+     'Known-dead control: changes only L2 source-row 7168 to 7248; round 15 was byte-identical on device.'),
+    ('source-group',
+     'Changes only TileDMA source group/extent from 401408 to 458752.'),
+    ('source-depth',
+     'Changes only TileDMA source depth/extent from 401408 to 458752.'),
+    ('source-plane',
+     'Changes only TileDMA source plane stride from 6272 to 7168.'),
+    ('source-row',
+     'Changes only TileDMA source row stride from 112 to the legal 128-byte row class.'),
+]
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -135,7 +150,7 @@ def main():
         return item
 
     def materialize(name, key, manifest, section=None, description=None,
-                    input_value=None, input_values=None):
+                    input_value=None, input_values=None, reference_value=None):
         directory = args.output / name
         input_files = None
         if input_values is not None:
@@ -148,7 +163,9 @@ def main():
             shutil.copy2(input_path, directory / 'input.npy')
         else:
             np.save(directory / 'input.npy', input_value)
-        np.savez(directory / 'reference.npz', **{key: references[key]})
+        np.savez(directory / 'reference.npz',
+                 **{key: references[key] if reference_value is None
+                    else reference_value})
         return kit_entry(name, key, manifest, section, description,
                          input_files)
 
@@ -212,6 +229,45 @@ def main():
         }
         sub_rungs.append(entry)
 
+    row_probe_name = 'block01-conv1-row1'
+    row_probe_dir = args.output / row_probe_name
+    row_probe_dir.mkdir()
+    row_probe_manifest, _ = compile_package(
+        args, row_probe_dir / 'package', row_probe_name)
+    row_probe = materialize(
+        row_probe_name, 'block01-conv1-only', row_probe_manifest,
+        description=
+        'H=1 first-row probe: removes every inter-row advance while retaining the 64-channel plane walk.',
+        input_values=[references['pool'][:, :1, :]],
+        reference_value=references['block01-conv1-only'][:, :1, :])
+    row_probe['repeatability'] = {
+        'coldRuns': 3,
+        'comparison': 'uint16-bit-identical',
+        'judge': 'verify_cold.py',
+    }
+
+    morphs = []
+    for short, boundary, key in (
+            ('conv1', 'block01-conv1-only', 'block01-conv1-only'),
+            ('projection', 'block01-projection-only',
+             'block01-projection-only')):
+        for field, description in INPUT_MORPHS:
+            name = f'morph-{short}-{field}'
+            directory = args.output / name
+            directory.mkdir()
+            morph_manifest, _ = compile_package(
+                args, directory / 'package', f'{boundary}-morph-{field}')
+            entry = materialize(
+                name, key, morph_manifest, field, description,
+                input_values=[references['pool']])
+            entry['candidateField'] = field
+            entry['repeatability'] = {
+                'coldRuns': 3,
+                'comparison': 'uint16-bit-identical',
+                'judge': 'verify_cold.py',
+            }
+            morphs.append(entry)
+
     sweep = []
     for field, boundary, description in POOL_SWEEPS:
         name = f'pool-sweep-{field}'
@@ -231,12 +287,16 @@ def main():
         'next_stall': next_stall,
         'diagnostics': diagnostics,
         'subRungs': sub_rungs,
+        'rowProbe': row_probe,
+        'morphs': morphs,
         'sweep': sweep,
         'qualificationOrder': [item['name'] for item in rungs],
         'sweepOrder': [item['name'] for item in sweep],
         'subRungOrder': [item['name'] for item in sub_rungs],
+        'morphOrder': [item['name'] for item in morphs],
         'libaneBindOverrunProgramsChecked':
-            len(rungs) + len(diagnostics) + len(sub_rungs) + len(sweep) + 1,
+            len(rungs) + len(diagnostics) + len(sub_rungs) + len(sweep) +
+            len(morphs) + 2,
         'reference': 'float64 TensorFlow SAME; one plain array per rung npz',
     }
     shutil.copy2(HERE / 'verify_cold.py', args.output / 'verify_cold.py')
