@@ -4,6 +4,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: assign non-exp unary tables their named clamp, interpolation, tail,
+  and range-reduction controls; derive reduction Common dimensions and
+  scheduler headers per direct, partial, reorder, finalize, and store phase.
+  Mean now uses its dimension selector instead of pre-scaling the input. The
+  proven exp, ReLU, and axis-2 producer-dependency objects remain unchanged,
+  and the LUT/reduce morph gate now starts from the runnable round-6 program.
 - H16G: open the three-program fused-attention-chain qualification gate after
   task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
   7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are

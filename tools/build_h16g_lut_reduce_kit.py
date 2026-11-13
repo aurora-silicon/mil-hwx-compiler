@@ -236,8 +236,10 @@ def augment_kit(output: Path, source: Path) -> int:
         "Deterministic inputs, float64 references, and old-main comparison "
         "programs come from the round-2 kit with the same case contract. "
         "Every current program passed the independent H16G container and "
-        "bind-extent validator during construction. Run smallest-first and "
-        "reboot after any LOAD or EXECUTE failure.\n")
+        "bind-extent validator during construction. Run three cold launches "
+        "per executable case, compare each output with its float64 CPU "
+        "reference, run smallest-first, and reboot after any LOAD or EXECUTE "
+        "failure.\n")
     sums = []
     for path in sorted(output.rglob("*")):
         if path.is_file() and path.name != "SHA256SUMS":

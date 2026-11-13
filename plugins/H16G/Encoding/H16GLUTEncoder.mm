@@ -110,9 +110,13 @@ static uint32_t unaryOpcode(NSString *operation,
     if (family == H16GUnaryPacketFamilyDirectReLU)
         return unaryCommand(1,UnaryOpcode::Direct);
     if (family == H16GUnaryPacketFamilyReciprocalUnit)
-        return unaryCommand(1,UnaryOpcode::Reciprocal,
-            ![operation isEqualToString:@"rsqrt"]);
-    return unaryCommand(2,UnaryOpcode::Direct);
+        // Reciprocal and rsqrt share the reciprocal lane command.  Their
+        // range-reduction selectors live in the table control word.
+        return unaryCommand(18,UnaryOpcode::Reciprocal);
+    // Keep the device-proven r6 exp command byte-for-byte stable.  The other
+    // table operations select their curve through a full table-lane mask.
+    return unaryCommand([operation isEqualToString:@"exp"] ? 2 : 18,
+                        UnaryOpcode::Direct);
 }
 
 static H16GEncodedTDProgram *encodeUnaryPacket(NSString *operation,
@@ -288,8 +292,102 @@ static double evaluateTable(NSString *operation, double x) {
     return 1.0/x;
 }
 
+typedef struct {
+    double inputClampLow;
+    double inputClampHigh;
+    double outputBelowRange;
+    double outputAboveRange;
+    double sampleLow;
+    double sampleStep;
+    NSUInteger leadingZeroSamples;
+    double tailContinuation0;
+    double tailContinuation1;
+    double tailGradient;
+    uint32_t operationControl;
+    uint32_t rangeReductionControl;
+} H16GDeviceLUTRule;
+
+static BOOL deviceRuleForOperation(NSString *operation,
+                                   H16GDeviceLUTRule *rule) {
+    const double infinity=std::numeric_limits<double>::infinity();
+    if ([operation isEqualToString:@"sigmoid"])
+        *rule={-9.9375,8.3203125,0.0,1.0,-8.0,0.5,0,
+               0.00017309188842773438,0.001720428466796875,
+               0.0015239715576171875,0x00013be6,0x01};
+    else if ([operation isEqualToString:@"tanh"])
+        *rule={0.0,4.0,0.0,1.0,0.0,0.125,0,0.0,0.0,0.0,
+               0x00033c00,0x60};
+    else if ([operation isEqualToString:@"gelu"])
+        *rule={-4.3984375,infinity,0.0,infinity,-4.0,0.25,0,0.0,0.0,1.0,
+               0x00020000,0x01};
+    else if ([operation isEqualToString:@"silu"])
+        *rule={-10.203125,infinity,0.0,infinity,-8.0,0.5,0,
+               -0.0010652542114257812,-0.01087188720703125,1.0,
+               0x00019c00,0x01};
+    else if ([operation isEqualToString:@"log"])
+        *rule={0.0,infinity,-infinity,0.0,0.5,1.0/64.0,0,0.0,0.0,0.0,
+               0x00060000,0xc9};
+    else if ([operation isEqualToString:@"sqrt"])
+        *rule={0.0,infinity,0.0,infinity,0.5,1.0/16.0,8,0.0,0.0,0.0,
+               0x00040000,0xc5};
+    else if ([operation isEqualToString:@"rsqrt"])
+        *rule={0.0,infinity,infinity,0.0,0.5,1.0/16.0,8,0.0,0.0,0.0,
+               0x00040000,0xc6};
+    else if ([operation isEqualToString:@"reciprocal"])
+        *rule={0.0,infinity,infinity,0.0,1.0,1.0/32.0,0,0.0,0.0,0.0,
+               0x00060000,0x67};
+    else return NO;
+    return YES;
+}
+
+static NSData *buildDeviceKernelTable(NSString *operation, NSError **error) {
+    H16GDeviceLUTRule rule;
+    if (!deviceRuleForOperation(operation,&rule)) {
+        setError(error,@"operation has no device-selected H16G unary table");
+        return nil;
+    }
+    NSMutableData *data=[NSMutableData dataWithLength:128];
+    uint32_t inputClamps=packHalves(rule.inputClampLow,rule.inputClampHigh);
+    uint32_t outputTails=packHalves(rule.outputBelowRange,
+                                   rule.outputAboveRange);
+    [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&inputClamps];
+    [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&outputTails];
+    for(NSUInteger index=0;index<33;++index) {
+        double value=0.0;
+        if(index>=rule.leadingZeroSamples) {
+            double x=rule.sampleLow+
+                (double)(index-rule.leadingZeroSamples)*rule.sampleStep;
+            value=[operation isEqualToString:@"reciprocal"]
+                ? 2.0/x : evaluateTable(operation,x);
+            // The negative endpoint is a tail for GELU, not an interpolation
+            // sample.  Zero makes that boundary continuous with the selector.
+            if([operation isEqualToString:@"gelu"] && index==0)value=0.0;
+        }
+        uint16_t sample=floatToHalf((float)value);
+        [data replaceBytesInRange:NSMakeRange(8+index*2,2)
+                        withBytes:&sample];
+    }
+    const double continuationValues[]={rule.tailContinuation0,
+        rule.tailContinuation1,rule.tailGradient};
+    for(NSUInteger index=0;index<3;++index) {
+        uint16_t value=floatToHalf((float)continuationValues[index]);
+        [data replaceBytesInRange:NSMakeRange(74+index*2,2)
+                        withBytes:&value];
+    }
+    [data replaceBytesInRange:NSMakeRange(80,4)
+                    withBytes:&rule.operationControl];
+    [data replaceBytesInRange:NSMakeRange(84,4)
+                    withBytes:&rule.rangeReductionControl];
+    return data;
+}
+
 static NSData *buildStandaloneKernelTable(NSString *operation,
                                            NSError **error) {
+    // Round 6's exp table is already device-proven and intentionally retains
+    // its existing standalone encoding.  Every other operation uses its named
+    // range-reduction selector and the curve domain selected by that control.
+    if (![operation isEqualToString:@"exp"])
+        return buildDeviceKernelTable(operation,error);
     H16GLUTRule rule;
     if (!ruleForOperation(operation,&rule)) {
         setError(error,@"operation has no rule-built H16G unary table");
@@ -330,27 +428,6 @@ static NSData *buildConsumerCompatibleKernelTable(NSString *operation,
         uint32_t rangeReductionControl=10;
         [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&inputClamps];
         [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&outputTails];
-        [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&operationControl];
-        [data replaceBytesInRange:NSMakeRange(84,4)
-                        withBytes:&rangeReductionControl];
-    } else if ([operation isEqualToString:@"reciprocal"]) {
-        // Reciprocal consumers likewise range-reduce their input. These are
-        // input clamp low/high followed by output below/above range. The
-        // reduced table stores 2/x for x in [1,2].
-        uint32_t inputClamps=packHalves(0.0,
-            std::numeric_limits<double>::infinity());
-        uint32_t outputTails=packHalves(
-            std::numeric_limits<double>::infinity(),0.0);
-        [data replaceBytesInRange:NSMakeRange(0,4) withBytes:&inputClamps];
-        [data replaceBytesInRange:NSMakeRange(4,4) withBytes:&outputTails];
-        for (NSUInteger index=0;index<33;++index) {
-            double x=1.0+(double)index/32.0;
-            uint16_t sample=floatToHalf((float)(2.0/x));
-            [data replaceBytesInRange:NSMakeRange(8+index*2,2)
-                            withBytes:&sample];
-        }
-        uint32_t operationControl=(uint32_t)6 << 16;
-        uint32_t rangeReductionControl=103;
         [data replaceBytesInRange:NSMakeRange(80,4) withBytes:&operationControl];
         [data replaceBytesInRange:NSMakeRange(84,4)
                         withBytes:&rangeReductionControl];

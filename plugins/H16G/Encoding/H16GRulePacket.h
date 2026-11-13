@@ -165,6 +165,12 @@ struct TaskSpec {
     std::map<std::uint32_t,std::uint32_t> registers;
     std::uint32_t enabledEngines = 1;
     bool kernelRelocation = false;
+    // UINT32_MAX selects the ordinary linear-task value.  Reduction phases
+    // override only the scheduler fields whose public meaning is phase-local;
+    // task identity, dependencies, and task control remain constructed here.
+    std::uint32_t executionCycles = UINT32_MAX;
+    std::uint32_t outputRecordFormat = UINT32_MAX;
+    std::uint32_t dispatchClassFormat = UINT32_MAX;
 };
 
 inline void appendWord(std::vector<std::uint8_t> &bytes,
@@ -266,14 +272,18 @@ inline void appendTask(Packet &packet, const TaskSpec &task,
     const std::size_t taskStart = packet.bytes.size();
 
     appendWord(packet.bytes,(std::uint32_t)taskIndex);
-    appendWord(packet.bytes,0); // ExeCycles is a scheduler hint, not semantics.
+    appendWord(packet.bytes,task.executionCycles == UINT32_MAX
+        ? 0 : task.executionCycles);
     // Header word 2: record format 104 plus final-output enable in bit 26.
-    appendWord(packet.bytes,std::uint32_t(104) |
-        (last ? std::uint32_t(1) << 26 : 0));
+    appendWord(packet.bytes,task.outputRecordFormat == UINT32_MAX
+        ? std::uint32_t(104) | (last ? std::uint32_t(1) << 26 : 0)
+        : task.outputRecordFormat);
     appendWord(packet.bytes,0); // No extended header for unary/reduction tasks.
     // Header word 4: dispatch mask, dependency class eight, record format.
-    appendWord(packet.bytes,(((std::uint32_t(1) << 12) - 1) << 12) |
-        (std::uint32_t(8) << 8) | std::uint32_t(last ? 104 : 32));
+    appendWord(packet.bytes,task.dispatchClassFormat == UINT32_MAX
+        ? (((std::uint32_t(1) << 12) - 1) << 12) |
+          (std::uint32_t(8) << 8) | std::uint32_t(last ? 104 : 32)
+        : task.dispatchClassFormat);
     appendWord(packet.bytes,0); // No firmware-private scheduling hint.
     appendWord(packet.bytes,0); // No firmware-private scheduling hint.
     appendWord(packet.bytes,fields::consumerDependencyMask(taskIndex,taskCount));

@@ -347,6 +347,21 @@ static NSArray<NSNumber *> *linearTaskDependencies(NSData *data) {
     return dependencies;
 }
 
+static NSArray<NSNumber *> *linearTaskHeaderWords(NSData *data,
+                                                   NSUInteger wordIndex) {
+    NSMutableArray<NSNumber *> *values=[NSMutableArray array];
+    NSUInteger position=16;
+    while(position<data.length) {
+        position=(position+15)&~(NSUInteger)15;
+        if(position==data.length)break;
+        NSUInteger words=word(data,position)>>16;
+        if(words<9||wordIndex>=9||position+words*4>data.length)return @[];
+        [values addObject:@(word(data,position+wordIndex*4))];
+        position+=words*4;
+    }
+    return values;
+}
+
 static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
     // 192 and 320 were not among the captured programs used by the old
     // position-selected encoder. They exercise the common constructor.
@@ -369,6 +384,13 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
     }
     expect([[NSSet setWithArray:packets] count] == sizes.count,
            @"each LUT geometry produces a distinct rule-built packet");
+    NSDictionary<NSString *,NSArray<NSNumber *> *> *tableControls=@{
+        @"sigmoid":@[@0x00013be6,@0x01], @"tanh":@[@0x00033c00,@0x60],
+        @"gelu":@[@0x00020000,@0x01], @"silu":@[@0x00019c00,@0x01],
+        @"exp":@[@0x00050002,@33], @"log":@[@0x00060000,@0xc9],
+        @"sqrt":@[@0x00040000,@0xc5], @"rsqrt":@[@0x00040000,@0xc6],
+        @"reciprocal":@[@0x00060000,@0x67],
+    };
     for (NSString *operation in @[@"sigmoid",@"tanh",@"gelu",@"silu",
             @"exp",@"log",@"sqrt",@"rsqrt",@"reciprocal"]) {
         NSError *error = nil;
@@ -376,9 +398,12 @@ static void testUnaryPointwisePacketsAndTablesAreRuleBuilt(void) {
             standaloneConstantRegionForOperationName:operation error:&error];
         NSData *second = [H16GLUTEncoder
             standaloneConstantRegionForOperationName:operation error:&error];
+        NSArray<NSNumber *> *controls=tableControls[operation];
         expect(first.length == 0x80 && error == nil &&
-               [first isEqualToData:second] && word(first,0x54) == 33,
-               @"unary constants are deterministic 33-sample rule-built tables");
+               [first isEqualToData:second] &&
+               word(first,0x50)==controls[0].unsignedIntValue &&
+               word(first,0x54)==controls[1].unsignedIntValue,
+               @"unary constants select their named rule-built curve");
     }
     NSError *error=nil;
     NSData *consumerExp=[H16GLUTEncoder
@@ -512,6 +537,8 @@ static void testReductionPacketsAreRuleBuilt(void) {
     };
     expect([linearTaskControls(widthPacket) isEqualToArray:
                @[@(ane::h16::rule::fields::taskControl(0,true))]] &&
+           fieldOffset(0x0008)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x0008))==1 &&
            fieldOffset(0x000c)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x000c))==64 &&
            fieldOffset(0x0014)!=SIZE_MAX &&
@@ -522,8 +549,15 @@ static void testReductionPacketsAreRuleBuilt(void) {
            word(widthPacket,fieldOffset(0x001c))==64 &&
            fieldOffset(0x003c)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x003c))==64+4*sizeof(uint32_t) &&
+           fieldOffset(0x0040)==SIZE_MAX &&
+           fieldOffset(0x0044)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x0044))==6 &&
+           fieldOffset(0x004c)!=SIZE_MAX &&
+           word(widthPacket,fieldOffset(0x004c))==0 &&
            fieldOffset(0x4500)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x4500))==2 &&
+           fieldOffset(0x4900)==SIZE_MAX && fieldOffset(0x4904)==SIZE_MAX &&
+           fieldOffset(0x4910)==SIZE_MAX &&
            fieldOffset(0x4d18)==SIZE_MAX && fieldOffset(0x4d24)==SIZE_MAX &&
            fieldOffset(0x4d1c)!=SIZE_MAX &&
            word(widthPacket,fieldOffset(0x4d1c))==128 &&
@@ -541,6 +575,38 @@ static void testReductionPacketsAreRuleBuilt(void) {
            [linearTaskDependencies(heightMax.tdProgram.data)
                isEqualToArray:@[@3,@3,@0]],
            @"height reduction selects phase engines and producer dependency masks");
+    expect([linearTaskHeaderWords(heightMax.tdProgram.data,1)
+               isEqualToArray:@[@1,@2,@0]] &&
+           [linearTaskHeaderWords(heightMax.tdProgram.data,2)
+               isEqualToArray:@[@0x68,@0,@0x04000000]] &&
+           [linearTaskHeaderWords(heightMax.tdProgram.data,4)
+               isEqualToArray:@[@0x68,@0x00fff820,@0x60]],
+           @"height reduction emits reorder, partial, and store headers");
+    NSData *heightPacket=heightMax.tdProgram.data;
+    const auto heightField=[&](uint32_t address) {
+        return ane::h16::rule::registerValueOffset(
+            (const uint8_t *)heightPacket.bytes,heightPacket.length,address);
+    };
+    expect(word(heightPacket,heightField(0x0008))==32 &&
+           word(heightPacket,heightField(0x000c))==64 &&
+           word(heightPacket,heightField(0x0014))==16 &&
+           word(heightPacket,heightField(0x0018))==32 &&
+           word(heightPacket,heightField(0x001c))==64 &&
+           word(heightPacket,heightField(0x0030))==0x00044000 &&
+           word(heightPacket,heightField(0x0034))==32 &&
+           word(heightPacket,heightField(0x003c))==0x30232200 &&
+           word(heightPacket,heightField(0x0040))==2,
+           @"height reorder Common fields derive from C/H/W geometry");
+    H16GReduceEncoding *widthMean=[H16GReduceEncoder
+        encodeOperationName:@"reduce_mean" inputShape:@[@1,@1,@64,@64]
+        axis:3 error:&error];
+    NSData *meanPacket=widthMean.tdProgram.data;
+    std::size_t meanSelector=ane::h16::rule::registerValueOffset(
+        (const uint8_t *)meanPacket.bytes,meanPacket.length,0x4514);
+    expect(meanSelector!=SIZE_MAX && word(meanPacket,meanSelector)==0x3c800000 &&
+           ane::h16::rule::registerValueOffset(
+               (const uint8_t *)meanPacket.bytes,meanPacket.length,0x4910)==SIZE_MAX,
+           @"mean selects dimension scaling without pre-scaling the input");
     expect([H16GReduceEncoder encodeOperationName:@"reduce_sum"
         inputShape:@[@1,@1,@8,@8] axis:1 error:&error] == nil && error != nil,
         @"unit reduction axes fail closed");

@@ -96,6 +96,19 @@ R6_REPAIRED_FIELDS = {
         ("common-kernel-or-output-base", 0x003c),
     ),
 }
+R7_REPAIRED_FIELDS = {
+    "reduce-max": (
+        ("common-height", 0x0008),
+        ("common-reduction-extent", 0x0024),
+        ("common-tile-or-partial-base", 0x0034),
+        ("common-tile-count", 0x0040),
+        ("common-schedule-class", 0x0044),
+        ("common-surface-limit", 0x004c),
+        ("ne-axis-selector", 0x4900),
+        ("ne-reduction-command", 0x4904),
+        ("ne-input-scale", 0x4910),
+    ),
+}
 HEADER_NAMES = {
     1: "execution-cycles",
     2: "output-record-format",
@@ -621,6 +634,80 @@ def build_short_r6(args, cases: dict) -> list[dict]:
     return entries
 
 
+def build_short_r7(args, cases: dict) -> list[dict]:
+    """Gate on runnable r6, regress its 12 old fields, then apply r7 fields."""
+    entries = []
+    for prefix in ("exp", "reduce-max"):
+        case_name, source, base, _, current_image, r4_image = cases[prefix]
+        r6_image = macho(args.baseline_kit / case_name / "program.anec")
+        entries.append(write_case(args.output, f"{prefix}-00-rule-built-r6",
+            bytes(r6_image["data"]), source, base, args.validator,
+            {"mode": "baseline", "source": "rule-built-r6"}))
+        program = morph(r6_image, r6_image, {"framing-noop"})
+        r6_task = decoded_task(r6_image)
+        framed_task = decoded_task(macho_bytes(program))
+        if (r6_task["header"] != framed_task["header"] or
+                r6_task["registers"] != framed_task["registers"]):
+            raise RuntimeError(f"{prefix}: r7 gate is not a decoded r6 no-op")
+        entries.append(write_case(args.output,
+            f"{prefix}-c01-framing-noop", program, source, base,
+            args.validator,
+            {"mode": "gate", "gate": f"{prefix}-00-rule-built-r6",
+             "requiredOutput": "bit-exact"}))
+
+        # These are the same twelve round-6 probes, but now each starts from
+        # the runnable r6 endpoint and regresses exactly one field to r4.
+        for index, (field_name, address) in enumerate(
+                R6_REPAIRED_FIELDS[prefix], 1):
+            entries.append(write_case(args.output,
+                f"{prefix}-r{index:02d}-{field_name}",
+                field_morph(r6_image, r6_image, r4_image, address),
+                source, base, args.validator,
+                {"mode": "reverse-single-field", "step": index,
+                 "base": "rule-built-r6", "source": "rule-built-r4",
+                 "group": group_for(address), "field": field_name,
+                 "address": f"0x{address:04x}"}))
+        if prefix == "reduce-max":
+            entries.append(write_case(args.output,
+                "reduce-max-r09-task-control",
+                header_field_morph(r6_image, r6_image, r4_image, 0, 8),
+                source, base, args.validator,
+                {"mode": "reverse-single-header-field", "step": 9,
+                 "base": "rule-built-r6", "source": "rule-built-r4",
+                 "group": "task-header", "field": "task-control", "word": 8}))
+            for index, (field_name, address) in enumerate(
+                    R7_REPAIRED_FIELDS[prefix], 1):
+                entries.append(write_case(args.output,
+                    f"{prefix}-n{index:02d}-{field_name}",
+                    field_morph(r4_image, r6_image, current_image, address),
+                    source, base, args.validator,
+                    {"mode": "forward-single-field", "step": index,
+                     "base": "rule-built-r6", "source": "rule-built-r7",
+                     "group": group_for(address), "field": field_name,
+                     "address": f"0x{address:04x}"}))
+        entries.append(write_case(args.output,
+            f"{prefix}-99-rule-built-r7", bytes(current_image["data"]),
+            source, base, args.validator,
+            {"mode": "endpoint", "source": "rule-built-r7"}))
+
+    for case_name in LOAD_ONLY_CASES:
+        source = args.source_kit / case_name
+        base = read_base_manifest(source)
+        r4_image = macho(args.probe_kit / case_name / "program.anec")
+        r6_image = macho(args.baseline_kit / case_name / "program.anec")
+        short = case_name.replace("reduce_", "reduce-").replace(
+            "-main-covered", "")
+        entries.append(write_case(args.output,
+            f"load-{short}-t2-dependencies-r6",
+            header_field_morph(r4_image, r4_image, r6_image, 2, 7),
+            source, base, args.validator,
+            {"mode": "load-only-preserved-header-field",
+             "base": "rule-built-r4", "source": "rule-built-r6",
+             "task": 2, "word": 7, "field": "dependencies",
+             "execute": False}))
+    return entries
+
+
 def write_case(output: Path, name: str, program: bytes, source: Path,
                base: dict, validator: Path, morph_info: dict) -> dict:
     directory = output / name
@@ -658,8 +745,12 @@ def main() -> int:
     parser.add_argument("--validator", type=Path, required=True)
     parser.add_argument("--probe-kit", type=Path,
         help="previous compiler kit whose failing field values are isolated")
+    parser.add_argument("--baseline-kit", type=Path,
+        help="known-running compiler kit used as the morph gate and field base")
     parser.add_argument("--short-r6", action="store_true",
         help="emit r4 gates, r6 endpoints, repaired reverse morphs, and t2 LOAD probes")
+    parser.add_argument("--short-r7", action="store_true",
+        help="emit r6 gates, r4 regressions, r7 field morphs, and preserved LOAD probes")
     args = parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"output is not empty: {args.output}")
@@ -677,6 +768,30 @@ def main() -> int:
         prefix = "exp" if case_name.startswith("exp-") else "reduce-max"
         cases[prefix] = (case_name, source, base, old_image, current_image,
                          probe_image)
+
+    if args.short_r7:
+        if not args.probe_kit or not args.baseline_kit:
+            raise SystemExit("--short-r7 requires --probe-kit r4 and --baseline-kit r6")
+        entries = build_short_r7(args,cases)
+        (args.output / "cases.json").write_text(json.dumps(entries, indent=2)+"\n")
+        (args.output / "README.md").write_text("""# H16G LUT/reduce r7 morph kit
+
+Both `00`/`c01` gates use the runnable rule-built-r6 program. The twelve
+`rNN` probes regress one round-6 repaired field at a time to r4 while retaining
+the r6 base. The reduce `nNN` probes switch one round-7 field into r6. The six
+task-2 dependency objects are byte-identical to round 6 and remain LOAD-only.
+Run every executable case for three cold launches against its float64 CPU
+reference; unload the LOAD-only cases without EXECUTE.
+""")
+        sums=[]
+        for path in sorted(args.output.rglob("*")):
+            if path.is_file() and path.name != "SHA256SUMS":
+                sums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+                            f"{path.relative_to(args.output)}")
+        (args.output / "SHA256SUMS").write_text("\n".join(sums)+"\n")
+        print(json.dumps({"cases": len(entries), "output": str(args.output),
+                          "mode": "short-r7"}, indent=2))
+        return 0
 
     if args.short_r6:
         if not args.probe_kit:
