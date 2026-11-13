@@ -4,6 +4,12 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G: replace unsafe logical-stage layer-normalization dumps with a
+  producer-by-producer reduction-prefix bisect. Compact writers now consume
+  each task's named L2 result base and row stride; no centered or reciprocal-
+  standard-deviation result is claimed where the prefix materializes none.
+  The reviewer kit includes same-shape main-branch reduce-mean controls and
+  keeps the production layer-normalization gate closed.
 - H16G: open the three-program fused-attention-chain qualification gate after
   task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
   7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are

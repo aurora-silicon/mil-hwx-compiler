@@ -106,26 +106,36 @@ def main() -> None:
             assert bar_slot(decoded[-2], "0x05108") == 3
         assert task_word(decoded[-1], 0x4124) == normalization_base
         assert task_word(decoded[-1], 0x414c) == normalization_base + row + 0x40
-        dump_specs = {
-            "mean": (2 if tokens == 128 else 5,
-                     0x63000 if tokens == 128 else 0),
-            "centered": (3 if tokens == 128 else 9,
-                         0x63200 if tokens == 128 else 1500 * 32),
-            "variance": (3 if tokens == 128 else 9,
-                         0x63100 if tokens == 128 else 1500 * 16),
-            "rsqrt": (4 if tokens == 128 else 10, source_base),
-            "normalized": (5 if tokens == 128 else 11, normalization_base),
-        }
-        for stage, (count, base) in dump_specs.items():
+        prefix_info = json.loads(subprocess.check_output(
+            [DUMP, str(tokens), str(channels), "prefix-info"]))
+        assert len(prefix_info) == prefix
+        assert [item["task_count"] for item in prefix_info] == \
+            list(range(1, prefix + 1))
+        for item in prefix_info:
             stream = subprocess.check_output(
-                [DUMP, str(tokens), str(channels), stage])
+                [DUMP, str(tokens), str(channels),
+                 f"prefix-{item['task_count']}"])
             stage_tasks = split_h14_tasks(stream[16:])
-            assert len(stage_tasks) == count
+            assert len(stage_tasks) == item["task_count"] + 1
             final = decode_task(stage_tasks[-1], "h16")
             assert int(final["header_words"][4], 16) == 0x00fff860
-            assert task_word(final, 0x4124) == base
+            assert task_word(final, 0x4124) == item["result_base"]
+            assert task_word(final, 0x4128) == item["result_row_bytes"]
+            assert task_word(final, 4) == item["result_row_bytes"] // 2
+            assert task_word(final, 8) == item["result_rows"]
             assert bar_slot(final, "0x04d28") == 8
             assert bar_slot(final, "0x05108") == 7
+        stream = subprocess.check_output(
+            [DUMP, str(tokens), str(channels), "normalized"])
+        normalized_tasks = split_h14_tasks(stream[16:])
+        assert len(normalized_tasks) == prefix + 2
+        assert task_word(decode_task(normalized_tasks[-1], "h16"),
+                         0x4124) == normalization_base
+        for unsafe in ("centered", "rsqrt"):
+            completed = subprocess.run(
+                [DUMP, str(tokens), str(channels), unsafe],
+                capture_output=True)
+            assert completed.returncode != 0
     tiny = decoded_cases[(1500, 384)]
     base = decoded_cases[(1500, 512)]
     # Named wtiny/wbase hang candidates from their field diff. The reduce
@@ -140,7 +150,7 @@ def main() -> None:
     assert has_task_word(base[9], 0x5108)
     print("H16G layer_norm parity PASS: three measured input prefixes, "
           "exact measured normalization tasks, zero-beta output boundaries, "
-          "and five dump boundaries per shape")
+          "and producer-derived prefix boundaries per shape")
 
 
 if __name__ == "__main__":

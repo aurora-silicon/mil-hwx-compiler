@@ -111,6 +111,64 @@ def analyze_stage_directory(input_value: np.ndarray, output: Path,
             "threshold": threshold}
 
 
+def analyze_prefix_directory(input_value: np.ndarray, output: Path,
+                             prefixes: list[dict[str, object]],
+                             threshold: float = 1e-2) -> dict[str, object]:
+    """Judge compact producer-derived prefix dumps in task order."""
+    references = cpu_references(input_value)
+    results: dict[str, object] = {}
+    first_failing_task = None
+    for item in prefixes:
+        task_count = int(item["task_count"])
+        name = f"prefix-{task_count:02d}"
+        candidates = (output / name / "output_00.bin", output / f"{name}.bin")
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if path is None:
+            results[name] = {"missing": True}
+            if first_failing_task is None:
+                first_failing_task = task_count
+            continue
+        rows = int(item["result_rows"])
+        elements = int(item["result_row_bytes"]) // 2
+        count = rows * elements
+        actual = np.fromfile(path, dtype="<f2")
+        if actual.size < count:
+            results[name] = {"elements": int(actual.size),
+                             "expected_minimum_elements": count}
+            if first_failing_task is None:
+                first_failing_task = task_count
+            continue
+        actual = actual[:count].reshape(rows, elements)
+        stage = item.get("expected_stage")
+        if stage is None:
+            result = {"expected_stage": None,
+                      "nonfinite": int(np.count_nonzero(~np.isfinite(actual))),
+                      "nonzero": int(np.count_nonzero(actual))}
+        else:
+            start = int(item["token_start"])
+            expected = references[str(stage)][start:start + rows, :elements]
+            packed = metrics(actual, expected)
+            if stage in ("mean", "variance"):
+                lanes = [metrics(actual[:, lane], expected[:, 0])
+                         for lane in range(elements)]
+                best_index = min(range(elements),
+                                 key=lambda lane: lanes[lane]["rel_l2"])
+                result = {"expected_stage": stage, "packed": packed,
+                          "best_lane": {"index": best_index,
+                                        **lanes[best_index]},
+                          "nonfinite": packed["nonfinite"],
+                          "rel_l2": lanes[best_index]["rel_l2"]}
+            else:
+                result = {"expected_stage": stage, **packed}
+        results[name] = result
+        failed = result["nonfinite"] or (stage is not None and
+                                          result["rel_l2"] > threshold)
+        if first_failing_task is None and failed:
+            first_failing_task = task_count
+    return {"prefixes": results, "first_failing_task": first_failing_task,
+            "threshold": threshold}
+
+
 def load_input(path: Path, tokens: int, channels: int) -> np.ndarray:
     value = np.fromfile(path, dtype="<f2")
     if value.size != tokens * channels:

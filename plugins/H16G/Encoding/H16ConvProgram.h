@@ -105,6 +105,22 @@ enum class LayerNormDumpStage { Mean, Centered, Variance, ReciprocalStdDev,
 TransformerLayerNormProgram encodeTransformerLayerNormDump(
     std::uint32_t tokens, std::uint32_t channels, LayerNormDumpStage stage);
 
+/// One independently observable producer in the measured reduction prefix.
+/// The result geometry is the producer's named L2 result view, not a guessed
+/// broadcast of the logical layer-normalization stage.
+struct LayerNormPrefixBoundary {
+    std::uint32_t taskCount = 0;
+    std::uint32_t resultBase = 0;
+    std::uint32_t resultRowBytes = 0;
+    std::uint32_t resultRows = 0;
+    std::uint32_t tokenStart = 0;
+    const char *expectedStage = nullptr;
+};
+std::vector<LayerNormPrefixBoundary> transformerLayerNormPrefixBoundaries(
+    std::uint32_t tokens, std::uint32_t channels);
+TransformerLayerNormProgram encodeTransformerLayerNormPrefixDump(
+    std::uint32_t tokens, std::uint32_t channels, std::uint32_t taskCount);
+
 std::string attentionLayoutRefusal(std::uint32_t tokens,
                                    std::uint32_t heads,
                                    std::uint32_t headDimension,
