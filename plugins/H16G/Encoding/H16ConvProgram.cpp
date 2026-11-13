@@ -2037,14 +2037,6 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
     if (result==ResidualIO::Ring) {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
                           resultBase+channelOffset,false);
-        if (stem) {
-            r[0x4148]=residualStemL2ResultConfig();
-            r[0x4154]=residualStemResultRowStride(shape);
-            // The phase engine derives both complete-plane spans from the
-            // stem geometry; writing the generic values selects a different
-            // traversal and wedges EXECUTE.
-            r.erase(0x4158);r.erase(0x415c);
-        }
     } else {
         setResidualResult(r,fullOutput,residualL2ResultConfig(result,last),
                           resultBase+channelOffset,!last);
@@ -2067,6 +2059,17 @@ Task residualConvTask(U32 id,U32 taskCount,ConvShape shape,ResidualRole role,
             r[0x5918]=0;r[0x5928]=residualCompletionMask();
             r[0x592c]=residualCompletionControl();
         }
+    }
+    if (stem) {
+        // ResultCfg describes the sparse seven-phase producer in L2; it is
+        // independent of whether a following task consumes the result or a
+        // terminal TileDMA materializes it. Replacing this with the generic
+        // external-result form made the same stem fail only when terminal,
+        // alongside one DART fault per cold run.
+        r[0x4148]=residualStemL2ResultConfig();
+        r[0x4154]=residualStemResultRowStride(shape);
+        // The phase engine derives both complete-plane spans from geometry.
+        r.erase(0x4158);r.erase(0x415c);
     }
     r[0x5500]=residualKernelConfig(id,last,shape.stride==2);
     r[0x5510]=kernelBase;r[0x5514]=0;
@@ -2121,7 +2124,8 @@ Task residualPETask(U32 id,U32 taskCount,ResidualRole role,
                     U32 scratchOffset=0,
                     ResidualIO meanSource=ResidualIO::Scratch,
                     U32 meanSourceRow=0,
-                    ResidualIO resultStorage=ResidualIO::Ring) {
+                    ResidualIO resultStorage=ResidualIO::Ring,
+                    bool planarResultDMA=false) {
     const bool first=id==0,last=id+1==taskCount;
     const U32 sourceBytes=role==ResidualRole::Mean && meanSourceRow ?
         input.height*meanSourceRow:residualBytes(input);
@@ -2202,9 +2206,13 @@ Task residualPETask(U32 id,U32 taskCount,ResidualRole role,
     if (resultStorage!=ResidualIO::Ring) {
         r[0x5100]=residualDMAChannel(id,false,false,last);
         setResidualAddress(r,0x5108,0);
-        // Internal max-pool spills use eight-channel blocked rows. Terminal
-        // diagnostics materialize ordinary planar NCHW output surfaces.
-        r[0x5110]=last?align64(2*output.width):16*output.width;
+        // Convolution consumers use the accepted eight-channel blocked pool
+        // spill. A pool directly followed by the probe mean crosses a
+        // different boundary: that mean stages a planar, cacheline-aligned
+        // row. Keep the production/full-network task byte-identical while
+        // making the terminal/probe boundary agree on row and plane advance.
+        r[0x5110]=(last||planarResultDMA)?align64(2*output.width):
+                                             16*output.width;
         r[0x5114]=r[0x5110]*output.height;
         r[0x5138]=last?residualTerminalTileFormat():
                            residualTileFormat(resultStorage,true);
@@ -2320,7 +2328,8 @@ ResNet50Program encodeResidualNetwork(
         Task pool=residualPETask(id++,taskCount,ResidualRole::Pool,stem.output,pooled,
                                  stemBase,poolBase,0,0,ResidualIO::Scratch,0,
                                  terminalPool?ResidualIO::External:
-                                              ResidualIO::Scratch);
+                                              ResidualIO::Scratch,
+                                 !terminalPool && blocks.empty());
         appendResidualTask(program,pool,firstTaskBytes);
         finalStorage=ResidualIO::Scratch;
         finalBase=poolBase;

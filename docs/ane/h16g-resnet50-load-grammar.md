@@ -94,9 +94,37 @@ entire surface untouched.
 The max-pool consumes the stem's resident sparse-phase tuple without changing
 its 3x3 window, stride-two SAME padding, or source layout. Its result starts
 immediately after the stem result rather than at the next allocator bank. The
-scratch spill is eight-channel blocked, so its DMA row is `16 * output_width`
-bytes and its plane is that row times the output height. A compact planar row
-at this internal boundary shifts channels and rows even though LOAD and
-EXECUTE complete. Diagnostic boundary objects may instead terminate after
-the stem, pool, or residual add; those objects materialize an ordinary planar
-NCHW surface and are not used by production graphs.
+scratch spill consumed by a following convolution is eight-channel blocked,
+so its DMA row is `16 * output_width` bytes and its plane is that row times the
+output height. Diagnostic boundary objects may instead terminate after the
+stem, pool, or residual add; those objects materialize an ordinary planar NCHW
+surface and are not used by production graphs.
+
+## Terminal result and pool-to-mean boundaries
+
+Round 6 proved that the stem's seven-phase convolution is correct when its
+resident result is consumed by a following task, while the same stem failed
+only when it was the terminal task. The differing producer field was L2
+`ResultCfg` (`0x4148`): the resident form kept the sparse-stem phase class
+`0x00500170`, but the terminal path replaced it with the generic external
+form `0x0000014a`. Result TileDMA registers `0x5100`/`0x5110`/`0x5114` still
+describe the external write. The producer must retain `0x00500170`
+regardless of whether that write is present.
+
+The max-pool has two distinct consumers. In the accepted full network the
+next convolution consumes the eight-channel blocked scratch spill, whose DMA
+row/plane are 896/50,176 bytes. A prefix ending at max-pool instead feeds the
+probe mean, whose scratch source is planar with row/plane 128/7,168 bytes.
+Using the blocked destination at this boundary while the mean read the planar
+layout produced the round-6 0.101 relative error. The boundary selects the
+planar DMA row and plane without changing the accepted full-network task.
+
+| named field | round-6 terminal/boundary | round-7 value | scope |
+| --- | ---: | ---: | --- |
+| stem L2 ResultCfg (`0x4148`) | `0x0000014a` | `0x00500170` | terminal stem only |
+| pool result-DMA row (`0x5110`) | 896 | 128 | pool directly feeding probe mean |
+| pool result-DMA plane (`0x5114`) | 50,176 | 7,168 | pool directly feeding probe mean |
+
+The round-7 kit retains one-word morphs for terminal surface direction,
+result row/plane, and the H13-analogue pool piece-width candidates. Those are
+diagnostic alternatives, not unmeasured production defaults.

@@ -182,10 +182,13 @@ int main() {
     const auto stemMean=taskRegisters(stemProbe.program.task,1);
     const auto stemLinear=taskRegisters(stemProbe.program.task,2);
     const auto poolTask=taskRegisters(poolProbe.program.task,1);
+    const auto acceptedPoolTask=taskRegisters(encoded.program.task,1);
     const std::size_t poolOffset=taskOffset(poolProbe.program.task,1);
     constexpr std::uint32_t poolResultBase=112*stemResultRowStride;
-    constexpr std::uint32_t poolResultRow=16*56;
+    constexpr std::uint32_t poolResultRow=128;
     constexpr std::uint32_t poolResultPlane=poolResultRow*56;
+    constexpr std::uint32_t acceptedPoolResultRow=16*56;
+    constexpr std::uint32_t acceptedPoolResultPlane=acceptedPoolResultRow*56;
     if (stemMean.at(0x4104)!=((1u<<22)|(1u<<8)) ||
         stemMean.at(0x4118)!=stemResultRowStride ||
         stemMean.count(0x4d00) || stemMean.count(0x411c) ||
@@ -202,6 +205,9 @@ int main() {
         poolTask.at(0x414c)!=poolResultBase ||
         poolTask.at(0x5110)!=poolResultRow ||
         poolTask.at(0x5114)!=poolResultPlane ||
+        acceptedPoolTask.at(0x414c)!=poolResultBase ||
+        acceptedPoolTask.at(0x5110)!=acceptedPoolResultRow ||
+        acceptedPoolTask.at(0x5114)!=acceptedPoolResultPlane ||
         poolTask.count(0x411c) || poolTask.count(0x4120) ||
         poolTask.count(0x4150) || poolTask.count(0x4154) ||
         poolTask.count(0x4158) || poolTask.count(0x415c)) {
@@ -216,6 +222,7 @@ int main() {
     if (stemBoundary.program.taskCount!=1 ||
         stemBoundary.program.kernelRelocations.size()!=1 ||
         stemBoundary.program.output.nchw[1]!=64 ||
+        stemBoundaryTask.at(0x4148)!=stemResultConfig ||
         stemBoundaryTask.at(0x5110)!=256 ||
         stemBoundaryTask.at(0x5114)!=28672 ||
         headOnly.program.taskCount!=2 ||
