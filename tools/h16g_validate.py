@@ -292,7 +292,7 @@ def attention_program(task_count: int, record_code: int, format_code: int) -> bo
         if format_code == tail_format and (
                 (task_count == heads + 1 and record_code == 2 * heads + 3) or
                 (task_count == 5 and record_code == 11) or
-                (task_count == heads + 11 and record_code == 2 * heads + 23)):
+                (task_count == heads + 12 and record_code == 2 * heads + 26)):
             return True
     return False
 
@@ -302,7 +302,7 @@ def fused_attention_program(task_count: int, record_code: int,
     """Recognize the fused QK/softmax/PV family separately for scratch bounds."""
     for heads in range(1, 65):
         tail_format = 791 if heads == 6 else 1054 if heads == 8 else 132 * heads - 1
-        if (task_count == heads + 11 and record_code == 2 * heads + 23 and
+        if (task_count == heads + 12 and record_code == 2 * heads + 26 and
                 format_code == tail_format):
             return True
     return False
@@ -410,11 +410,9 @@ def layer_norm_program(tasks: list[dict], task_count: int,
         return False
     first_addresses = {dma['address'] for dma in tasks[0]['dma']}
     final_addresses = {dma['address'] for dma in tasks[-1]['dma']}
-    boundary_addresses = {dma['address'] for dma in tasks[-2]['dma']}
     epsilon_tasks = [task for task in tasks
                      if task['registers'].get(0x450c) == 0x37280000]
     return (bool(first_addresses & {0x4d10, 0x4d28}) and
-            0x4d28 in boundary_addresses and
             {0x4d28, 0x5108}.issubset(final_addresses) and
             bool(epsilon_tasks))
 

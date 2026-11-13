@@ -5,6 +5,7 @@
 #import "ANEScheduledGraph.h"
 
 @class ANEHWXArtifact;
+@class H16GAssembledProgram;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -12,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable ANEHWXArtifact *)encodeResidualGraph:(ANEOperationGraph *)graph
                                       modelRoot:(NSURL *)modelRoot
                                     diagnostics:(ANEDiagnosticEngine *)diagnostics;
++ (nullable H16GAssembledProgram *)encodeProvenAttentionChainGraph:
+                                      (ANEOperationGraph *)graph
+                                      diagnostics:(ANEDiagnosticEngine *)diagnostics;
 + (nullable ANEHWXArtifact *)encodeGraph:(ANEOperationGraph *)graph
                                 scheduled:(nullable ANEScheduledGraph *)scheduled
                                 modelRoot:(NSURL *)modelRoot

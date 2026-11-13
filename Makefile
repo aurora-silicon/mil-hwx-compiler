@@ -58,7 +58,7 @@ $(BUILD)/test_diagnostics: tests/test_diagnostics.mm $(SUPPORT_SOURCES) | $(BUIL
 	$(CXX) $(CXXFLAGS) $^ $(FRAMEWORKS) -o $@
 
 $(BUILD)/test_benchmark_stats: tests/test_benchmark_stats.cpp lib/Runtime/ANEBenchmarkStats.cpp | $(BUILD)
-	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror -Iinclude $^ -o $@
+	$(CXX) $(filter-out -fobjc-exceptions,$(CXXFLAGS)) $^ -o $@
 
 $(BUILD)/test_mil_lexer: tests/test_mil_lexer.mm $(SUPPORT_SOURCES) $(MIL_LEXER_SOURCES) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL $^ $(FRAMEWORKS) -o $@
@@ -215,6 +215,12 @@ $(BUILD)/test_compiler_e2e: tests/test_compiler_e2e.mm $(PRODUCTION_COMPILER_SOU
 
 $(BUILD)/mil-hwxc: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
+
+# Qualification-only compiler for building the isolated transformer-r2 kit.
+# Production admits the qualified attention chain. The candidate compiler
+# opens only the still-unproved standalone layer-normalization gate.
+$(BUILD)/mil-hwxc-transformer-r2-candidate: tools/mil-hwxc.mm lib/Driver/ANESpatialCompiler.mm lib/Driver/ANESpatialCompiler.h $(PRODUCTION_COMPILER_SOURCES) $(H13_SOURCES) $(H14_SOURCES) plugins/H13/ANEH13Compiler.h plugins/H13/H13Program.h $(wildcard plugins/H13/*.inc) plugins/H14/ANEH14Compiler.h plugins/H14/H14Program.h $(wildcard plugins/H14/*.inc) $(wildcard plugins/H17/*.inc) $(wildcard plugins/H18/*.inc) | $(BUILD)
+	$(CXX) $(CXXFLAGS) -DH16G_ENABLE_UNQUALIFIED_TRANSFORMER_R2=1 -Ilib/MIL -Ilib/IR -Ilib/Transform -Ilib/Planning -Ilib/Driver -Ilib/HWX -Ilib/Model -Ilib/Runtime -Iplugins/H16G -Iplugins/H16G/Encoding -Iplugins/H13 -Iplugins/H14 -Iplugins/H17 -Iplugins/H18 $(filter %.mm %.cpp,$^) $(FRAMEWORKS) -o $@
 
 test-cli: $(BUILD)/mil-hwxc
 	bash tests/test_cli.sh
@@ -402,7 +408,7 @@ $(BUILD)/h16_transformer_layer_norm_dump: tests/h16_transformer_layer_norm_dump.
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -Werror $^ -o $@
 
 .PHONY: test-h16g test-h17 test-h16g-conv-parity test-h17-conv-parity
-test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/test_h16g_resnet50_program $(BUILD)/mil-hwxc $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump $(BUILD)/h16_transformer_attention_dump $(BUILD)/h16_transformer_layer_norm_dump
+test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/test_h16g_resnet50_program $(BUILD)/mil-hwxc $(BUILD)/mil-hwxc-transformer-r2-candidate $(BUILD)/h16_transformer_linear_dump $(BUILD)/h16_whisper_stem_dump $(BUILD)/h16_transformer_attention_dump $(BUILD)/h16_transformer_layer_norm_dump
 	$(BUILD)/test_h16g_resnet50_packing
 	$(BUILD)/test_h16g_resnet50_program
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H16G
@@ -414,13 +420,14 @@ test-h16g: test-h16g-conv-parity $(BUILD)/test_h16g_resnet50_packing $(BUILD)/te
 	python3 tests/test_h16g_whisper_stem_cli.py $(BUILD)/mil-hwxc $(BUILD)/h16_whisper_stem_dump
 	python3 tests/test_h16g_whisper_stem2_parity.py $(BUILD)/h16_whisper_stem_dump
 	python3 tests/test_h16g_transformer_attention_parity.py $(BUILD)/h16_transformer_attention_dump
-	python3 tests/test_h16g_transformer_attention_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
+	python3 tests/test_h16g_transformer_attention_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py $(BUILD)/mil-hwxc-transformer-r2-candidate
 	python3 tests/test_h16g_transformer_layer_norm_parity.py $(BUILD)/h16_transformer_layer_norm_dump
-	python3 tests/test_h16g_transformer_layer_norm_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py
+	python3 tests/test_h16g_transformer_layer_norm_cli.py $(BUILD)/mil-hwxc tools/h16g_validate.py $(BUILD)/mil-hwxc-transformer-r2-candidate
 .PHONY: test-h16g-attention-reference
 # NumPy is optional for the compiler; the ANE2 kit venv runs this numerical test.
 test-h16g-attention-reference:
 	python3 tests/test_h16g_attention_refs.py
+	python3 tests/test_h16g_attention_stage_check.py
 test-h17: test-h17-conv-parity $(BUILD)/mil-hwxc
 	python3 tests/test_h16_h17_conv_cli.py $(BUILD)/mil-hwxc H17
 test-h16g-conv-parity: $(BUILD)/h16_conv_dump

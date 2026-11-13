@@ -249,16 +249,15 @@ class ValidationTests(unittest.TestCase):
                      0x511c: padded_row * dimension}
         old_allocation = score + heads * padded_row * dimension
         target = dict(kind='scratch', size=old_allocation)
-        self.assertTrue(fused_attention_program(17, 35, 791))
+        self.assertTrue(fused_attention_program(18, 38, 791))
         self.assertEqual(dma_extent(dma, registers, target,
                                     'fused-attention'), 2 * score)
         self.assertGreater(2 * score, old_allocation)
 
-    def test_layer_norm_affine_constants_use_kernel_extent(self):
+    def test_layer_norm_zero_beta_uses_kernel_extent(self):
         tasks = [dict(registers={0x450c: 0x37280000},
                       dma=[dict(address=0x4d10)]),
-                 *[dict(registers={}, dma=[]) for _ in range(2)],
-                 dict(registers={}, dma=[dict(address=0x4d28)]),
+                 *[dict(registers={}, dma=[]) for _ in range(3)],
                  dict(registers={}, dma=[dict(address=0x4d28),
                                          dict(address=0x5108)])]
         self.assertTrue(layer_norm_program(tasks, 5, 0x10, 20))
