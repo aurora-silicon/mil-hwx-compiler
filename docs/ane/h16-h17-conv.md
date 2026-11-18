@@ -126,6 +126,49 @@ compiler's output for the same MIL and weights. On a J616s with Linux, each
 layer matches a CPU fp16 reference (relL2 8e-5 to 2e-4) and the six-layer
 DRAM chain runs a 960x540 frame in 3.8 ms of firmware time (relL2 6e-4).
 
+### H17
+
+The same MIL and weights compiled by the macOS 26.6.2 ANE compiler, h17 target
+(`research/oracles/h17/denoise_grid_*.json`), differ from H16G in three ways,
+all of which the H16G rows got wrong on the J700:
+
+- The dense 3x3 32->32 layer has its own schedule: TileHeight 405, 72-pixel
+  source tiles, source skew 0x20, Common `0x3c` = 0x81b3300 (bit 27 set, as
+  on the measured dense 3x3 64->64), result base after 406 rows.
+- Grouped kernels keep the H16G group sizes (4 outputs per chunk for 32
+  outputs, 8 for 16), but each group is written once, in the first chunk of
+  its run; the repeated chunks are left out of the section and their
+  coefficient, offset and size registers are not written. Inside a linked
+  chain every task after the first writes the left-out coefficients as
+  disabled (`stage<<16 | 0x20`), as Apple's chained output does; this is
+  the form we emit. An earlier version of this page said coefficient
+  registers carry over from the previous task, so leaving them out hangs
+  the next EXECUTE. That is wrong. On the J700, registers a task does not
+  write reset per task (measured for the DMA strides, the PE scalar, the
+  chunk offset 0x5568 and the L2 base). An Apple-compiled two-task chain
+  gave Apple's output bit for bit, with no hang, when its second task's 12
+  disabled-chunk writes were dropped.
+- Header word 4 carries the 0xfff800 window bits on every layer. (The H16
+  output of macOS 26.6.2 does too; macOS 27.0's H16 output sets them on the
+  dense 3x3 only.)
+
+Packed records over the left-out chunk table follow Apple's form: from each
+record's first register, a dense record while registers are contiguous, else a
+scatter record covering 16 words. `tests/test_h16g_denoise_grid_parity.py`
+checks all six H17 layers against these facts. On the J700 (Linux, Aurora
+kernel ANE driver) every layer matches a CPU fp16 reference (relL2 9e-5 to
+4e-4) and the six-layer DRAM chain runs a 960x540 frame (relL2 1e-3).
+
+What hung the J700 is not pinned down. The program built from the H16G
+rows enabled every chunk with its own kernel bytes and used the H16G dense
+3x3 schedule; its layers were not run alone, so the difference that hung
+it was not isolated. A chain built while fixing it, whose layers each ran
+alone, also hung: it wrote the left-out chunks' coefficients enabled
+(`stage<<16 | 0x21`), with no offset, size or kernel bytes behind them. A
+task whose used chunk is disabled hangs too, but neither program had one,
+so that does not explain them. An enabled chunk with no data is the closer
+fit; it has not been tested on its own.
+
 ## Parity and report corrections
 
 Every register (including omitted/default fields), packed record, task size,

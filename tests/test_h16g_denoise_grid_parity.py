@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""H16G denoise-grid layers: compile each 960x540 layer with mil-hwxc and
-check it against the decoded macOS compiler output of the same MIL and
-weights (research/oracles/h16/denoise_grid_*.json): every register, the
-task size and header (header[1] ExeCycles stays unmodelled), the tensor
+"""H16G and H17 denoise-grid layers: compile each 960x540 layer with mil-hwxc
+and check it against the decoded macOS compiler output of the same MIL and
+weights (research/oracles/{h16,h17}/denoise_grid_*.json): every register,
+the task size and header (header[1] ExeCycles stays unmodelled), the tensor
 descriptors and the kernel section hash. Also checks that the six-layer
-grid network compiles as one linked DRAM chain.
+grid network compiles as one linked DRAM chain for each target.
 
 usage: test_h16g_denoise_grid_parity.py build/mil-hwxc
 """
@@ -80,12 +80,12 @@ def weights_blob(cases):
     return bytes(out)
 
 
-def compile_(root, name, cases, schedule):
+def compile_(root, name, cases, schedule, target):
     (root / name).mkdir()
     (root / name / 'weights.bin').write_bytes(weights_blob(cases))
     (root / name / 'model.mil').write_text(program(cases))
     result = subprocess.run([COMPILER, '--mil', str(root / name / 'model.mil'),
-                             '--model-root', str(root / name), '--target', 'H16G',
+                             '--model-root', str(root / name), '--target', target,
                              '--format', 'hwx', '--schedule', schedule,
                              '--output', str(root / name / 'out')],
                             capture_output=True, text=True, timeout=300)
@@ -98,35 +98,36 @@ def compile_(root, name, cases, schedule):
 
 def main():
     checked = 0
-    oracles = {name: json.loads((ROOT / f'research/oracles/h16/denoise_grid_{name}.json').read_text())
-               for name in CHAIN}
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        for name, oracle in oracles.items():
-            data = compile_(root, name, [dict(oracle['case'])], 'per-op')
-            ours = parse_hwx(data, 'h16')
-            want, got = oracle['task_descriptors'][0], ours['task_descriptors'][0]
-            a, b = registers(want), registers(got)
-            bad = {hex(k): (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
-            assert not bad, f'{name}: register mismatches {bad}'
-            assert want['size_bytes'] == got['size_bytes'], name
-            hw, hg = list(want['header_words']), list(got['header_words'])
-            hw[1] = hg[1] = None
-            assert hw == hg, f'{name}: header {want["header_words"]} vs {got["header_words"]}'
-            assert ours['tensor_descriptors'] == oracle['tensor_descriptors'], name
-            ks = oracle['kernel_section']
-            kernel = ours['kernel_section']
-            assert kernel['sha256'] == ks['sha256'] and kernel['size'] == ks['size'], \
-                f'{name}: kernel section differs'
-            checked += len(a) + 1
-            print(f'{name}: {len(a)} registers, header, tensors and kernel section match')
-        # The whole grid network as one linked DRAM chain.
-        data = compile_(root, 'chain', [dict(oracles[n]['case']) for n in CHAIN], 'linked')
-        chain = parse_hwx(data, 'h16')
-        assert len(chain['task_descriptors']) == len(CHAIN)
-        assert chain['tensor_descriptors'][0]['shape'] == [1, 4, 540, 960]
-        assert chain['tensor_descriptors'][-1]['shape'] == [1, 16, 540, 960]
-        print(f'chain: {len(CHAIN)} linked tasks, sha256 {hashlib.sha256(data).hexdigest()[:16]}')
+        for target, facts in (('H16G', 'h16'), ('H17', 'h17')):
+            oracles = {name: json.loads((ROOT / f'research/oracles/{facts}/denoise_grid_{name}.json').read_text())
+                       for name in CHAIN}
+            for name, oracle in oracles.items():
+                data = compile_(root, f'{facts}-{name}', [dict(oracle['case'])], 'per-op', target)
+                ours = parse_hwx(data, facts)
+                want, got = oracle['task_descriptors'][0], ours['task_descriptors'][0]
+                a, b = registers(want), registers(got)
+                bad = {hex(k): (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
+                assert not bad, f'{target} {name}: register mismatches {bad}'
+                assert want['size_bytes'] == got['size_bytes'], f'{target} {name}'
+                hw, hg = list(want['header_words']), list(got['header_words'])
+                hw[1] = hg[1] = None
+                assert hw == hg, f'{target} {name}: header {want["header_words"]} vs {got["header_words"]}'
+                assert ours['tensor_descriptors'] == oracle['tensor_descriptors'], f'{target} {name}'
+                ks = oracle['kernel_section']
+                kernel = ours['kernel_section']
+                assert kernel['sha256'] == ks['sha256'] and kernel['size'] == ks['size'], \
+                    f'{target} {name}: kernel section differs'
+                checked += len(a) + 1
+                print(f'{target} {name}: {len(a)} registers, header, tensors and kernel section match')
+            # The whole grid network as one linked DRAM chain.
+            data = compile_(root, f'{facts}-chain', [dict(oracles[n]['case']) for n in CHAIN], 'linked', target)
+            chain = parse_hwx(data, facts)
+            assert len(chain['task_descriptors']) == len(CHAIN)
+            assert chain['tensor_descriptors'][0]['shape'] == [1, 4, 540, 960]
+            assert chain['tensor_descriptors'][-1]['shape'] == [1, 16, 540, 960]
+            print(f'{target} chain: {len(CHAIN)} linked tasks, sha256 {hashlib.sha256(data).hexdigest()[:16]}')
     print(f'denoise grid parity: {checked} facts checked')
 
 

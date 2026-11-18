@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H17: emit the 960x540 denoise grid as the J700 runs it. The dense 3x3
+  32->32 layer takes its H17 schedule (TileHeight 405, 72-pixel tiles),
+  grouped kernels write each output group once instead of repeating it over
+  16 chunks, chained tasks disable the chunks they leave out, and standalone
+  headers always carry the window bits. Decoded facts from the macOS 26.6.2
+  compiler (h17) are checked by the denoise grid parity test; on the J700
+  each layer and the six-layer chain match a CPU fp16 reference. H16G
+  output is unchanged.
 - H16G: open the three-program fused-attention-chain qualification gate after
   task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
   7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are
