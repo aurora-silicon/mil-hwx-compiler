@@ -1,0 +1,337 @@
+{
+ "case": {
+  "bias": true,
+  "cin": 32,
+  "cout": 32,
+  "groups": 1,
+  "height": 540,
+  "kernel": 3,
+  "name": "c32k3",
+  "relu": true,
+  "source": "our MIL (open DnCNN-lite grid layer, random weights) compiled by the macOS 26.6.2 ANE compiler with TargetArchitecture h17 on an M4 MacBook Air; decoded facts only",
+  "weights": "tests/data/denoise_grid/c32k3.bin",
+  "width": 960
+ },
+ "hwx_bytes": 81920,
+ "kernel_section": {
+  "chunk_bytes": 2048,
+  "chunk_count": 10,
+  "chunks": [
+   {
+    "nonzero_bytes": 2044,
+    "offset": 0,
+    "sha256": "1f4bc3f78b9f5805f8f159c9e188808229f589cb06b111202f0fb9ea840cce68",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1988,
+    "offset": 2048,
+    "sha256": "89bb26ce5dbdff24baa0ba9db281ae1b20d1993e0345a1369b0972d5ff20fb3d",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1990,
+    "offset": 4096,
+    "sha256": "693d781a831b0150f4f143b9e8dc17167cfa7be0a18582bf1aa017c177ae022e",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1986,
+    "offset": 6144,
+    "sha256": "b5e869f313a08f6572124e0e9e6d8606d2b65a54b215306e9a97f34f34acc3fa",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1988,
+    "offset": 8192,
+    "sha256": "1b40cae011c02597c10dfffed336d6e6c5b557da5bf92148fa62b999c2e8353e",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1987,
+    "offset": 10240,
+    "sha256": "de23d909891fc239f2779604cfec565a207d81a243cc9039c5fd8f426252a249",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1989,
+    "offset": 12288,
+    "sha256": "0b53dc31193ceec3802aba5cef1196514e294e1d1b63ffc3e00bfea2ea4decf2",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2044,
+    "offset": 14336,
+    "sha256": "b64b18090fb67334d9580dcfcd0fe6aebf6a69f753416bb33c6861ac3393f11a",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1987,
+    "offset": 16384,
+    "sha256": "11c5e90a299d4c678479a518e71ff3a67ca86b19658cdb1c68f94086f26a0496",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 456,
+    "offset": 18432,
+    "sha256": "f0c093c7f6dc37a02f1d764022cb8442a5dd4283e9dea27bfb42082092bc337d",
+    "size": 512
+   }
+  ],
+  "nonzero_bytes": 18459,
+  "nonzero_fp16_words": null,
+  "prefix_128_nonzero_bytes": 127,
+  "prefix_128_sha256": "5b15d4d1e45b059352fe207a2dd6865a38f4485f0be1aaeb8c5cc295d103ad8c",
+  "sha256": "0951f03feb9f64adbb5d26849fa452898d2f15abc4be5932df5104fd9cea48ed",
+  "size": 18944,
+  "tail_after_128_nonzero_bytes": 18332
+ },
+ "program_count": 1,
+ "task_descriptors": [
+  {
+   "blocks": {
+    "0x00000": {
+     "name": "common",
+     "words": {
+      "0x00004": "0x000003c0",
+      "0x00008": "0x0000021c",
+      "0x0000c": "0x00000020",
+      "0x00014": "0x000003c0",
+      "0x00018": "0x0000021c",
+      "0x0001c": "0x00000020",
+      "0x00028": "0x5042a0c3",
+      "0x00034": "0x00000195",
+      "0x0003c": "0x081b3300",
+      "0x00040": "0x0000000a",
+      "0x0004c": "0x00200000"
+     }
+    },
+    "0x04100": {
+     "name": "l2",
+     "words": {
+      "0x04104": "0x00500172",
+      "0x04108": "0x00500130",
+      "0x04114": "0x00000090",
+      "0x04118": "0x00001220",
+      "0x0411c": "0x00001200",
+      "0x04120": "0x00001200",
+      "0x04148": "0x0050017a",
+      "0x0414c": "0x001cbec0"
+     }
+    },
+    "0x04900": {
+     "name": "ne",
+     "words": {
+      "0x04900": "0x10000082",
+      "0x04904": "0x00113c10",
+      "0x04910": "0x00003c00"
+     }
+    },
+    "0x04d00": {
+     "name": "tile_dma_src",
+     "words": {
+      "0x04d00": "0x00000021",
+      "0x04d08": "0x000000ce",
+      "0x04d10": "0x00000000",
+      "0x04d14": "0x00000000",
+      "0x04d18": "0x00000780",
+      "0x04d1c": "0x000fd200",
+      "0x04d68": "0x01002031"
+     }
+    },
+    "0x05100": {
+     "name": "tile_dma_dst",
+     "words": {
+      "0x05100": "0x01000021",
+      "0x05108": "0x00000000",
+      "0x0510c": "0x00000000",
+      "0x05110": "0x00000780",
+      "0x05114": "0x000fd200",
+      "0x05138": "0x01302031"
+     }
+    },
+    "0x05500": {
+     "name": "kernel_dma_src",
+     "words": {
+      "0x05500": "0x000102c0",
+      "0x05510": "0x00000000",
+      "0x05514": "0x00000000",
+      "0x05520": "0x00000021",
+      "0x05528": "0x00000021",
+      "0x05530": "0x00000021",
+      "0x05538": "0x00000021",
+      "0x05540": "0x00000021",
+      "0x05548": "0x00000021",
+      "0x05550": "0x00000021",
+      "0x05558": "0x00000021",
+      "0x05568": "0x00000940",
+      "0x05570": "0x00001280",
+      "0x05578": "0x00001bc0",
+      "0x05580": "0x00002500",
+      "0x05588": "0x00002e40",
+      "0x05590": "0x00003780",
+      "0x05598": "0x000040c0",
+      "0x055a0": "0x00000940",
+      "0x055a8": "0x00000940",
+      "0x055b0": "0x00000940",
+      "0x055b8": "0x00000940",
+      "0x055c0": "0x00000940",
+      "0x055c8": "0x00000940",
+      "0x055d0": "0x00000940",
+      "0x055d8": "0x00000940"
+     }
+    },
+    "0x05900": {
+     "name": "cache_dma",
+     "words": {
+      "0x05900": "0x00000012",
+      "0x05904": "0x00a000a0",
+      "0x05918": "0x00000000",
+      "0x05928": "0x007f0000",
+      "0x0592c": "0x20010701"
+     }
+    }
+   },
+   "header_words": [
+    "0x005d0000",
+    "0x00000512",
+    "0x04000068",
+    "0x00000000",
+    "0x00fff868",
+    "0x00000000",
+    "0x00000000",
+    "0x00000000",
+    "0x00050009"
+   ],
+   "records": [
+    {
+     "address": "0x05500",
+     "count": 6,
+     "header": "0xd5401540"
+    },
+    {
+     "address": "0x05548",
+     "count": 8,
+     "header": "0xd5451552"
+    },
+    {
+     "address": "0x05590",
+     "count": 9,
+     "header": "0xd5551564"
+    },
+    {
+     "address": "0x055d8",
+     "count": 1,
+     "header": "0x00001576"
+    },
+    {
+     "address": "0x00004",
+     "count": 3,
+     "header": "0x00010001"
+    },
+    {
+     "address": "0x00014",
+     "count": 8,
+     "header": "0x93498005"
+    },
+    {
+     "address": "0x04d08",
+     "count": 3,
+     "header": "0x800c1342"
+    },
+    {
+     "address": "0x04d68",
+     "count": 1,
+     "header": "0x0000135a"
+    },
+    {
+     "address": "0x04104",
+     "count": 2,
+     "header": "0x00009041"
+    },
+    {
+     "address": "0x04114",
+     "count": 6,
+     "header": "0x98039045"
+    },
+    {
+     "address": "0x04900",
+     "count": 3,
+     "header": "0x80049240"
+    },
+    {
+     "address": "0x05110",
+     "count": 3,
+     "header": "0x81009444"
+    },
+    {
+     "address": "0x05900",
+     "count": 5,
+     "header": "0x83109640"
+    },
+    {
+     "address": "0x05510",
+     "count": 2,
+     "header": "0x24009544"
+    },
+    {
+     "address": "0x04d10",
+     "count": 2,
+     "header": "0x23809344"
+    },
+    {
+     "address": "0x05108",
+     "count": 2,
+     "header": "0x23009442"
+    },
+    {
+     "address": "0x04d00",
+     "count": 1,
+     "header": "0x22001340"
+    },
+    {
+     "address": "0x05100",
+     "count": 1,
+     "header": "0x22001440"
+    }
+   ],
+   "size_bytes": 372
+  }
+ ],
+ "tensor_descriptors": [
+  {
+   "binding": 1,
+   "element_code": 5,
+   "shape": [
+    1,
+    32,
+    540,
+    960
+   ],
+   "strides": [
+    33177600,
+    1036800,
+    1920,
+    2
+   ],
+   "total_bytes": 33177600
+  },
+  {
+   "binding": 2,
+   "element_code": 5,
+   "shape": [
+    1,
+    32,
+    540,
+    960
+   ],
+   "strides": [
+    33177600,
+    1036800,
+    1920,
+    2
+   ],
+   "total_bytes": 33177600
+  }
+ ]
+}
