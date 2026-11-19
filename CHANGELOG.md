@@ -4,6 +4,14 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G/H17: lay out stride-1 conv kernels by the general rule decoded from
+  the single-layer sweep: outputs split evenly over 2^F groups in rounds of
+  2^OCG, NE >> F chunk slots per group (H16 copies, H17 the first only),
+  empty groups left out, no bias row for a single output, few-channel
+  depthwise as dense with one input channel per group. Replaces the
+  `chunkOutputs` schedule field and the grouped packer; existing kernel
+  hashes are unchanged, and the sweep test checks 62 chunk tables and kernel
+  sections.
 - H16G/H17: pack task records by the general rule decoded from the
   single-layer conv sweep (split at structure starts and 1 KiB blocks, fewest
   records, fixed tie-break) instead of fixed register ranges. Output is
