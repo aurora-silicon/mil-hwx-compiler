@@ -15,6 +15,8 @@ struct Layer {
     // Kernel bytes per lane when they depend on the weights (sparse
     // stride-2 sections); all zero derives them from the shape.
     std::array<std::uint32_t,16> kernelChunks{};
+    // fp16 bits of the bias of a single-output layer (NE register 0x490c).
+    std::uint16_t singleOutputBias = 0;
 };
 struct Task {
     std::array<std::uint32_t, 9> header{};
@@ -179,6 +181,24 @@ std::array<std::uint32_t,16> kernelChunkBytes(Generation generation, ConvShape s
 std::vector<std::uint8_t> packKernel(Generation generation, ConvShape shape, KernelTiling tiling,
                                      const std::uint8_t *weights, std::size_t weightBytes,
                                      const std::uint8_t *bias, std::size_t biasBytes);
+/// Apple's free tiling choices for a stride-1 single-layer conv: F =
+/// log2(output groups), the active NE count, FatTile, OCGSize (0 for
+/// depthwise), ShPref (= ShMin) and ShMax, TileHeight, and the source and
+/// result skews in 16-byte units. Every other register follows from these
+/// and the shape (docs/ane/h16-h17-conv.md, "Single-layer rules").
+struct ConvTiling {
+    std::uint32_t outputGroupsLog2 = 4, activeNEs = 16;
+    bool fatTile = false;
+    std::uint32_t ocg = 0, shPref = 0, shMax = 0, tileHeight = 0;
+    std::uint32_t sourceSkew = 0, resultSkew = 0;
+};
+/// Empty when describeTiled can build the layer: a stride-1 SAME 1x1 or
+/// 3x3, dense or depthwise, with a consistent tiling that fits the 2 MiB L2,
+/// WU <= 3 and OCGSize <= 4 (the H17 engine hung past either).
+std::string tiledConvRefusal(ConvShape shape, const ConvTiling &tiling);
+/// One standalone task for a stride-1 conv with an explicit tiling (no
+/// schedule row needed). The kernel section is packKernel's.
+Description describeTiled(Generation generation, const Layer &layer, const ConvTiling &tiling);
 /// Pack registers into a task the way Apple's compiler does: the plain
 /// registers in the fewest dense/scatter records (split at the descriptor
 /// structure starts and 1 KiB blocks), then the relocation records. Header

@@ -293,12 +293,12 @@ KernelSlots kernelSlots(Generation gen, ConvShape s, KernelTiling t) {
 // hold Cout/16 columns of Cin*taps rows (+1 bias row), padded to 64. The
 // sparse stride-2 vectors reproduce Apple's zero-skipping sections for the
 // campaign's BLOBFILE view only (descriptor parity, never packaging).
-std::array<U32,16> chunks(Generation gen, ConvShape s, bool sparse) {
+std::array<U32,16> chunks(Generation gen, ConvShape s, bool sparse, const Schedule *given = nullptr) {
     std::array<U32,16> out{};
     const bool dw = s.groups == s.input.channels;
     const U32 taps = s.kernel*s.kernelWidth;
     const U32 rows = (dw ? 1 : s.input.channels)*taps + (s.bias ? 1 : 0);
-    const Schedule *p = schedule(s, gen);
+    const Schedule *p = given ? given : schedule(s, gen);
     if (s.stride == 1 && p) {
         return kernelChunkBytes(gen, s, scheduleKernelTiling(s, *p));
     } else if (s.stride == 1 || !sparse) {
@@ -341,13 +341,18 @@ U32 inputRows(U32 kernel, U32 tileHeight, U32 height) {
 }
 Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned count,
           U32 srcBase, U32 resultBase, U32 kernelBase, U32 residentRow,
-          U32 residentStride) {
+          U32 residentStride, const Schedule *given = nullptr) {
     const auto s = layer.shape;
-    const auto &p = *schedule(s, gen);
+    const auto &p = given ? *given : *schedule(s, gen);
     const bool first = stage == 0, last = stage+1 == count;
     const bool linked = count != 1;
-    const bool dw = s.groups == s.input.channels;
+    const bool dw = depthwise(s);
     const bool h17 = gen == Generation::H17;
+    // Header word 8: log2 of the active NE count + 1 in bits 16-18.
+    U32 ene = 1;
+    if (s.stride == 1)
+        for (U32 n = scheduleKernelTiling(s, p).activeNEs; n > 1; n >>= 1) ++ene;
+    else ene = 5;
     Task t;
     // ExeCycles (header[1]) is unknown; zero is an explicit unmodelled hint.
     t.header = {stage,0, first ? (last ? 0x04000068u : 0x68u)
@@ -356,19 +361,20 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
                                     : (h17 ? kDispatchLimitMiddleH17 : kDispatchLimitMiddleH16G)),
                 0,0, last ? 0u : (count == 2 ? 0x7fu
                                   : (first ? 0x01ffffffu : 0x7fffffffu)),
-                last ? 0x00050009u : 0x00050001u};
+                ene<<16 | (last ? 9u : 1u)};
     auto &r = t.registers;
-    r[4]=s.input.width; r[8]=s.input.height; r[12]=s.input.channels;
-    r[0x14]=s.output.width; r[0x18]=s.output.height;
-    // 16 output channels is the reset value and is not written.
-    if (s.output.channels != 16) r[0x1c]=s.output.channels;
+    // A register whose value is its reset value is not written: widths and
+    // heights 256, channel counts 16, TileHeight 255, Common 0, NECfg 3.
+    const auto put = [&](U32 a, U32 v, U32 reset) { if (v != reset) r[a] = v; };
+    put(4,s.input.width,256); put(8,s.input.height,256); put(12,s.input.channels,16);
+    put(0x14,s.output.width,256); put(0x18,s.output.height,256); put(0x1c,s.output.channels,16);
     if (s.kernel != 1) {
         U32 pad = s.stride == 1 ? 1 : 0;
         r[0x28]=s.kernel | s.kernel<<6 | s.stride<<13 | s.stride<<15 |
                    pad<<17 | pad<<22 | 1u<<28 | 1u<<30;
     }
     if (dw) r[0x30]=0x14000;
-    r[0x34]=p.tileHeight; r[0x3c]=p.common;
+    put(0x34,p.tileHeight,255); put(0x3c,p.common,0);
     // Measured generation delta (r2): standalone depthwise C256 28->14.
     if (!h17 && dw && s.stride==2 && s.input.channels==256) r[0x3c]=0x233300;
     if (linked && !first && !last) r[0x3c] |= 0x1100;
@@ -413,19 +419,24 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     }
     const bool sparseKernel = s.stride==2 && sparse;
     if (h17 || sparseKernel) r[0x4900]=(h17 ? 0x10000082 : 0x82) | (sparseKernel ? 0x100 : 0);
-    r[0x4904]=0x103c00 | (layer.relu ? 0x10000 : 0) | (s.bias ? 0x10 : 0);
+    // A single output keeps its bias in 0x490c, not in a kernel bias row.
+    r[0x4904]=0x103c00 | (layer.relu ? 0x10000 : 0) | (s.bias && s.output.channels > 1 ? 0x10 : 0);
+    if (s.bias && s.output.channels == 1) r[0x490c]=layer.singleOutputBias;
     r[0x4910]=0x3c00;
     if (first) {
         r[0x4d00]=0x21; r[0x4d08]=0xce;
         r[0x4d10]=r[0x4d14]=0;
         r[0x4d18]=align64(2*s.input.width);
-        r[0x4d1c]=r[0x4d18]*s.input.height; r[0x4d68]=0x1002031;
+        // A plane stride is written only when there is a second plane.
+        if (s.input.channels > 1) r[0x4d1c]=r[0x4d18]*s.input.height;
+        r[0x4d68]=0x1002031;
     }
     if (last) {
         r[0x5100]=(h17 ? 0x21 : 0x31) | (linked ? stage<<16 : (p.direct ? 1u<<24 : 0));
         r[0x5108]=r[0x510c]=0;
         r[0x5110]=align64(2*s.output.width);
-        r[0x5114]=r[0x5110]*s.output.height; r[0x5138]=0x1302031;
+        if (s.output.channels > 1) r[0x5114]=r[0x5110]*s.output.height;
+        r[0x5138]=0x1302031;
         // These decoded CacheDMA writes ARE present in all final conv tasks,
         // despite the field report's sentence saying the block is unwritten.
         r[0x5900]=0x12; r[0x5904]=0xa000a0;
@@ -434,7 +445,7 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     }
     r[0x5500]=(stage+1)<<16 | (last ? 0x2c0 : 0x240) | (sparseKernel ? 0x20 : 0);
     r[0x5510]=kernelBase; r[0x5514]=0;
-    const auto sizes=layer.kernelChunks[0] ? layer.kernelChunks : chunks(gen,s,sparse);
+    const auto sizes=layer.kernelChunks[0] ? layer.kernelChunks : chunks(gen,s,sparse,given);
     U32 offset=0;
     for (unsigned i=0; i<16; ++i) {
         if (!sizes[i]) continue;
@@ -1301,6 +1312,82 @@ static std::vector<std::uint8_t> streamPrologue(Generation gen) {
     std::vector<std::uint8_t> stream(16,0);
     if (gen==Generation::H16G) stream[0]=1;
     return stream;
+}
+namespace {
+U32 log2Exact(U32 n) { U32 l = 0; while (n > 1) { n >>= 1; ++l; } return l; }
+// The schedule row a tiling stands for (stride 1). Common: F, ShMax, ShMin =
+// ShPref; NECfg: WUStack = log2 NE - F - FatTile, FatTile, OCGSize. Results
+// go straight to DRAM (direct) when the narrowest work unit, (128 << FatTile)
+// >> ShMax pixels on H17 and 128 >> ShMax on H16, holds 32 pixels or the
+// whole row.
+Schedule tiledSchedule(Generation gen, ConvShape s, const ConvTiling &t) {
+    const bool dw = depthwise(s);
+    const U32 wu = log2Exact(t.activeNEs) - t.outputGroupsLog2 - t.fatTile;
+    const U32 narrowest = (gen == Generation::H17 ? 128u << t.fatTile : 128u) >> t.shMax;
+    Schedule p{s.input.channels, s.output.channels, s.input.width, s.kernel, 1, s.groups, s.bias,
+               t.tileHeight, 16*t.sourceSkew,
+               t.outputGroupsLog2 << 19 | t.shMax << 16 | t.shPref << 12 | t.shPref << 8,
+               narrowest >= std::min(32u, s.input.width),
+               int(wu << 4 | U32(t.fatTile) << 3 | (dw ? 0 : t.ocg)), s.input.height};
+    p.resultSkew = int(16*t.resultSkew);
+    return p;
+}
+}
+std::string tiledConvRefusal(ConvShape s, const ConvTiling &t) {
+    if (s.kernel != s.kernelWidth || (s.kernel != 1 && s.kernel != 3) || s.stride != 1)
+        return "explicit tilings cover stride-1 1x1 and 3x3 kernels";
+    if (s.output.width != s.input.width || s.output.height != s.input.height)
+        return "only SAME surfaces are supported";
+    if (s.groups != 1 && !(depthwise(s) && s.output.channels == s.input.channels))
+        return "only dense and depthwise groups are supported";
+    if (!s.input.channels || !s.output.channels || !s.input.width || !s.input.height)
+        return "empty tensor";
+    if (s.output.channels == 1 && !s.bias)
+        return "a single output without bias is not decoded (0x490c presence)";
+    const U32 ne = t.activeNEs;
+    if (!ne || ne > 16 || (ne & (ne-1)) || t.outputGroupsLog2 > 4 || t.outputGroupsLog2 + t.fatTile > log2Exact(ne))
+        return "tiling needs NE a power of two <= 16 and F + FatTile <= log2 NE";
+    // WU = log2 NE - F - FatTile goes in NECfg bits 4-5. WU 4 (16 NEs at F 0
+    // without FatTile) would read as 0 with a stray bit 6; it hung the H17
+    // engine, and Apple puts FatTile on instead.
+    if (log2Exact(ne) - t.outputGroupsLog2 - t.fatTile > 3)
+        return "WU = log2 NE - F - FatTile must be <= 3 (2-bit NECfg field)";
+    // The field holds 7, but Apple never goes past OCGSize 4 (16 output
+    // channels per NE) and OCGSize 5 hung the H17 engine.
+    if (t.ocg > 4 || (depthwise(s) && t.ocg))
+        return "OCGSize must be <= 4 (0 for depthwise)";
+    if (t.shPref > t.shMax || t.shMax > 7 || ((128u << t.fatTile) >> t.shPref) < 8)
+        return "tiling needs ShPref <= ShMax and a strip of at least 8 pixels";
+    if (!t.tileHeight || t.tileHeight > 0xffff)
+        return "TileHeight out of range";
+    // L2 capacity (2 MiB): source rows of a row tile plus the result staging
+    // (direct: 512 bytes per output slot of the 2^(F+OCG) group outputs).
+    const Schedule p = tiledSchedule(Generation::H17, s, t);
+    const U32 strip = (128u << t.fatTile) >> t.shPref;
+    const std::uint64_t source = std::uint64_t(inputRows(s.kernel, t.tileHeight, s.input.height)) *
+        (std::uint64_t(s.input.channels)*2*sourcePixels(s.kernel, s.input.width, strip) + 16*t.sourceSkew);
+    const std::uint64_t resultRow = 2*std::min((s.output.width+7)&~7u, std::max(strip, 32u));
+    const std::uint64_t direct = std::uint64_t(512) << (t.outputGroupsLog2 + t.ocg);
+    const std::uint64_t staged = std::uint64_t(std::min(t.tileHeight, s.output.height)) *
+        (s.output.channels*resultRow + 16*t.resultSkew);
+    if (source + (p.direct ? direct : staged) > 2u*1024*1024)
+        return "tiling overflows the 2 MiB L2";
+    return {};
+}
+Description describeTiled(Generation gen, const Layer &layer, const ConvTiling &tiling) {
+    if (gen != Generation::H16G && gen != Generation::H17)
+        throw std::invalid_argument("unsupported convolution generation");
+    if (auto why = tiledConvRefusal(layer.shape, tiling); !why.empty()) throw std::invalid_argument(why);
+    const Schedule p = tiledSchedule(gen, layer.shape, tiling);
+    Description out;
+    out.stream = streamPrologue(gen);
+    Task t = task(gen, layer, false, 0, 1, 0, 0, 0, 0, 0, &p);
+    pack(t);
+    out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
+    out.stream.insert(out.stream.end(), t.bytes.begin(), t.bytes.end());
+    for (U32 n : chunks(gen, layer.shape, false, &p)) out.kernelBytes += n;
+    out.tasks.push_back(std::move(t));
+    return out;
 }
 Description describe(Generation gen, const std::vector<Layer> &layers, bool sparseStride2) {
     if (gen!=Generation::H16G && gen!=Generation::H17)
