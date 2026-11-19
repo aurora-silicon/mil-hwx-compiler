@@ -4,6 +4,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G/H17: build a stride-1 single-layer conv from an explicit tiling
+  (`ConvTiling`, `describeTiled`) with the remaining single-layer rules:
+  reset values left out (W/H 256, channels 16, TileHeight 255, Common 0),
+  NE count in header word 8, plane strides only for more than one channel,
+  a single output's bias in register 0x490c, one-channel depthwise as a
+  dense conv; inconsistent or over-capacity tilings are refused, as are
+  WU > 3 and OCGSize > 4 (Apple never emits them; both hung the H17 engine).
+  The sweep parity test checks whole tasks (registers, records, header) for
+  31 H16 and 31 H17 sweep shapes; existing output is unchanged.
 - H16G/H17: compile camera-denoise's low-light network on the 720p
   (640x360) and VGA (320x240) grids. New schedule rows from the macOS
   26.6.2 compiler (h16 and h17 make the same choices); the stride-1 L2

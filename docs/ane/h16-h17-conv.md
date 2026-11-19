@@ -206,6 +206,46 @@ R = W rounded up to 8:
 The measured stride-1 rows give the same values as their former per-row
 constants.
 
+Explicit tilings (`describeTiled`). A stride-1 1x1 or 3x3 conv, dense or
+depthwise, can be built without a schedule row from Apple's free choices:
+`ConvTiling` holds F, the NE count, FatTile, OCGSize, ShPref, ShMax,
+TileHeight and the two skews (16-byte units). The rest follows:
+
+- Common `0x3c` = F<<19 | ShMax<<16 | ShPref<<12 | ShPref<<8 (ShMin = ShPref;
+  H17 dense 3x3 adds bit 27); NECfg `0x40` = WU<<4 | FatTile<<3 | OCGSize with
+  WU = log2 NE - F - FatTile (depthwise: OCGSize 0); header word 8 =
+  (log2 NE + 1)<<16 | 9.
+- Direct mode (results straight to DRAM, `0x4148` 0x50017a, `0x5100` bit 24)
+  when the narrowest work unit, (128 << FatTile) >> ShMax pixels on H17 and
+  128 >> ShMax on H16, holds 32 pixels or the whole row; else L2-result mode.
+- Reset values are not written: W and H 256 (`0x4`, `0x8`, `0x14`, `0x18`),
+  channel counts 16 (`0xc`, `0x1c`), TileHeight 255, Common 0, NECfg 3, chunk
+  offset 0 and chunk size 64.
+- The DRAM plane strides `0x4d1c` / `0x5114` are written only when that side
+  has more than one channel.
+- A single output (Cout = 1) clears the NE bias bit (`0x4904` bit 4) and puts
+  its bias in `0x490c`.
+
+`tiledConvRefusal` refuses inconsistent tilings (NE not a power of two,
+F + FatTile > log2 NE, ShPref > ShMax, strips under 8 pixels), tilings past
+the device limits below, and tilings that overflow the 2 MiB L2 (source rows
+of a tile plus the result staging; direct mode stages 512 bytes per output of
+the 2^(F+OCG) group outputs). The device limits:
+
+- WU <= 3. WU is a 2-bit field (`0x40` bits 4-5); WU 4 (16 NEs at F 0 without
+  FatTile) reads as 0 with a stray bit 6. Apple uses FatTile there instead.
+- OCGSize <= 4, at most 16 output channels per NE. The field holds 7, but
+  Apple never writes more than 4 (390,266 sweep tasks); this is an observed
+  limit, not an encoding one.
+
+On the H17 (J700), a tiling past either limit hung the engine (EXECUTE
+failed, quarantine): pw 211->1 at 36x79 with WU 4, and pw 7->17 at 209x178
+with OCGSize 5. Apple's tilings for both layers ran correctly. Apple's
+choice of tiling (its cost model) is not modelled: the caller supplies it.
+The sweep parity test builds all 62 sweep tasks this way; outside the
+repository the same builder reproduced every H16 and H17 task of the sweep
+sets (9144 tasks, registers and header words).
+
 Record packing. Apple's records for a task follow one rule; `pack()` uses it
 for every formula-built task. The registers the loader relocates (`0x4d00`,
 `0x4d10`/`0x4d14`, `0x5100`, `0x5108`/`0x510c`, `0x5510`/`0x5514`) go in
