@@ -7,6 +7,18 @@
 
 int main(int argc, char **argv) {
     try {
+        if (argc==2 && std::string(argv[1])=="records") {
+            // Nine header words, then "address value" pairs on stdin (hex);
+            // the packed task bytes on stdout.
+            std::array<std::uint32_t,9> header{};
+            for (auto &h:header) std::cin>>std::hex>>h;
+            std::map<std::uint32_t,std::uint32_t> registers;
+            std::uint32_t a,v;
+            while (std::cin>>std::hex>>a>>v) registers[a]=v;
+            const auto t=ane::h16::packTask(header,registers);
+            std::cout.write(reinterpret_cast<const char *>(t.bytes.data()),t.bytes.size());
+            return 0;
+        }
         if (argc<10 || (argc-3)%7) throw std::invalid_argument("mode target then cin cout width kernel stride groups relu per layer");
         const std::string mode=argv[1],target=argv[2];
         if (target!="H16G" && target!="H17") throw std::invalid_argument("target");

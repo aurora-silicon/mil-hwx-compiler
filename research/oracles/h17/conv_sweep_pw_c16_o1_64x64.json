@@ -1,0 +1,311 @@
+{
+ "case": {
+  "bias": true,
+  "cin": 16,
+  "cout": 1,
+  "groups": 1,
+  "height": 64,
+  "kernel": 1,
+  "name": "pw_c16_o1_64x64",
+  "op": "pw",
+  "relu": true,
+  "set": "misc-1",
+  "source": "our MIL (2026-11-19 single-layer conv sweep, fp16 SAME stride 1, bias + ReLU) compiled by the macOS 26.6.2 ANE compiler, h17 target, on an M4 MacBook Air; decoded facts only",
+  "weights": "random.Random(name): Cout*Cin/groups*k*k then Cout values uniform(-0.5, 0.5) as fp16",
+  "width": 64
+ },
+ "hwx_bytes": 65536,
+ "kernel_section": {
+  "chunk_bytes": 2048,
+  "chunk_count": 1,
+  "chunks": [
+   {
+    "nonzero_bytes": 31,
+    "offset": 0,
+    "sha256": "c306f98e20a2223f2e54223a138c70fe1ed6649f48c41264b1db157a474f6fc2",
+    "size": 64
+   }
+  ],
+  "nonzero_bytes": 31,
+  "nonzero_fp16_words": [
+   {
+    "index": 0,
+    "value": 0.2049560546875
+   },
+   {
+    "index": 1,
+    "value": 0.326171875
+   },
+   {
+    "index": 2,
+    "value": -0.492431640625
+   },
+   {
+    "index": 3,
+    "value": 0.494140625
+   },
+   {
+    "index": 4,
+    "value": -0.396728515625
+   },
+   {
+    "index": 5,
+    "value": 0.08587646484375
+   },
+   {
+    "index": 6,
+    "value": -0.19384765625
+   },
+   {
+    "index": 7,
+    "value": -0.0254364013671875
+   },
+   {
+    "index": 8,
+    "value": 0.1580810546875
+   },
+   {
+    "index": 9,
+    "value": 0.02734375
+   },
+   {
+    "index": 10,
+    "value": -0.1500244140625
+   },
+   {
+    "index": 11,
+    "value": 0.28564453125
+   },
+   {
+    "index": 12,
+    "value": 0.118896484375
+   },
+   {
+    "index": 13,
+    "value": -0.4609375
+   },
+   {
+    "index": 14,
+    "value": -0.0247344970703125
+   },
+   {
+    "index": 15,
+    "value": -0.276611328125
+   }
+  ],
+  "prefix_128_nonzero_bytes": 31,
+  "prefix_128_sha256": "c306f98e20a2223f2e54223a138c70fe1ed6649f48c41264b1db157a474f6fc2",
+  "sha256": "c306f98e20a2223f2e54223a138c70fe1ed6649f48c41264b1db157a474f6fc2",
+  "size": 64,
+  "tail_after_128_nonzero_bytes": 0
+ },
+ "program_count": 1,
+ "task_descriptors": [
+  {
+   "blocks": {
+    "0x00000": {
+     "name": "common",
+     "words": {
+      "0x00004": "0x00000040",
+      "0x00008": "0x00000040",
+      "0x00014": "0x00000040",
+      "0x00018": "0x00000040",
+      "0x0001c": "0x00000001",
+      "0x00034": "0x00000020",
+      "0x0003c": "0x00020000",
+      "0x00040": "0x00000038",
+      "0x0004c": "0x00200000"
+     }
+    },
+    "0x04100": {
+     "name": "l2",
+     "words": {
+      "0x04104": "0x00500172",
+      "0x04108": "0x00500130",
+      "0x04114": "0x00000080",
+      "0x04118": "0x00000850",
+      "0x0411c": "0x00000800",
+      "0x04120": "0x00000800",
+      "0x04148": "0x0050017a",
+      "0x0414c": "0x00010a00"
+     }
+    },
+    "0x04900": {
+     "name": "ne",
+     "words": {
+      "0x04900": "0x10000082",
+      "0x04904": "0x00113c00",
+      "0x0490c": "0x0000b62e",
+      "0x04910": "0x00003c00"
+     }
+    },
+    "0x04d00": {
+     "name": "tile_dma_src",
+     "words": {
+      "0x04d00": "0x00000021",
+      "0x04d08": "0x000000ce",
+      "0x04d10": "0x00000000",
+      "0x04d14": "0x00000000",
+      "0x04d18": "0x00000080",
+      "0x04d1c": "0x00002000",
+      "0x04d68": "0x01002031"
+     }
+    },
+    "0x05100": {
+     "name": "tile_dma_dst",
+     "words": {
+      "0x05100": "0x01000021",
+      "0x05108": "0x00000000",
+      "0x0510c": "0x00000000",
+      "0x05110": "0x00000080",
+      "0x05138": "0x01302031"
+     }
+    },
+    "0x05500": {
+     "name": "kernel_dma_src",
+     "words": {
+      "0x05500": "0x000102c0",
+      "0x05510": "0x00000000",
+      "0x05514": "0x00000000",
+      "0x05520": "0x00000021"
+     }
+    },
+    "0x05900": {
+     "name": "cache_dma",
+     "words": {
+      "0x05900": "0x00000012",
+      "0x05904": "0x00a000a0",
+      "0x05918": "0x00000000",
+      "0x05928": "0x007f0000",
+      "0x0592c": "0x20010701"
+     }
+    }
+   },
+   "header_words": [
+    "0x00420000",
+    "0x00000002",
+    "0x04000068",
+    "0x00000000",
+    "0x00fff868",
+    "0x00000000",
+    "0x00000000",
+    "0x00000000",
+    "0x00050009"
+   ],
+   "records": [
+    {
+     "address": "0x05500",
+     "count": 2,
+     "header": "0x80401540"
+    },
+    {
+     "address": "0x00004",
+     "count": 2,
+     "header": "0x00008001"
+    },
+    {
+     "address": "0x00014",
+     "count": 7,
+     "header": "0x93418005"
+    },
+    {
+     "address": "0x04d08",
+     "count": 3,
+     "header": "0x800c1342"
+    },
+    {
+     "address": "0x04d68",
+     "count": 1,
+     "header": "0x0000135a"
+    },
+    {
+     "address": "0x04104",
+     "count": 2,
+     "header": "0x00009041"
+    },
+    {
+     "address": "0x04114",
+     "count": 6,
+     "header": "0x98039045"
+    },
+    {
+     "address": "0x04900",
+     "count": 4,
+     "header": "0x80069240"
+    },
+    {
+     "address": "0x05110",
+     "count": 2,
+     "header": "0x81001444"
+    },
+    {
+     "address": "0x05900",
+     "count": 5,
+     "header": "0x83109640"
+    },
+    {
+     "address": "0x05510",
+     "count": 2,
+     "header": "0x24009544"
+    },
+    {
+     "address": "0x04d10",
+     "count": 2,
+     "header": "0x23009344"
+    },
+    {
+     "address": "0x05108",
+     "count": 2,
+     "header": "0x23809442"
+    },
+    {
+     "address": "0x04d00",
+     "count": 1,
+     "header": "0x22001340"
+    },
+    {
+     "address": "0x05100",
+     "count": 1,
+     "header": "0x22001440"
+    }
+   ],
+   "size_bytes": 264
+  }
+ ],
+ "tensor_descriptors": [
+  {
+   "binding": 1,
+   "element_code": 5,
+   "shape": [
+    1,
+    16,
+    64,
+    64
+   ],
+   "strides": [
+    131072,
+    8192,
+    128,
+    2
+   ],
+   "total_bytes": 131072
+  },
+  {
+   "binding": 2,
+   "element_code": 5,
+   "shape": [
+    1,
+    1,
+    64,
+    64
+   ],
+   "strides": [
+    8192,
+    8192,
+    128,
+    2
+   ],
+   "total_bytes": 8192
+  }
+ ]
+}

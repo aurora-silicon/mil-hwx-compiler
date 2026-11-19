@@ -152,10 +152,9 @@ all of which the H16G rows got wrong on the J700:
   output of macOS 26.6.2 does too; macOS 27.0's H16 output sets them on the
   dense 3x3 only.)
 
-Packed records over the left-out chunk table follow Apple's form: from each
-record's first register, a dense record while registers are contiguous, else a
-scatter record covering 16 words. `tests/test_h16g_denoise_grid_parity.py`
-checks all six H17 layers against these facts. On the J700 (Linux, Aurora
+Packed records follow the general packing rule (below).
+`tests/test_h16g_denoise_grid_parity.py` checks all six H17 layers against
+these facts. On the J700 (Linux, Aurora
 kernel ANE driver) every layer matches a CPU fp16 reference (relL2 9e-5 to
 4e-4) and the six-layer DRAM chain runs a 960x540 frame (relL2 1e-3).
 
@@ -168,6 +167,31 @@ alone, also hung: it wrote the left-out chunks' coefficients enabled
 task whose used chunk is disabled hangs too, but neither program had one,
 so that does not explain them. An enabled chunk with no data is the closer
 fit; it has not been tested on its own.
+
+## Single-layer rules (2026-11-19 sweep)
+
+A sweep of our own single-layer MIL (1x1, dense 3x3 and depthwise 3x3; fp16,
+SAME, stride 1, bias and ReLU; 1 to 256 channels, 8 to 2048 pixels wide;
+4582 shapes over a fitting set and several held-out sets) compiled by the
+macOS 26.6.2 ANE compiler for h16 and h17 gives rules that hold on every
+task of both generations. The facts
+of 31 shapes per generation, picked to exercise every branch, are in
+`research/oracles/{h16,h17}/conv_sweep_*.json` and are checked by
+`tests/test_h16_h17_conv_sweep_parity.py`.
+
+Record packing. Apple's records for a task follow one rule; `pack()` uses it
+for every formula-built task. The registers the loader relocates (`0x4d00`,
+`0x4d10`/`0x4d14`, `0x5100`, `0x5108`/`0x510c`, `0x5510`/`0x5514`) go in
+relocation records at the end. The rest are split at the descriptor structure
+starts `0x4 0x4104 0x4900 0x4d08 0x4d68 0x5110 0x5500 0x5544 0x5900` and at
+1 KiB blocks; the pieces go out by block (kernel DMA `0x5400`, common `0x0`,
+source DMA `0x4c00`, L2 `0x4000`, NE `0x4800`, destination DMA `0x5000`, cache
+DMA `0x5800`), then by address. Each piece takes the fewest records (dense: up
+to 64 consecutive words; scatter: a base and any of the 16 words after it);
+among those, a dense run of two or more first, then a scatter record, then a
+lone register, then the longest first record. It reproduces every record of
+the existing conv, chain, MobileNet and transformer facts, so the earlier
+fixed ranges and per-family record forms are gone.
 
 ## Parity and report corrections
 

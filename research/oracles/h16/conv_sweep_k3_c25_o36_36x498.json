@@ -1,0 +1,493 @@
+{
+ "case": {
+  "bias": true,
+  "cin": 25,
+  "cout": 36,
+  "groups": 1,
+  "height": 498,
+  "kernel": 3,
+  "name": "k3_c25_o36_36x498",
+  "op": "k3",
+  "relu": true,
+  "set": "heldout3",
+  "source": "our MIL (2026-11-19 single-layer conv sweep, fp16 SAME stride 1, bias + ReLU) compiled by the macOS 26.6.2 ANE compiler, h16 target, on an M4 MacBook Air; decoded facts only",
+  "weights": "random.Random(name): Cout*Cin/groups*k*k then Cout values uniform(-0.5, 0.5) as fp16",
+  "width": 36
+ },
+ "hwx_bytes": 114688,
+ "kernel_section": {
+  "chunk_bytes": 2048,
+  "chunk_count": 32,
+  "chunks": [
+   {
+    "nonzero_bytes": 2047,
+    "offset": 0,
+    "sha256": "cbf1f95f7a5525e6c01b0b3673a54948ccf97aa4937b1141ae8cee3e5b226f97",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2016,
+    "offset": 2048,
+    "sha256": "67ec26bdb5fe4d96394a95e96fb2b79c5359d1efd30b1f3080de453b78fe0527",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 4096,
+    "sha256": "cbf1f95f7a5525e6c01b0b3673a54948ccf97aa4937b1141ae8cee3e5b226f97",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2016,
+    "offset": 6144,
+    "sha256": "67ec26bdb5fe4d96394a95e96fb2b79c5359d1efd30b1f3080de453b78fe0527",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 8192,
+    "sha256": "cbf1f95f7a5525e6c01b0b3673a54948ccf97aa4937b1141ae8cee3e5b226f97",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2016,
+    "offset": 10240,
+    "sha256": "67ec26bdb5fe4d96394a95e96fb2b79c5359d1efd30b1f3080de453b78fe0527",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 12288,
+    "sha256": "cbf1f95f7a5525e6c01b0b3673a54948ccf97aa4937b1141ae8cee3e5b226f97",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2016,
+    "offset": 14336,
+    "sha256": "67ec26bdb5fe4d96394a95e96fb2b79c5359d1efd30b1f3080de453b78fe0527",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2038,
+    "offset": 16384,
+    "sha256": "49b1a6ec9c48e332452e0070e199e01f8294ff32dcac78c079d1df2329754be3",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 18432,
+    "sha256": "1265ae10dbc2ae620623f4b5f81536793359db89d883411cbc9598ac51aab709",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2038,
+    "offset": 20480,
+    "sha256": "49b1a6ec9c48e332452e0070e199e01f8294ff32dcac78c079d1df2329754be3",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 22528,
+    "sha256": "1265ae10dbc2ae620623f4b5f81536793359db89d883411cbc9598ac51aab709",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2038,
+    "offset": 24576,
+    "sha256": "49b1a6ec9c48e332452e0070e199e01f8294ff32dcac78c079d1df2329754be3",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 26624,
+    "sha256": "1265ae10dbc2ae620623f4b5f81536793359db89d883411cbc9598ac51aab709",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2038,
+    "offset": 28672,
+    "sha256": "49b1a6ec9c48e332452e0070e199e01f8294ff32dcac78c079d1df2329754be3",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 30720,
+    "sha256": "1265ae10dbc2ae620623f4b5f81536793359db89d883411cbc9598ac51aab709",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 32768,
+    "sha256": "0e822affe9530d8f347cb6d1df4a0f4b444872030661f1e081d3be7e44500f0b",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2011,
+    "offset": 34816,
+    "sha256": "ddd68b47086f5e3acabdb0ddecc477f2f09b35b3d58a242cf0e992b963ae9f67",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 36864,
+    "sha256": "0e822affe9530d8f347cb6d1df4a0f4b444872030661f1e081d3be7e44500f0b",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2011,
+    "offset": 38912,
+    "sha256": "ddd68b47086f5e3acabdb0ddecc477f2f09b35b3d58a242cf0e992b963ae9f67",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 40960,
+    "sha256": "0e822affe9530d8f347cb6d1df4a0f4b444872030661f1e081d3be7e44500f0b",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2011,
+    "offset": 43008,
+    "sha256": "ddd68b47086f5e3acabdb0ddecc477f2f09b35b3d58a242cf0e992b963ae9f67",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 45056,
+    "sha256": "0e822affe9530d8f347cb6d1df4a0f4b444872030661f1e081d3be7e44500f0b",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2011,
+    "offset": 47104,
+    "sha256": "ddd68b47086f5e3acabdb0ddecc477f2f09b35b3d58a242cf0e992b963ae9f67",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 49152,
+    "sha256": "b09d3516a3fc79a8a009d438e87bbe39e3fe211a3a39121a3126528fe44c0860",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 51200,
+    "sha256": "fe7c3fbad686d80ed45e17173b673362a934b1da5f18297da27d1009c6df62bc",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 53248,
+    "sha256": "b09d3516a3fc79a8a009d438e87bbe39e3fe211a3a39121a3126528fe44c0860",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 55296,
+    "sha256": "fe7c3fbad686d80ed45e17173b673362a934b1da5f18297da27d1009c6df62bc",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 57344,
+    "sha256": "b09d3516a3fc79a8a009d438e87bbe39e3fe211a3a39121a3126528fe44c0860",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 59392,
+    "sha256": "fe7c3fbad686d80ed45e17173b673362a934b1da5f18297da27d1009c6df62bc",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 61440,
+    "sha256": "b09d3516a3fc79a8a009d438e87bbe39e3fe211a3a39121a3126528fe44c0860",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2018,
+    "offset": 63488,
+    "sha256": "fe7c3fbad686d80ed45e17173b673362a934b1da5f18297da27d1009c6df62bc",
+    "size": 2048
+   }
+  ],
+  "nonzero_bytes": 64964,
+  "nonzero_fp16_words": null,
+  "prefix_128_nonzero_bytes": 128,
+  "prefix_128_sha256": "d2446dd0d612fe0fc56599f1e8ea41558ec416f2cc041b3f8c35a14d5ac3df99",
+  "sha256": "9b15d3420fb44c8a3e480b78694de35ac19798196f0fed1ef25ad522a0bf08c8",
+  "size": 65536,
+  "tail_after_128_nonzero_bytes": 64836
+ },
+ "program_count": 1,
+ "task_descriptors": [
+  {
+   "blocks": {
+    "0x00000": {
+     "name": "common",
+     "words": {
+      "0x00004": "0x00000024",
+      "0x00008": "0x000001f2",
+      "0x0000c": "0x00000019",
+      "0x00014": "0x00000024",
+      "0x00018": "0x000001f2",
+      "0x0001c": "0x00000024",
+      "0x00028": "0x5042a0c3",
+      "0x00034": "0x000001f2",
+      "0x0003c": "0x00144400",
+      "0x00040": "0x00000024",
+      "0x0004c": "0x00100000"
+     }
+    },
+    "0x04100": {
+     "name": "l2",
+     "words": {
+      "0x04104": "0x00500172",
+      "0x04108": "0x00500130",
+      "0x04114": "0x00000040",
+      "0x04118": "0x00000640",
+      "0x0411c": "0x00000640",
+      "0x04120": "0x00000640",
+      "0x04148": "0x00500172",
+      "0x0414c": "0x000c2880",
+      "0x04150": "0x00000040",
+      "0x04154": "0x00000910",
+      "0x04158": "0x00000900",
+      "0x0415c": "0x00000900"
+     }
+    },
+    "0x04900": {
+     "name": "ne",
+     "words": {
+      "0x04904": "0x00113c10",
+      "0x04910": "0x00003c00"
+     }
+    },
+    "0x04d00": {
+     "name": "tile_dma_src",
+     "words": {
+      "0x04d00": "0x00000021",
+      "0x04d08": "0x000000ce",
+      "0x04d10": "0x00000000",
+      "0x04d14": "0x00000000",
+      "0x04d18": "0x00000080",
+      "0x04d1c": "0x0000f900",
+      "0x04d68": "0x01002031"
+     }
+    },
+    "0x05100": {
+     "name": "tile_dma_dst",
+     "words": {
+      "0x05100": "0x00000031",
+      "0x05108": "0x00000000",
+      "0x0510c": "0x00000000",
+      "0x05110": "0x00000080",
+      "0x05114": "0x0000f900",
+      "0x05138": "0x01302031"
+     }
+    },
+    "0x05500": {
+     "name": "kernel_dma_src",
+     "words": {
+      "0x05500": "0x000102c0",
+      "0x05510": "0x00000000",
+      "0x05514": "0x00000000",
+      "0x05520": "0x00000021",
+      "0x05524": "0x00000021",
+      "0x05528": "0x00000021",
+      "0x0552c": "0x00000021",
+      "0x05530": "0x00000021",
+      "0x05534": "0x00000021",
+      "0x05538": "0x00000021",
+      "0x0553c": "0x00000021",
+      "0x05540": "0x00000021",
+      "0x05544": "0x00000021",
+      "0x05548": "0x00000021",
+      "0x0554c": "0x00000021",
+      "0x05550": "0x00000021",
+      "0x05554": "0x00000021",
+      "0x05558": "0x00000021",
+      "0x0555c": "0x00000021",
+      "0x05564": "0x00001000",
+      "0x05568": "0x00002000",
+      "0x0556c": "0x00003000",
+      "0x05570": "0x00004000",
+      "0x05574": "0x00005000",
+      "0x05578": "0x00006000",
+      "0x0557c": "0x00007000",
+      "0x05580": "0x00008000",
+      "0x05584": "0x00009000",
+      "0x05588": "0x0000a000",
+      "0x0558c": "0x0000b000",
+      "0x05590": "0x0000c000",
+      "0x05594": "0x0000d000",
+      "0x05598": "0x0000e000",
+      "0x0559c": "0x0000f000",
+      "0x055a0": "0x00001000",
+      "0x055a4": "0x00001000",
+      "0x055a8": "0x00001000",
+      "0x055ac": "0x00001000",
+      "0x055b0": "0x00001000",
+      "0x055b4": "0x00001000",
+      "0x055b8": "0x00001000",
+      "0x055bc": "0x00001000",
+      "0x055c0": "0x00001000",
+      "0x055c4": "0x00001000",
+      "0x055c8": "0x00001000",
+      "0x055cc": "0x00001000",
+      "0x055d0": "0x00001000",
+      "0x055d4": "0x00001000",
+      "0x055d8": "0x00001000",
+      "0x055dc": "0x00001000"
+     }
+    },
+    "0x05900": {
+     "name": "cache_dma",
+     "words": {
+      "0x05900": "0x00000012",
+      "0x05904": "0x00a000a0",
+      "0x05918": "0x00000000",
+      "0x05928": "0x007f0000",
+      "0x0592c": "0x20010701"
+     }
+    }
+   },
+   "header_words": [
+    "0x00770000",
+    "0x0000004d",
+    "0x04000068",
+    "0x00000000",
+    "0x00fff868",
+    "0x00000000",
+    "0x00000000",
+    "0x00000000",
+    "0x00050009"
+   ],
+   "records": [
+    {
+     "address": "0x05500",
+     "count": 10,
+     "header": "0xffc01540"
+    },
+    {
+     "address": "0x05544",
+     "count": 7,
+     "header": "0x00031551"
+    },
+    {
+     "address": "0x05564",
+     "count": 31,
+     "header": "0x000f1559"
+    },
+    {
+     "address": "0x00004",
+     "count": 3,
+     "header": "0x00010001"
+    },
+    {
+     "address": "0x00014",
+     "count": 8,
+     "header": "0x93498005"
+    },
+    {
+     "address": "0x04d08",
+     "count": 3,
+     "header": "0x800c1342"
+    },
+    {
+     "address": "0x04d68",
+     "count": 1,
+     "header": "0x0000135a"
+    },
+    {
+     "address": "0x04104",
+     "count": 6,
+     "header": "0x803c9041"
+    },
+    {
+     "address": "0x04148",
+     "count": 6,
+     "header": "0x00029052"
+    },
+    {
+     "address": "0x04904",
+     "count": 2,
+     "header": "0x80021241"
+    },
+    {
+     "address": "0x05110",
+     "count": 3,
+     "header": "0x81009444"
+    },
+    {
+     "address": "0x05900",
+     "count": 5,
+     "header": "0x83109640"
+    },
+    {
+     "address": "0x05510",
+     "count": 2,
+     "header": "0x24009544"
+    },
+    {
+     "address": "0x04d10",
+     "count": 2,
+     "header": "0x23009344"
+    },
+    {
+     "address": "0x05108",
+     "count": 2,
+     "header": "0x23809442"
+    },
+    {
+     "address": "0x04d00",
+     "count": 1,
+     "header": "0x22001340"
+    },
+    {
+     "address": "0x05100",
+     "count": 1,
+     "header": "0x22001440"
+    }
+   ],
+   "size_bytes": 476
+  }
+ ],
+ "tensor_descriptors": [
+  {
+   "binding": 1,
+   "element_code": 5,
+   "shape": [
+    1,
+    25,
+    498,
+    36
+   ],
+   "strides": [
+    1593600,
+    63744,
+    128,
+    2
+   ],
+   "total_bytes": 1593600
+  },
+  {
+   "binding": 2,
+   "element_code": 5,
+   "shape": [
+    1,
+    36,
+    498,
+    36
+   ],
+   "strides": [
+    2294784,
+    63744,
+    128,
+    2
+   ],
+   "total_bytes": 2294784
+  }
+ ]
+}
