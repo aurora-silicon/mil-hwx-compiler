@@ -26,8 +26,6 @@ struct Task {
     std::uint32_t sourceSlotFlags = 0x23000000;
     std::uint32_t resultSlotFlags = 0x23800000;
     std::uint32_t kernelSlotFlags = 0x24000000;
-    bool transformerStagingRecords = false;
-    bool transformerContinuationRecords = false;
 };
 struct Description {
     std::vector<Task> tasks;
@@ -167,6 +165,12 @@ TransformerLinearProgram encodeWhisperStem2(
 /// Materialize Whisper's encoder-axis transpose
 /// [1,C,1500] -> [1,1500,C] for C in {384,512}.
 TransformerLinearProgram encodeWhisperTranspose(std::uint32_t channels);
+/// Pack registers into a task the way Apple's compiler does: the plain
+/// registers in the fewest dense/scatter records (split at the descriptor
+/// structure starts and 1 KiB blocks), then the relocation records. Header
+/// word 0 receives the task size. Used by every formula-built H16G/H17 task.
+Task packTask(const std::array<std::uint32_t,9> &header,
+              const std::map<std::uint32_t,std::uint32_t> &registers);
 // Empty only for one of the nine measured geometries. Bias, VALID, dilation
 // and general scheduling are deliberately outside this API's envelope.
 std::string convRefusal(ConvShape shape);

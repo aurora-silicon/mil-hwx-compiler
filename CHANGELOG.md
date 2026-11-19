@@ -4,6 +4,11 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G/H17: pack task records by the general rule decoded from the
+  single-layer conv sweep (split at structure starts and 1 KiB blocks, fewest
+  records, fixed tie-break) instead of fixed register ranges. Output is
+  byte-identical for every existing oracle; the new sweep parity test checks
+  the records of 31 H16 and 31 H17 sweep tasks.
 - H17: emit the 960x540 denoise grid as the J700 runs it. The dense 3x3
   32->32 layer takes its H17 schedule (TileHeight 405, 72-pixel tiles),
   grouped kernels write each output group once instead of repeating it over

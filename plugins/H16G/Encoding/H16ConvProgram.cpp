@@ -158,73 +158,66 @@ void range(Task &t, U32 lo, U32 hi, U32 flags = 0) {
     }
     record(t, addresses, flags);
 }
+// Apple's records for one piece of plain registers (sorted, no structure
+// start inside): the fewest records, dense (up to 64 consecutive words) or
+// scatter (a base and any of the 16 words after it); among those, a dense
+// run of two or more first, then a scatter record, then a lone register,
+// then the longest first record.
+std::vector<std::vector<U32>> packPiece(const std::vector<U32> &a) {
+    const std::size_t n = a.size();
+    struct Choice { std::size_t count = 0; unsigned priority = 0; std::size_t length = 0; };
+    std::vector<Choice> best(n+1);
+    for (std::size_t i = n; i-- > 0;) {
+        Choice pick{std::numeric_limits<std::size_t>::max(), 0, 0};
+        const auto consider = [&](std::size_t length, unsigned priority) {
+            const Choice c{best[i+length].count+1, priority, length};
+            if (c.count < pick.count || (c.count == pick.count &&
+                (c.priority < pick.priority || (c.priority == pick.priority && c.length > pick.length))))
+                pick = c;
+        };
+        for (std::size_t l = 1; i+l <= n && l <= 64 && (l == 1 || a[i+l-1] == a[i+l-2]+4); ++l)
+            consider(l, l >= 2 ? 0 : 2);
+        for (std::size_t m = 2; i+m <= n && a[i+m-1]-a[i] <= 64; ++m)
+            consider(m, 1);
+        best[i] = pick;
+    }
+    std::vector<std::vector<U32>> groups;
+    for (std::size_t i = 0; i < n; i += best[i].length)
+        groups.emplace_back(a.begin()+i, a.begin()+i+best[i].length);
+    return groups;
+}
+// Registers the loader patches go in relocation records, after the plain ones.
+bool relocated(U32 a) {
+    switch (a) {
+    case 0x4d00: case 0x4d10: case 0x4d14: case 0x5100: case 0x5108: case 0x510c:
+    case 0x5510: case 0x5514: return true;
+    default: return false;
+    }
+}
 void pack(Task &t) {
     t.bytes.clear();
     for (U32 h : t.header) word(t.bytes, h);
-    // A chunk table with chunks left out (H17 groups): their coefficient is
-    // absent, or written disabled (bit 0 clear) inside a chain.
-    const bool sparseChunks = t.registers.count(0x5520) &&
-        (!t.registers.count(0x5524) || !(t.registers.at(0x5524) & 1));
-    if (t.registers.count(0x5500)) {
-        if (t.registers.count(0x5520)) {
-            std::vector<U32> coefficients{0x5500};
-            for (U32 a=0x5520;a<=0x5540;a+=4)
-                if (t.registers.count(a)) coefficients.push_back(a);
-            record(t,coefficients);
-            if (!sparseChunks) range(t,0x5544,0x555c);
-        } else record(t,{0x5500});
+    // Plain registers: split at the descriptor structure starts and at 1 KiB
+    // blocks; pieces go out by block (kernel DMA, common, source DMA, L2, NE,
+    // destination DMA, cache DMA), then by address, each in the fewest
+    // records (packPiece). Decoded on the 2026-11-19 single-layer sweep
+    // (H15-H18, every task exact) and on Apple's conv chains.
+    static constexpr U32 starts[] = {0x4,0x4104,0x4900,0x4d08,0x4d68,0x5110,0x5500,0x5544,0x5900};
+    static constexpr U32 blockOrder[] = {0x15,0x0,0x13,0x10,0x12,0x14,0x16};
+    std::map<std::pair<unsigned,U32>, std::vector<U32>> pieces;
+    for (const auto &[a,v] : t.registers) {
+        (void)v;
+        if (relocated(a)) continue;
+        const U32 block = a/1024;
+        const auto rank = std::find(std::begin(blockOrder), std::end(blockOrder), block) - std::begin(blockOrder);
+        U32 piece = 0;
+        for (U32 b : starts) piece += a >= b;
+        pieces[{unsigned(rank), block << 8 | piece}].push_back(a);
     }
-    if (sparseChunks) {
-        // Apple's form: from each record's first register, a dense record
-        // while the next register follows it, else a scatter record taking
-        // every register up to 16 words past the first.
-        std::vector<U32> left;
-        for (const auto &[a,v] : t.registers) {
-            (void)v;
-            if (a >= 0x5544 && a <= 0x55dc) left.push_back(a);
-        }
-        for (std::size_t i = 0; i < left.size();) {
-            std::size_t j = i+1;
-            if (j < left.size() && left[j] == left[i]+4)
-                while (j < left.size() && left[j] == left[j-1]+4) ++j;
-            else
-                while (j < left.size() && left[j]-left[i] <= 64) ++j;
-            record(t,std::vector<U32>(left.begin()+i,left.begin()+j));
-            i = j;
-        }
-    } else {
-        // Reset chunk size 64 is omitted, including mixed sparse tables.
-        // Split across a default hole; contiguous offsets/sizes share a record.
-        std::vector<U32> chunk;
-        for (const auto &[a,v] : t.registers) {
-            (void)v;
-            if (a < 0x5564 || a > 0x55dc) continue;
-            if (!chunk.empty() && a != chunk.back()+4) {
-                record(t,chunk); chunk.clear();
-            }
-            chunk.push_back(a);
-        }
-        record(t,chunk);
+    for (const auto &[key,addresses] : pieces) {
+        (void)key;
+        for (const auto &g : packPiece(addresses)) record(t,g);
     }
-    range(t,0x0004,0x000c); range(t,0x0014,0x004c);
-    if (t.registers.count(0x4d08)) {
-        std::vector<U32> sourceGeometry;
-        for (U32 address : {0x4d08u,0x4d18u,0x4d1cu})
-            if (t.registers.count(address)) sourceGeometry.push_back(address);
-        record(t,sourceGeometry);
-    }
-    range(t,0x4d68,0x4d68);
-    if (t.transformerStagingRecords) {
-        range(t,0x4104,0x4108); range(t,0x4110,0x415c);
-    } else if (t.transformerContinuationRecords) {
-        range(t,0x4114,0x415c);
-    } else if (t.registers.at(0x4148) == 0x50017a) {
-        range(t,0x4104,0x4108); range(t,0x4114,0x414c);
-    } else {
-        range(t,0x4104,0x4120); range(t,0x4148,0x415c);
-    }
-    range(t,0x4900,0x4910); range(t,0x5110,0x5150);
-    range(t,0x5900,0x592c);
     range(t,0x5510,0x5514,t.kernelSlotFlags);
     range(t,0x4d10,0x4d14,t.sourceSlotFlags);
     range(t,0x5108,0x510c,t.resultSlotFlags);
@@ -455,7 +448,6 @@ std::vector<std::uint8_t> packLinearSlice(
 
 Task linearStagingTask(U32 tokens, U32 cin, bool wide) {
     Task t;
-    t.transformerStagingRecords=true;
     // A standalone object binds its first external surface at BAR 6.  Wide
     // contractions stage through the fixed scratch aperture at BAR 3.
     t.sourceSlotFlags=taskBar(6);
@@ -502,7 +494,6 @@ Task linearComputeTask(U32 tokens, U32 cin, U32 cout, U32 slice,
     t.kernelSlotFlags=taskBar(8);
     t.resultSlotFlags=taskBar(7);
     if (wide) t.sourceSlotFlags=taskBar(3);
-    if (!wide && taskIndex>1) t.transformerContinuationRecords=true;
     const bool last=taskIndex+1==taskCount;
     U32 dependency=0;
     if (!last && !wide) {
@@ -1199,6 +1190,11 @@ TransformerLinearProgram encodeWhisperTranspose(U32 channels) {
     return result;
 }
 
+Task packTask(const std::array<U32,9> &header, const std::map<U32,U32> &registers) {
+    Task t; t.header=header; t.registers=registers;
+    pack(t);
+    return t;
+}
 std::string convRefusal(ConvShape s) {
     if (s.kernel!=s.kernelWidth || (s.kernel!=1 && s.kernel!=3))
         return "only measured square 1x1/3x3 kernels are supported";
