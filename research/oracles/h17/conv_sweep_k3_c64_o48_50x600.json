@@ -1,0 +1,451 @@
+{
+ "case": {
+  "bias": true,
+  "cin": 64,
+  "cout": 48,
+  "groups": 1,
+  "height": 600,
+  "kernel": 3,
+  "name": "k3_c64_o48_50x600",
+  "op": "k3",
+  "relu": true,
+  "set": "margin-1",
+  "source": "our MIL (2026-11-19 single-layer conv sweep, fp16 SAME stride 1, bias + ReLU) compiled by the macOS 26.6.2 ANE compiler with TargetArchitecture h17 on an M4 MacBook Air; decoded facts only",
+  "weights": "random.Random(name): Cout*Cin/groups*k*k then Cout values uniform(-0.5, 0.5) as fp16",
+  "width": 50
+ },
+ "hwx_bytes": 114688,
+ "kernel_section": {
+  "chunk_bytes": 2048,
+  "chunk_count": 28,
+  "chunks": [
+   {
+    "nonzero_bytes": 2043,
+    "offset": 0,
+    "sha256": "b57ee41878fbb1c3dbb8da2fd2a126a93160d0d70a7e176e14c8817295f6e618",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 2048,
+    "sha256": "f39d6ee14033575878bffcd73625a1f3155b2750197ba703eda2cd124caeb4a6",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2041,
+    "offset": 4096,
+    "sha256": "bd838628606f9b47f15a9e85cc9a671393ef6a6bb820b4087c8d77cfc281df7c",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1989,
+    "offset": 6144,
+    "sha256": "63d6b3e03721820f55f1f33fcd37da1e2fef4ae48a7476bd7f788ccf62029a05",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2042,
+    "offset": 8192,
+    "sha256": "1d54d49730336b35673a31670bcaa40285135dbbd97d92324a9c0422fa42df5c",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2040,
+    "offset": 10240,
+    "sha256": "e97765207bb2eba5fea3de11f58b9bb6ae4943d42548813464968d639798716c",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1993,
+    "offset": 12288,
+    "sha256": "7c5024eafdcf580b4e6339f9a9aa283338bff9055c8827fdf217e3a5bae134a6",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2045,
+    "offset": 14336,
+    "sha256": "7aab95b52890b10f1b8a50cd44da8cfef1450de720ad103cf2149db17082aa80",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2044,
+    "offset": 16384,
+    "sha256": "99e63eabe1931860c6cf4a2c5bb4aba2d7730c63ba7447f3089de85c104d847a",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2048,
+    "offset": 18432,
+    "sha256": "8729b3ccbc5c89b4890ac57dbf757f0eb9cc5bc6c24b68cf612c5559003d7460",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1989,
+    "offset": 20480,
+    "sha256": "ca188aca73fe5e10b6932ebc17464d1988264858e0f09c1b04fa3baa84fde405",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2044,
+    "offset": 22528,
+    "sha256": "2db71df864daa5e806fc21aeb0a8e317905bc26690c869923334ae52c4adc1f6",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2045,
+    "offset": 24576,
+    "sha256": "04c7a26546505071bf85786bd813cb8d7df097304cff2809a528661fe2b18753",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1993,
+    "offset": 26624,
+    "sha256": "d270b015bbfd8705690ce8dd6376f6eee8e9f5e07bde5f923604fd30742c3933",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2043,
+    "offset": 28672,
+    "sha256": "fabd5663cc12561c26cc8ec8d677e62eb900c71c67aba8baf32085b0a35ef2b7",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2044,
+    "offset": 30720,
+    "sha256": "61692bc10323623d482595db04d9ccac4046b7cef11659015971a9f8982286a2",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2041,
+    "offset": 32768,
+    "sha256": "5338f78d71b8bb41b999746c0bd298e2d3c26ec26841af2629ca1b300da97c12",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1993,
+    "offset": 34816,
+    "sha256": "bf05019ba310700c09f5ccd12116254dda2ad724352b6bb4f5a03c37e638dd3b",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2043,
+    "offset": 36864,
+    "sha256": "205c10480e36b5a5a8209678de6f33ae1e63e80cec36d787e1103ba8dc46374f",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2046,
+    "offset": 38912,
+    "sha256": "f52bd5382b56735ed0ff37c9d78d80d4aa9ef1bf46511ae30667dd668806dcbe",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1994,
+    "offset": 40960,
+    "sha256": "9456ec5048fe833757e5dcea400c5a9ea3022db65052f57264c833abdd379fea",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2045,
+    "offset": 43008,
+    "sha256": "50d5a50aa58c6c3102fd0d593c8ac495f5336953d9051c27d99f9209b7104a5c",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2045,
+    "offset": 45056,
+    "sha256": "221ab8cf8bab00a512b3113e656ad14991cb4718f8ee5edf24b845a04c84e9c0",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 1994,
+    "offset": 47104,
+    "sha256": "8c55f37dd878ea5699c1b6d11adbc7923dbad0fde5cb496b78734b0e1c1215bc",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2043,
+    "offset": 49152,
+    "sha256": "e53f9be72af575c6b34cc67634764baf0613efb3c8620b694bfabe78cfa1d99f",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2042,
+    "offset": 51200,
+    "sha256": "1548d2ae130cc93724c6e12e0460303f95efb8bc8a78a1a303ce98eadb2921c9",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 2047,
+    "offset": 53248,
+    "sha256": "15da768c2bf75c83df2a3b105668b72513857ccdb39db683a92239292721f4c1",
+    "size": 2048
+   },
+   {
+    "nonzero_bytes": 459,
+    "offset": 55296,
+    "sha256": "5c639ff8ca798630873e02a4b92583e2cff7b2ae13094d1cb63b64de95545b7d",
+    "size": 512
+   }
+  ],
+  "nonzero_bytes": 55281,
+  "nonzero_fp16_words": null,
+  "prefix_128_nonzero_bytes": 128,
+  "prefix_128_sha256": "c90b898baa1be2eecb9ed1338c3bfaaa6398ba6111c2d802d9e42c9df2352f19",
+  "sha256": "d207d3c71212dec30a06fc552c15313af4e17b6aab0c7e224bee8b404663916b",
+  "size": 55808,
+  "tail_after_128_nonzero_bytes": 55153
+ },
+ "program_count": 1,
+ "task_descriptors": [
+  {
+   "blocks": {
+    "0x00000": {
+     "name": "common",
+     "words": {
+      "0x00004": "0x00000032",
+      "0x00008": "0x00000258",
+      "0x0000c": "0x00000040",
+      "0x00014": "0x00000032",
+      "0x00018": "0x00000258",
+      "0x0001c": "0x00000030",
+      "0x00028": "0x5042a0c3",
+      "0x00034": "0x000000dc",
+      "0x0003c": "0x081c4400",
+      "0x00040": "0x00000013",
+      "0x0004c": "0x00200000"
+     }
+    },
+    "0x04100": {
+     "name": "l2",
+     "words": {
+      "0x04104": "0x00500172",
+      "0x04108": "0x00500130",
+      "0x04114": "0x00000050",
+      "0x04118": "0x00001420",
+      "0x0411c": "0x00001400",
+      "0x04120": "0x00001400",
+      "0x04148": "0x00500172",
+      "0x0414c": "0x001173c0",
+      "0x04150": "0x00000040",
+      "0x04154": "0x00000c10",
+      "0x04158": "0x00000c00",
+      "0x0415c": "0x00000c00"
+     }
+    },
+    "0x04900": {
+     "name": "ne",
+     "words": {
+      "0x04900": "0x10000082",
+      "0x04904": "0x00113c10",
+      "0x04910": "0x00003c00"
+     }
+    },
+    "0x04d00": {
+     "name": "tile_dma_src",
+     "words": {
+      "0x04d00": "0x00000021",
+      "0x04d08": "0x000000ce",
+      "0x04d10": "0x00000000",
+      "0x04d14": "0x00000000",
+      "0x04d18": "0x00000080",
+      "0x04d1c": "0x00012c00",
+      "0x04d68": "0x01002031"
+     }
+    },
+    "0x05100": {
+     "name": "tile_dma_dst",
+     "words": {
+      "0x05100": "0x00000021",
+      "0x05108": "0x00000000",
+      "0x0510c": "0x00000000",
+      "0x05110": "0x00000080",
+      "0x05114": "0x00012c00",
+      "0x05138": "0x01302031"
+     }
+    },
+    "0x05500": {
+     "name": "kernel_dma_src",
+     "words": {
+      "0x05500": "0x000102c0",
+      "0x05510": "0x00000000",
+      "0x05514": "0x00000000",
+      "0x05520": "0x00000021",
+      "0x05528": "0x00000021",
+      "0x05530": "0x00000021",
+      "0x05538": "0x00000021",
+      "0x05540": "0x00000021",
+      "0x05548": "0x00000021",
+      "0x05550": "0x00000021",
+      "0x05558": "0x00000021",
+      "0x05568": "0x00001b40",
+      "0x05570": "0x00003680",
+      "0x05578": "0x000051c0",
+      "0x05580": "0x00006d00",
+      "0x05588": "0x00008840",
+      "0x05590": "0x0000a380",
+      "0x05598": "0x0000bec0",
+      "0x055a0": "0x00001b40",
+      "0x055a8": "0x00001b40",
+      "0x055b0": "0x00001b40",
+      "0x055b8": "0x00001b40",
+      "0x055c0": "0x00001b40",
+      "0x055c8": "0x00001b40",
+      "0x055d0": "0x00001b40",
+      "0x055d8": "0x00001b40"
+     }
+    },
+    "0x05900": {
+     "name": "cache_dma",
+     "words": {
+      "0x05900": "0x00000012",
+      "0x05904": "0x00a000a0",
+      "0x05918": "0x00000000",
+      "0x05928": "0x007f0000",
+      "0x0592c": "0x20010701"
+     }
+    }
+   },
+   "header_words": [
+    "0x00610000",
+    "0x000000a9",
+    "0x04000068",
+    "0x00000000",
+    "0x00fff868",
+    "0x00000000",
+    "0x00000000",
+    "0x00000000",
+    "0x00050009"
+   ],
+   "records": [
+    {
+     "address": "0x05500",
+     "count": 6,
+     "header": "0xd5401540"
+    },
+    {
+     "address": "0x05548",
+     "count": 8,
+     "header": "0xd5451552"
+    },
+    {
+     "address": "0x05590",
+     "count": 9,
+     "header": "0xd5551564"
+    },
+    {
+     "address": "0x055d8",
+     "count": 1,
+     "header": "0x00001576"
+    },
+    {
+     "address": "0x00004",
+     "count": 3,
+     "header": "0x00010001"
+    },
+    {
+     "address": "0x00014",
+     "count": 8,
+     "header": "0x93498005"
+    },
+    {
+     "address": "0x04d08",
+     "count": 3,
+     "header": "0x800c1342"
+    },
+    {
+     "address": "0x04d68",
+     "count": 1,
+     "header": "0x0000135a"
+    },
+    {
+     "address": "0x04104",
+     "count": 6,
+     "header": "0x803c9041"
+    },
+    {
+     "address": "0x04148",
+     "count": 6,
+     "header": "0x00029052"
+    },
+    {
+     "address": "0x04900",
+     "count": 3,
+     "header": "0x80049240"
+    },
+    {
+     "address": "0x05110",
+     "count": 3,
+     "header": "0x81009444"
+    },
+    {
+     "address": "0x05900",
+     "count": 5,
+     "header": "0x83109640"
+    },
+    {
+     "address": "0x05510",
+     "count": 2,
+     "header": "0x24009544"
+    },
+    {
+     "address": "0x04d10",
+     "count": 2,
+     "header": "0x23009344"
+    },
+    {
+     "address": "0x05108",
+     "count": 2,
+     "header": "0x23809442"
+    },
+    {
+     "address": "0x04d00",
+     "count": 1,
+     "header": "0x22001340"
+    },
+    {
+     "address": "0x05100",
+     "count": 1,
+     "header": "0x22001440"
+    }
+   ],
+   "size_bytes": 388
+  }
+ ],
+ "tensor_descriptors": [
+  {
+   "binding": 1,
+   "element_code": 5,
+   "shape": [
+    1,
+    64,
+    600,
+    50
+   ],
+   "strides": [
+    4915200,
+    76800,
+    128,
+    2
+   ],
+   "total_bytes": 4915200
+  },
+  {
+   "binding": 2,
+   "element_code": 5,
+   "shape": [
+    1,
+    48,
+    600,
+    50
+   ],
+   "strides": [
+    3686400,
+    76800,
+    128,
+    2
+   ],
+   "total_bytes": 3686400
+  }
+ ]
+}

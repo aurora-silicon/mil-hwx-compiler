@@ -80,9 +80,11 @@ measured row takes the plain row's schedule; the measured bias rows show the
 same Common value except 512->1024 @7.
 
 Only square batch-one SAME, unit dilation, dense or depthwise groups are
-covered. Bias sets NE `0x4904` bit `0x10` and adds one bias row per lane. ReLU sets NE MAC bit 16. Dense stride-1 chunks are
-`align64(2*Cin*k*k*Cout/16)`; depthwise substitutes one for Cin. Sixteen local
-chunk offsets follow the cumulative sizes. Reset-default size 64 is omitted.
+covered. Bias sets NE `0x4904` bit `0x10` and adds one bias row per lane. ReLU sets NE MAC bit 16. Stride-1
+chunks follow the kernel layout rule (below); at F = 4 with Cout a multiple of
+16 they are `align64(2*Cin*k*k*Cout/16)`, depthwise substituting one for Cin.
+Local chunk offsets follow the cumulative sizes. Reset-default size 64 is
+omitted.
 
 H17 applies the explicit generation delta: Common `0x4c=0x200000`, mandatory
 NE `0x4900=0x10000082` plus sparse bit `0x100`, destination low byte `0x21`,
@@ -101,30 +103,185 @@ executable chains use the DRAM edges described below.
 
 A 2x2 space-to-depth grid of a 1080p luma frame is 960x540. Five standalone
 biased layers at that size have measured rows: 1x1 4->32, depthwise 3x3 C32,
-1x1 32->32, dense 3x3 32->32 and 1x1 32->16. Wide surfaces add four named
-schedule facts:
+1x1 32->32, dense 3x3 32->32 and 1x1 32->16. The same network on the 720p
+(640x360) and VGA (320x240) grids has rows from the macOS 26.6.2 compiler
+(h16 and h17 choose the same tilings there; the 640x360 depthwise layer is the
+first L2-result row with a decoded result skew, `resultSkew` 0x20). Wide
+surfaces add these schedule facts:
 
-- Source tile width (`tileWidth`): the source row holds this many pixels
-  (128, 104, 256, 104 and 64 for the five rows) instead of the full width.
-  Source stride, plane and result base follow from it with the existing
-  formulas.
-- Outputs per kernel chunk (`chunkOutputs`): the 32-output dense layers put
-  4 outputs in each chunk and the 16-output layer 8, so each group of outputs
-  repeats over 16*G/Cout consecutive chunks. Inside a chunk the bias row comes
-  first, then one row per input channel and tap holding the group's outputs.
-  The 4->32 layer keeps Cout/16 = 2.
-- Result rows (`resultRows`): the depthwise row places its result base after
-  TileHeight+1 input rows (273), not TileHeight+k-1.
+- Source tile width: the source row holds 128, 104, 256, 104 and 64 pixels
+  for the five 960x540 rows instead of the full width. This was a per-row
+  field; it is now rule U1 (below) applied to the row's strip.
+- Outputs per kernel chunk: the 32-output dense layers put 4 outputs in each
+  chunk and the 16-output layer 8, so each group of outputs repeats over
+  16*G/Cout consecutive chunks. Inside a chunk the bias row comes first, then
+  one row per input channel and tap holding the group's outputs. The 4->32
+  layer keeps Cout/16 = 2. (This was a per-row field; it is now the general
+  kernel layout rule, below, applied to the rows' F and NE.)
+- Result rows: the depthwise row places its result base after TileHeight+1
+  input rows (273), not TileHeight+k-1: the most input rows any row tile
+  reads (two tiles), now computed for every stride-1 row.
 - Header window (`headerWindow`): only the dense 3x3 row sets the 0xfff800
   bits of header word 4.
 
 Output channel count 16 is the reset value of `0x1c` and is not written.
-`tests/test_h16g_denoise_grid_parity.py` checks every register, the header
-(except ExeCycles), the tensors and the kernel section hash of all six layers
-against `research/oracles/h16/denoise_grid_*.json`, decoded from the macOS
-compiler's output for the same MIL and weights. On a J616s with Linux, each
+`tests/test_h16g_denoise_grid_parity.py` checks every register, the records,
+the header (except ExeCycles), the tensors and the kernel section hash of all
+six layers of the three grids against
+`research/oracles/{h16,h17}/denoise_grid_[640x360_|320x240_]*.json`, decoded
+from the macOS compiler's output for the same MIL and weights, and that each
+grid network compiles as one linked chain. On a J616s with Linux, each
 layer matches a CPU fp16 reference (relL2 8e-5 to 2e-4) and the six-layer
 DRAM chain runs a 960x540 frame in 3.8 ms of firmware time (relL2 6e-4).
+
+### H17
+
+The same MIL and weights cross-compiled by the macOS 26.6.2 ANE compiler with
+`TargetArchitecture` h17 (`research/oracles/h17/denoise_grid_*.json`) differ
+from H16G in three ways, all of which the H16G rows got wrong on the J700:
+
+- The dense 3x3 32->32 layer has its own schedule: TileHeight 405, 72-pixel
+  source tiles, source skew 0x20, Common `0x3c` = 0x81b3300, result base after
+  406 rows. H17 sets Common bit 27 on every stride-1 dense 3x3 (sweep).
+- Grouped kernels keep the H16G group sizes (4 outputs per chunk for 32
+  outputs, 8 for 16), but each group is written once, in the first chunk of
+  its run; the repeated chunks are left out of the section and their
+  coefficient, offset and size registers are not written. Inside a linked
+  chain every task after the first writes the left-out coefficients as
+  disabled (`stage<<16 | 0x20`), as Apple's chained output does; this is
+  the form we emit. An earlier version of this page said coefficient
+  registers carry over from the previous task, so leaving them out hangs
+  the next EXECUTE. That is wrong. On the J700, registers a task does not
+  write reset per task (measured for the DMA strides, the PE scalar, the
+  chunk offset 0x5568 and the L2 base). An Apple-compiled two-task chain
+  gave Apple's output bit for bit, with no hang, when its second task's 12
+  disabled-chunk writes were dropped.
+- Header word 4 carries the 0xfff800 window bits on every layer. (The H16
+  output of macOS 26.6.2 does too; macOS 27.0's H16 output sets them on the
+  dense 3x3 only.)
+
+Packed records follow the general packing rule (below).
+`tests/test_h16g_denoise_grid_parity.py` checks all six H17 layers against
+these facts. On the J700 (Linux, Aurora
+kernel ANE driver) every layer matches a CPU fp16 reference (relL2 9e-5 to
+4e-4) and the six-layer DRAM chain runs a 960x540 frame (relL2 1e-3).
+
+What hung the J700 is not pinned down. The program built from the H16G
+rows enabled every chunk with its own kernel bytes and used the H16G dense
+3x3 schedule; its layers were not run alone, so the difference that hung
+it was not isolated. A chain built while fixing it, whose layers each ran
+alone, also hung: it wrote the left-out chunks' coefficients enabled
+(`stage<<16 | 0x21`), with no offset, size or kernel bytes behind them. A
+task whose used chunk is disabled hangs too, but neither program had one,
+so that does not explain them. An enabled chunk with no data is the closer
+fit; it has not been tested on its own.
+
+## Single-layer rules (2026-11-19 sweep)
+
+A sweep of our own single-layer MIL (1x1, dense 3x3 and depthwise 3x3; fp16,
+SAME, stride 1, bias and ReLU; 1 to 256 channels, 8 to 2048 pixels wide;
+4582 shapes over a fitting set and several held-out sets) compiled by the
+macOS 26.6.2 ANE compiler for h16 and h17 gives rules that hold on every
+task of both generations. The facts
+of 31 shapes per generation, picked to exercise every branch, are in
+`research/oracles/{h16,h17}/conv_sweep_*.json` and are checked by
+`tests/test_h16_h17_conv_sweep_parity.py`.
+
+Tile registers of a stride-1 task follow from the row's choices (Common
+`0x3c`: F, ShMax, ShMin, ShPref; NECfg `0x40`: WUStack, FatTile, OCGSize;
+TileHeight; the skews). With the strip T = (128 << FatTile) >> ShPref and
+R = W rounded up to 8:
+
+- U1, L2 source pixels per channel row (`0x4114` = 2 px): 1x1
+  min(R, max(T, 32)); 3x3 min(R, max(floor, min(T + 8 + R - 2T', T + 40))),
+  T' = max(T, 16), floor 32 for T <= 16 and T + 32 above. The row is never
+  shrunk for capacity (that reading of 15 sweep tasks was the T = 16 floor).
+- Result base `0x414c` = inRows(TileHeight) * `0x4118`, inRows = the most input
+  rows a row tile reads, the window clipped to the image (1x1: min(TH, H);
+  3x3: TH + 2 with three or more tiles, TH + 1 with two, H with one).
+- L2-result mode: `0x4150` = 2 min(R, max(T, 32)), `0x4154` = Cout * `0x4150`
+  + result skew, `0x4158` = `0x415c` = Cout * `0x4150`.
+- H17 sets Common bit 27 on every dense 3x3.
+
+The measured stride-1 rows give the same values as their former per-row
+constants.
+
+Explicit tilings (`describeTiled`). A stride-1 1x1 or 3x3 conv, dense or
+depthwise, can be built without a schedule row from Apple's free choices:
+`ConvTiling` holds F, the NE count, FatTile, OCGSize, ShPref, ShMax,
+TileHeight and the two skews (16-byte units). The rest follows:
+
+- Common `0x3c` = F<<19 | ShMax<<16 | ShPref<<12 | ShPref<<8 (ShMin = ShPref;
+  H17 dense 3x3 adds bit 27); NECfg `0x40` = WU<<4 | FatTile<<3 | OCGSize with
+  WU = log2 NE - F - FatTile (depthwise: OCGSize 0); header word 8 =
+  (log2 NE + 1)<<16 | 9.
+- Direct mode (results straight to DRAM, `0x4148` 0x50017a, `0x5100` bit 24)
+  when the narrowest work unit, (128 << FatTile) >> ShMax pixels on H17 and
+  128 >> ShMax on H16, holds 32 pixels or the whole row; else L2-result mode.
+- Reset values are not written: W and H 256 (`0x4`, `0x8`, `0x14`, `0x18`),
+  channel counts 16 (`0xc`, `0x1c`), TileHeight 255, Common 0, NECfg 3, chunk
+  offset 0 and chunk size 64.
+- The DRAM plane strides `0x4d1c` / `0x5114` are written only when that side
+  has more than one channel.
+- A single output (Cout = 1) clears the NE bias bit (`0x4904` bit 4) and puts
+  its bias in `0x490c`.
+
+`tiledConvRefusal` refuses inconsistent tilings (NE not a power of two,
+F + FatTile > log2 NE, ShPref > ShMax, strips under 8 pixels), tilings past
+the device limits below, and tilings that overflow the 2 MiB L2 (source rows
+of a tile plus the result staging; direct mode stages 512 bytes per output of
+the 2^(F+OCG) group outputs). The device limits:
+
+- WU <= 3. WU is a 2-bit field (`0x40` bits 4-5); WU 4 (16 NEs at F 0 without
+  FatTile) reads as 0 with a stray bit 6. Apple uses FatTile there instead.
+- OCGSize <= 4, at most 16 output channels per NE. The field holds 7, but
+  Apple never writes more than 4 (390,266 sweep tasks); this is an observed
+  limit, not an encoding one.
+
+On the H17 (J700), a tiling past either limit hung the engine (EXECUTE
+failed, quarantine): pw 211->1 at 36x79 with WU 4, and pw 7->17 at 209x178
+with OCGSize 5. Apple's tilings for both layers ran correctly. Apple's
+choice of tiling (its cost model) is not modelled: the caller supplies it.
+The sweep parity test builds all 62 sweep tasks this way; outside the
+repository the same builder reproduced every H16 and H17 task of the sweep
+sets (9144 tasks, registers and header words).
+
+Record packing. Apple's records for a task follow one rule; `pack()` uses it
+for every formula-built task. The registers the loader relocates (`0x4d00`,
+`0x4d10`/`0x4d14`, `0x5100`, `0x5108`/`0x510c`, `0x5510`/`0x5514`) go in
+relocation records at the end. The rest are split at the descriptor structure
+starts `0x4 0x4104 0x4900 0x4d08 0x4d68 0x5110 0x5500 0x5544 0x5900` and at
+1 KiB blocks; the pieces go out by block (kernel DMA `0x5400`, common `0x0`,
+source DMA `0x4c00`, L2 `0x4000`, NE `0x4800`, destination DMA `0x5000`, cache
+DMA `0x5800`), then by address. Each piece takes the fewest records (dense: up
+to 64 consecutive words; scatter: a base and any of the 16 words after it);
+among those, a dense run of two or more first, then a scatter record, then a
+lone register, then the longest first record. It reproduces every record of
+the existing conv, chain, MobileNet and transformer facts, so the earlier
+fixed ranges and per-family record forms are gone.
+
+Kernel layout (`kernelSlots`, `packKernel`). With F = log2(output groups)
+(Common `0x3c` bits 19-21), the active NE count (header word 8 bits 16-18 =
+log2 NE + 1) and OCG = OCGSize (NECfg `0x40` bits 0-2):
+
+- The outputs are split over the 2^F groups as evenly as possible (the first
+  Cout mod 2^F groups one larger), dealt in rounds of 2^OCG outputs per group.
+- The rep = NE >> F NEs that share a group each own a chunk slot: group g owns
+  slots g*rep .. g*rep+rep-1. H16 writes the group's chunk into all of them,
+  H17 only into the first. A group without outputs (Cout < 2^F) uses no slot;
+  an unused slot has no coefficient, offset or size register.
+- A chunk is the group's blocks in round order, each the bias row (when there
+  is a bias and Cout > 1) then one row per input channel and tap, a row
+  holding the block's outputs; padded to 64 bytes. A single output keeps its
+  bias in NE register `0x490c` instead.
+- Depthwise at F = 4 (C >= 9) deals channel c to slot c mod 16, each channel
+  its bias then its taps. Depthwise with few channels (Apple uses F < 4 for
+  C <= 8) is the dense layout with one input channel per group. A
+  one-channel depthwise layer is an ordinary dense conv.
+
+The measured schedule rows go through the same rule (their F, NE and OCG
+come from the rows' Common and NECfg values); every existing kernel hash is
+unchanged.
 
 ## Parity and report corrections
 

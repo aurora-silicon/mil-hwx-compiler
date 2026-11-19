@@ -15,6 +15,8 @@ struct Layer {
     // Kernel bytes per lane when they depend on the weights (sparse
     // stride-2 sections); all zero derives them from the shape.
     std::array<std::uint32_t,16> kernelChunks{};
+    // fp16 bits of the bias of a single-output layer (NE register 0x490c).
+    std::uint16_t singleOutputBias = 0;
 };
 struct Task {
     std::array<std::uint32_t, 9> header{};
@@ -26,8 +28,6 @@ struct Task {
     std::uint32_t sourceSlotFlags = 0x23000000;
     std::uint32_t resultSlotFlags = 0x23800000;
     std::uint32_t kernelSlotFlags = 0x24000000;
-    bool transformerStagingRecords = false;
-    bool transformerContinuationRecords = false;
 };
 struct Description {
     std::vector<Task> tasks;
@@ -167,6 +167,44 @@ TransformerLinearProgram encodeWhisperStem2(
 /// Materialize Whisper's encoder-axis transpose
 /// [1,C,1500] -> [1,1500,C] for C in {384,512}.
 TransformerLinearProgram encodeWhisperTranspose(std::uint32_t channels);
+/// The tiling fields a stride-1 conv's kernel layout depends on: F =
+/// log2(output groups) (Common 0x3c bits 19-21), the active NE count and
+/// OCGSize (NECfg 0x40 bits 0-2).
+struct KernelTiling {
+    std::uint32_t outputGroupsLog2 = 4, activeNEs = 16, ocg = 0;
+};
+/// Kernel layout of a stride-1 dense or depthwise conv, decoded on the
+/// 2026-11-19 single-layer sweep (docs/ane/h16-h17-conv.md): the bytes of
+/// each of the 16 chunk slots (0: the slot is unused) and the section.
+std::array<std::uint32_t,16> kernelChunkBytes(Generation generation, ConvShape shape,
+                                              KernelTiling tiling);
+std::vector<std::uint8_t> packKernel(Generation generation, ConvShape shape, KernelTiling tiling,
+                                     const std::uint8_t *weights, std::size_t weightBytes,
+                                     const std::uint8_t *bias, std::size_t biasBytes);
+/// Apple's free tiling choices for a stride-1 single-layer conv: F =
+/// log2(output groups), the active NE count, FatTile, OCGSize (0 for
+/// depthwise), ShPref (= ShMin) and ShMax, TileHeight, and the source and
+/// result skews in 16-byte units. Every other register follows from these
+/// and the shape (docs/ane/h16-h17-conv.md, "Single-layer rules").
+struct ConvTiling {
+    std::uint32_t outputGroupsLog2 = 4, activeNEs = 16;
+    bool fatTile = false;
+    std::uint32_t ocg = 0, shPref = 0, shMax = 0, tileHeight = 0;
+    std::uint32_t sourceSkew = 0, resultSkew = 0;
+};
+/// Empty when describeTiled can build the layer: a stride-1 SAME 1x1 or
+/// 3x3, dense or depthwise, with a consistent tiling that fits the 2 MiB L2,
+/// WU <= 3 and OCGSize <= 4 (the H17 engine hung past either).
+std::string tiledConvRefusal(ConvShape shape, const ConvTiling &tiling);
+/// One standalone task for a stride-1 conv with an explicit tiling (no
+/// schedule row needed). The kernel section is packKernel's.
+Description describeTiled(Generation generation, const Layer &layer, const ConvTiling &tiling);
+/// Pack registers into a task the way Apple's compiler does: the plain
+/// registers in the fewest dense/scatter records (split at the descriptor
+/// structure starts and 1 KiB blocks), then the relocation records. Header
+/// word 0 receives the task size. Used by every formula-built H16G/H17 task.
+Task packTask(const std::array<std::uint32_t,9> &header,
+              const std::map<std::uint32_t,std::uint32_t> &registers);
 // Empty only for one of the nine measured geometries. Bias, VALID, dilation
 // and general scheduling are deliberately outside this API's envelope.
 std::string convRefusal(ConvShape shape);

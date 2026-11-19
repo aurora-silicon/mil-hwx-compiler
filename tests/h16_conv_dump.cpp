@@ -7,6 +7,61 @@
 
 int main(int argc, char **argv) {
     try {
+        if (argc==2 && std::string(argv[1])=="records") {
+            // Nine header words, then "address value" pairs on stdin (hex);
+            // the packed task bytes on stdout.
+            std::array<std::uint32_t,9> header{};
+            for (auto &h:header) std::cin>>std::hex>>h;
+            std::map<std::uint32_t,std::uint32_t> registers;
+            std::uint32_t a,v;
+            while (std::cin>>std::hex>>a>>v) registers[a]=v;
+            const auto t=ane::h16::packTask(header,registers);
+            std::cout.write(reinterpret_cast<const char *>(t.bytes.data()),t.bytes.size());
+            return 0;
+        }
+        if (argc==11 && (std::string(argv[1])=="kernel" || std::string(argv[1])=="kernel-chunks")) {
+            // target cin cout kernel groups bias F NE OCG, stride-1 weights
+            // (then bias) on stdin: the chunk slot sizes or the section.
+            const auto number=[&](int i) {return static_cast<std::uint32_t>(std::stoul(argv[i]));};
+            const auto gen=std::string(argv[2])=="H17" ? ane::h16::Generation::H17 : ane::h16::Generation::H16G;
+            const auto ci=number(3),co=number(4),k=number(5),g=number(6);
+            const bool bias=number(7)!=0;
+            const ane::h16::ConvShape s{k,k,1,g,bias,{ci,64,64},{co,64,64}};
+            const ane::h16::KernelTiling t{number(8),number(9),number(10)};
+            if (std::string(argv[1])=="kernel-chunks") {
+                for (auto n:ane::h16::kernelChunkBytes(gen,s,t)) std::cout<<n<<'\n';
+                return 0;
+            }
+            const std::size_t size=std::size_t(co)*ci/g*k*k*2;
+            std::vector<std::uint8_t> w(size+(bias ? std::size_t(co)*2 : 0));
+            std::cin.read(reinterpret_cast<char *>(w.data()),w.size());
+            if (std::size_t(std::cin.gcount())!=w.size()) throw std::invalid_argument("short weights on stdin");
+            const auto bytes=ane::h16::packKernel(gen,s,t,w.data(),size,bias ? w.data()+size : nullptr,
+                                                  bias ? std::size_t(co)*2 : 0);
+            std::cout.write(reinterpret_cast<const char *>(bytes.data()),bytes.size());
+            return 0;
+        }
+        if (argc==19 && std::string(argv[1])=="tiled") {
+            // target cin cout width height kernel groups flags (bit 0 ReLU,
+            // bit 1 bias) F NE fat OCG ShPref ShMax TileHeight srcSkew
+            // resSkew; weights (then bias) on stdin. The task stream.
+            const auto number=[&](int i) {return static_cast<std::uint32_t>(std::stoul(argv[i]));};
+            const auto gen=std::string(argv[2])=="H17" ? ane::h16::Generation::H17 : ane::h16::Generation::H16G;
+            const auto ci=number(3),co=number(4),w=number(5),h=number(6),k=number(7),g=number(8),f=number(9);
+            ane::h16::Layer l{{k,k,1,g,(f&2)!=0,{ci,h,w},{co,h,w}},(f&1)!=0};
+            const ane::h16::ConvTiling t{number(10),number(11),number(12)!=0,number(13),number(14),
+                                         number(15),number(16),number(17),number(18)};
+            if (l.shape.bias && co==1) {
+                const std::size_t size=std::size_t(ci)/g*k*k*2;
+                std::vector<std::uint8_t> w(size+2);
+                std::cin.read(reinterpret_cast<char *>(w.data()),w.size());
+                if (std::size_t(std::cin.gcount())!=w.size()) throw std::invalid_argument("short weights on stdin");
+                l.singleOutputBias=std::uint16_t(w[size] | w[size+1]<<8);
+            }
+            const auto d=ane::h16::describeTiled(gen,l,t);
+            std::cout.write(reinterpret_cast<const char *>(d.stream.data()),d.stream.size());
+            return 0;
+        }
         if (argc<10 || (argc-3)%7) throw std::invalid_argument("mode target then cin cout width kernel stride groups relu per layer");
         const std::string mode=argv[1],target=argv[2];
         if (target!="H16G" && target!="H17") throw std::invalid_argument("target");

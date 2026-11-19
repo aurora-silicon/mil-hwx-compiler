@@ -4,6 +4,45 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G/H17: build a stride-1 single-layer conv from an explicit tiling
+  (`ConvTiling`, `describeTiled`) with the remaining single-layer rules:
+  reset values left out (W/H 256, channels 16, TileHeight 255, Common 0),
+  NE count in header word 8, plane strides only for more than one channel,
+  a single output's bias in register 0x490c, one-channel depthwise as a
+  dense conv; inconsistent or over-capacity tilings are refused, as are
+  WU > 3 and OCGSize > 4 (Apple never emits them; both hung the H17 engine).
+  The sweep parity test checks whole tasks (registers, records, header) for
+  31 H16 and 31 H17 sweep shapes; existing output is unchanged.
+- H16G/H17: compile camera-denoise's low-light network on the 720p
+  (640x360) and VGA (320x240) grids. New schedule rows from the macOS
+  26.6.2 compiler (h16 and h17 make the same choices); the stride-1 L2
+  source width (rule U1, never capacity-shrunk), result base and L2 result
+  row are now formulas of the row's tiling, replacing the `tileWidth` and
+  `resultRows` fields; H17 sets Common bit 27 on every stride-1 dense 3x3.
+  The denoise grid parity test checks all six layers of the three grids on
+  both targets (registers, records, header, tensors, kernel hash) and the
+  linked chains; 960x540 output is unchanged.
+- H16G/H17: lay out stride-1 conv kernels by the general rule decoded from
+  the single-layer sweep: outputs split evenly over 2^F groups in rounds of
+  2^OCG, NE >> F chunk slots per group (H16 copies, H17 the first only),
+  empty groups left out, no bias row for a single output, few-channel
+  depthwise as dense with one input channel per group. Replaces the
+  `chunkOutputs` schedule field and the grouped packer; existing kernel
+  hashes are unchanged, and the sweep test checks 62 chunk tables and kernel
+  sections.
+- H16G/H17: pack task records by the general rule decoded from the
+  single-layer conv sweep (split at structure starts and 1 KiB blocks, fewest
+  records, fixed tie-break) instead of fixed register ranges. Output is
+  byte-identical for every existing oracle; the new sweep parity test checks
+  the records of 31 H16 and 31 H17 sweep tasks.
+- H17: emit the 960x540 denoise grid as the J700 runs it. The dense 3x3
+  32->32 layer takes its H17 schedule (TileHeight 405, 72-pixel tiles),
+  grouped kernels write each output group once instead of repeating it over
+  16 chunks, chained tasks disable the chunks they leave out, and standalone
+  headers always carry the window bits. Decoded facts from the macOS 26.6.2
+  compiler (h17) are checked by the denoise grid parity test; on the J700
+  each layer and the six-layer chain match a CPU fp16 reference. H16G
+  output is unchanged.
 - H16G: open the three-program fused-attention-chain qualification gate after
   task t-6549 passed H=6 and H=8 on J616s at relative L2 7.50e-4 and
   7.49e-4 with zero DART faults. The QK, softmax, and PV program bytes are
