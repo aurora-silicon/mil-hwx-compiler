@@ -32,10 +32,6 @@ struct Schedule {
     // Source tile width in pixels for wide surfaces; 0 keeps the measured
     // square rule (the full width, 1x1 kernels capped at 64).
     U32 tileWidth = 0;
-    // Outputs per kernel chunk; 0 means Cout/16. A narrow layer spreads
-    // groups of this many outputs over the 16 chunks, each group repeated
-    // across 16*chunkOutputs/Cout consecutive chunks.
-    U32 chunkOutputs = 0;
     // Input rows ahead of the result base; 0 keeps TileHeight*stride+k-1.
     U32 resultRows = 0;
     // Standalone header word 4 carries the 0xfff800 window bits (always on
@@ -79,18 +75,18 @@ constexpr Schedule schedules[] = {
     // Denoise CNN on the 2x2 space-to-depth grid of a 1080p luma frame
     // (960x540), standalone biased layers, from our own models compiled on
     // the M4 Pro (traces/ane/20261111-denoise-h16g-macos/grid).
-    {4,32,960,1,1,1,true,540,0,0x210000,true,1,540,128,0,0,false},
-    {32,32,960,3,1,32,true,272,0,0x211100,true,0,540,104,0,273,false},
-    {32,32,960,1,1,1,true,4,0x50,0x1a0000,true,10,540,256,4,0,false},
-    {32,32,960,3,1,1,true,256,0,0x1a2200,true,10,540,104,4,0},
-    {32,16,960,1,1,1,true,16,0x50,0xa2200,true,43,540,64,8,0,false},
+    {4,32,960,1,1,1,true,540,0,0x210000,true,1,540,128,0,false},
+    {32,32,960,3,1,32,true,272,0,0x211100,true,0,540,104,273,false},
+    {32,32,960,1,1,1,true,4,0x50,0x1a0000,true,10,540,256,0,false},
+    {32,32,960,3,1,1,true,256,0,0x1a2200,true,10,540,104,0},
+    {32,16,960,1,1,1,true,16,0x50,0xa2200,true,43,540,64,0,false},
 };
 // H17 rows that differ from the shared table, decoded from the macOS 26.6.2
 // ANE compiler, h17 target (the same MIL and weights give the H16G rows above
 // on h16). H17 schedules the dense 3x3 on 72-pixel source tiles, 405 rows at a
-// time. Its chunkOutputs groups are not repeated (see chunks()).
+// time.
 constexpr Schedule h17Schedules[] = {
-    {32,32,960,3,1,1,true,405,0x20,0x81b3300,true,10,540,72,4,406},
+    {32,32,960,3,1,1,true,405,0x20,0x81b3300,true,10,540,72,406},
 };
 const Schedule *schedule(ConvShape s, Generation gen) {
     const Schedule *plain = nullptr;
@@ -228,25 +224,72 @@ void pack(Task &t) {
     t.header[0] = U32(t.bytes.size()/4)<<16 | (t.header[0]&0xffff);
     store(t.bytes,0,t.header[0]);
 }
-// Kernel bytes per output lane. Dense sections (every stride-1 form, and
-// the dense stride-2 form an executable package uses) follow the packers:
-// depthwise lanes hold Cout/16 channels of taps (+1 bias row), regular
-// lanes hold Cout/16 columns of Cin*taps rows (+1 bias row), padded to 64.
-// The sparse stride-2 vectors reproduce Apple's zero-skipping sections for
-// the campaign's BLOBFILE view only (descriptor parity, never packaging).
+// Depthwise means one input channel per group, more than one channel: a
+// single-channel "depthwise" layer is an ordinary dense conv.
+bool depthwise(ConvShape s) {
+    return s.groups == s.input.channels && s.input.channels > 1;
+}
+// The kernel-layout fields of a measured schedule row: F from Common 0x3c,
+// the NE count from F, FatTile and WUStack (NE = 2^(F+Fat+WU)), OCGSize from
+// NECfg 0x40.
+KernelTiling scheduleKernelTiling(ConvShape s, const Schedule &p) {
+    U32 necfg = 0;
+    if (p.ocg >= 0) necfg = U32(p.ocg);
+    else if (!depthwise(s)) for (U32 n = s.output.channels/16; n > 1; n >>= 1) ++necfg;
+    const U32 F = p.common >> 19 & 7;
+    return {F, 1u << (F + (necfg >> 3 & 1) + (necfg >> 4 & 3)), necfg & 7};
+}
+// Output blocks (first output, count) per chunk slot; see kernelChunkBytes.
+struct KernelSlots {
+    std::array<std::vector<std::pair<U32,U32>>,16> blocks;
+    U32 inputRows = 0, taps = 0;
+    bool biasRow = false;
+};
+KernelSlots kernelSlots(Generation gen, ConvShape s, KernelTiling t) {
+    const bool dw = depthwise(s);
+    const U32 cout = s.output.channels, F = t.outputGroupsLog2;
+    if (s.stride != 1 || (s.groups != 1 && !dw) || (dw && cout != s.input.channels))
+        throw std::invalid_argument("the kernel layout rule covers stride-1 dense and depthwise convs");
+    if (F > 4 || t.activeNEs > 16 || t.activeNEs < (1u << F) || (t.activeNEs & (t.activeNEs-1)) || t.ocg > 7)
+        throw std::invalid_argument("kernel tiling needs F <= 4, 2^F <= NE <= 16 (NE a power of two), OCG <= 7");
+    KernelSlots k;
+    k.inputRows = dw ? 1 : s.input.channels;
+    k.taps = s.kernel*s.kernelWidth;
+    k.biasRow = s.bias && cout > 1;
+    if (dw && F == 4) {
+        // One channel per block, dealt round-robin over the 16 slots.
+        for (U32 c = 0; c < cout; ++c) k.blocks[c % 16].push_back({c, 1});
+        return k;
+    }
+    const U32 groups = 1u << F, block = 1u << t.ocg, round = groups*block;
+    std::vector<std::vector<std::pair<U32,U32>>> owned(groups);
+    const U32 full = cout/round, rest = cout%round;
+    for (U32 r = 0; r < full; ++r)
+        for (U32 g = 0; g < groups; ++g) owned[g].push_back({r*round + g*block, block});
+    for (U32 g = 0, at = full*round; g < groups; ++g) {
+        const U32 n = rest/groups + (g < rest%groups);
+        if (n) owned[g].push_back({at, n});
+        at += n;
+    }
+    const U32 rep = t.activeNEs >> F;
+    for (U32 g = 0; g < groups; ++g)
+        for (U32 j = 0; j < (gen == Generation::H17 ? 1 : rep); ++j)
+            k.blocks[g*rep + j] = owned[g];
+    return k;
+}
+// Kernel bytes per chunk slot. Stride-1 sections follow the general layout
+// (kernelSlots). Dense stride-2 lanes (the form an executable package uses)
+// hold Cout/16 columns of Cin*taps rows (+1 bias row), padded to 64. The
+// sparse stride-2 vectors reproduce Apple's zero-skipping sections for the
+// campaign's BLOBFILE view only (descriptor parity, never packaging).
 std::array<U32,16> chunks(Generation gen, ConvShape s, bool sparse) {
     std::array<U32,16> out{};
     const bool dw = s.groups == s.input.channels;
     const U32 taps = s.kernel*s.kernelWidth;
     const U32 rows = (dw ? 1 : s.input.channels)*taps + (s.bias ? 1 : 0);
     const Schedule *p = schedule(s, gen);
-    if (s.stride == 1 && p && p->chunkOutputs) {
-        // H16G repeats each group over 16*chunkOutputs/Cout consecutive
-        // chunks; H17 puts it in the first of them only and leaves the rest
-        // out (size 0: no coefficient, offset or size register).
-        const U32 repeat = 16*p->chunkOutputs/s.output.channels;
-        for (unsigned i = 0; i < 16; ++i)
-            out[i] = gen != Generation::H17 || i % repeat == 0 ? align64(2*rows*p->chunkOutputs) : 0;
+    if (s.stride == 1 && p) {
+        return kernelChunkBytes(gen, s, scheduleKernelTiling(s, *p));
     } else if (s.stride == 1 || !sparse) {
         out.fill(align64(2*rows*(s.output.channels/16)));
     } else if (dw && s.input.channels == 64) out.fill(128);
@@ -2095,34 +2138,35 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
     out.kernelBytes=kernelBase;
     return out;
 }
-// Kernel section for a layer whose schedule names chunkOutputs: chunk i holds
-// the outputs of group i*groups/16 (groups = Cout/chunkOutputs). In a chunk
-// the bias row comes first, then one row per input channel and tap (depthwise:
-// per tap), each row holding the group's outputs in order; chunks are padded
-// to 64 bytes. H17 leaves out the chunks that would repeat a group.
-std::vector<std::uint8_t> packGroupedConv(Generation gen, ConvShape s, const std::uint8_t *weights,
-                                          std::size_t size, const std::uint8_t *bias,
-                                          std::size_t biasBytes, U32 group) {
-    const bool dw = s.groups == s.input.channels;
-    const U32 cin = dw ? 1 : s.input.channels, taps = s.kernel*s.kernelWidth;
+std::array<U32,16> kernelChunkBytes(Generation gen, ConvShape s, KernelTiling t) {
+    const auto k = kernelSlots(gen, s, t);
+    std::array<U32,16> out{};
+    for (unsigned i = 0; i < 16; ++i) {
+        U32 outputs = 0;
+        for (const auto &[first, n] : k.blocks[i]) { (void)first; outputs += n; }
+        out[i] = align64(2*outputs*(k.inputRows*k.taps + k.biasRow));
+    }
+    return out;
+}
+std::vector<std::uint8_t> packKernel(Generation gen, ConvShape s, KernelTiling t,
+                                     const std::uint8_t *weights, std::size_t size,
+                                     const std::uint8_t *bias, std::size_t biasBytes) {
+    const auto k = kernelSlots(gen, s, t);
     const U32 cout = s.output.channels;
-    if (!weights || size != std::size_t(cout)*cin*taps*2 || s.bias != (bias != nullptr) ||
-        (bias && biasBytes != std::size_t(cout)*2) || !group || cout % group ||
-        (16*group) % cout)
-        throw std::invalid_argument("grouped conv kernel needs Cout*Cin/groups*k*k fp16 weights");
-    const U32 groups = cout/group, rows = cin*taps + (s.bias ? 1 : 0);
-    const U32 chunk = align64(2*rows*group);
-    const U32 repeat = gen == Generation::H17 ? 16/groups : 1;
-    std::vector<std::uint8_t> out(16/repeat*std::size_t(chunk), 0);
-    for (U32 i = 0; i < 16; i += repeat) {
-        const U32 first = i*groups/16*group;
-        std::size_t at = std::size_t(i/repeat)*chunk;
-        const auto put = [&](const std::uint8_t *h) { out[at] = h[0]; out[at+1] = h[1]; at += 2; };
-        if (s.bias) for (U32 o = 0; o < group; ++o) put(bias + 2*(first+o));
-        for (U32 c = 0; c < cin; ++c)
-            for (U32 t = 0; t < taps; ++t)
-                for (U32 o = 0; o < group; ++o)
-                    put(weights + 2*((std::size_t(first+o)*cin + c)*taps + t));
+    if (!weights || size != std::size_t(cout)*k.inputRows*k.taps*2 || s.bias != (bias != nullptr) ||
+        (bias && biasBytes != std::size_t(cout)*2))
+        throw std::invalid_argument("conv kernel needs Cout*Cin/groups*k*k fp16 weights (and Cout bias halfwords)");
+    std::vector<std::uint8_t> out;
+    const auto put = [&](const std::uint8_t *h) { out.push_back(h[0]); out.push_back(h[1]); };
+    for (const auto &blocks : k.blocks) {
+        for (const auto &[first, n] : blocks) {
+            if (k.biasRow) for (U32 o = 0; o < n; ++o) put(bias + 2*(first+o));
+            for (U32 c = 0; c < k.inputRows; ++c)
+                for (U32 tap = 0; tap < k.taps; ++tap)
+                    for (U32 o = 0; o < n; ++o)
+                        put(weights + 2*((std::size_t(first+o)*k.inputRows + c)*k.taps + tap));
+        }
+        out.resize(align64(U32(out.size())), 0);
     }
     return out;
 }
@@ -2137,8 +2181,8 @@ h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights
             (bias && biasBytes!=std::size_t(s.output.channels)*2))
             throw std::invalid_argument("stride-2 conv needs Cout*Cin/groups*9 fp16 weights (and Cout bias halfwords)");
         constants=packSparseStride2(s,weights,bias,layer.kernelChunks);
-    } else if (const Schedule *p=schedule(s, gen); p && p->chunkOutputs) {
-        constants=packGroupedConv(gen,s,weights,size,bias,biasBytes,p->chunkOutputs);
+    } else if (const Schedule *p=schedule(s, gen)) {
+        constants=packKernel(gen,s,scheduleKernelTiling(s,*p),weights,size,bias,biasBytes);
     } else {
         constants=h13::packConvWeights(s,weights,size,bias,biasBytes);
     }

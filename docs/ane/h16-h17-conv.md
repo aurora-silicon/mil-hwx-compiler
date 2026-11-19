@@ -80,9 +80,11 @@ measured row takes the plain row's schedule; the measured bias rows show the
 same Common value except 512->1024 @7.
 
 Only square batch-one SAME, unit dilation, dense or depthwise groups are
-covered. Bias sets NE `0x4904` bit `0x10` and adds one bias row per lane. ReLU sets NE MAC bit 16. Dense stride-1 chunks are
-`align64(2*Cin*k*k*Cout/16)`; depthwise substitutes one for Cin. Sixteen local
-chunk offsets follow the cumulative sizes. Reset-default size 64 is omitted.
+covered. Bias sets NE `0x4904` bit `0x10` and adds one bias row per lane. ReLU sets NE MAC bit 16. Stride-1
+chunks follow the kernel layout rule (below); at F = 4 with Cout a multiple of
+16 they are `align64(2*Cin*k*k*Cout/16)`, depthwise substituting one for Cin.
+Local chunk offsets follow the cumulative sizes. Reset-default size 64 is
+omitted.
 
 H17 applies the explicit generation delta: Common `0x4c=0x200000`, mandatory
 NE `0x4900=0x10000082` plus sparse bit `0x100`, destination low byte `0x21`,
@@ -108,11 +110,12 @@ schedule facts:
   (128, 104, 256, 104 and 64 for the five rows) instead of the full width.
   Source stride, plane and result base follow from it with the existing
   formulas.
-- Outputs per kernel chunk (`chunkOutputs`): the 32-output dense layers put
-  4 outputs in each chunk and the 16-output layer 8, so each group of outputs
-  repeats over 16*G/Cout consecutive chunks. Inside a chunk the bias row comes
-  first, then one row per input channel and tap holding the group's outputs.
-  The 4->32 layer keeps Cout/16 = 2.
+- Outputs per kernel chunk: the 32-output dense layers put 4 outputs in each
+  chunk and the 16-output layer 8, so each group of outputs repeats over
+  16*G/Cout consecutive chunks. Inside a chunk the bias row comes first, then
+  one row per input channel and tap holding the group's outputs. The 4->32
+  layer keeps Cout/16 = 2. (This was a per-row field; it is now the general
+  kernel layout rule, below, applied to the rows' F and NE.)
 - Result rows (`resultRows`): the depthwise row places its result base after
   TileHeight+1 input rows (273), not TileHeight+k-1.
 - Header window (`headerWindow`): only the dense 3x3 row sets the 0xfff800
@@ -192,6 +195,29 @@ among those, a dense run of two or more first, then a scatter record, then a
 lone register, then the longest first record. It reproduces every record of
 the existing conv, chain, MobileNet and transformer facts, so the earlier
 fixed ranges and per-family record forms are gone.
+
+Kernel layout (`kernelSlots`, `packKernel`). With F = log2(output groups)
+(Common `0x3c` bits 19-21), the active NE count (header word 8 bits 16-18 =
+log2 NE + 1) and OCG = OCGSize (NECfg `0x40` bits 0-2):
+
+- The outputs are split over the 2^F groups as evenly as possible (the first
+  Cout mod 2^F groups one larger), dealt in rounds of 2^OCG outputs per group.
+- The rep = NE >> F NEs that share a group each own a chunk slot: group g owns
+  slots g*rep .. g*rep+rep-1. H16 writes the group's chunk into all of them,
+  H17 only into the first. A group without outputs (Cout < 2^F) uses no slot;
+  an unused slot has no coefficient, offset or size register.
+- A chunk is the group's blocks in round order, each the bias row (when there
+  is a bias and Cout > 1) then one row per input channel and tap, a row
+  holding the block's outputs; padded to 64 bytes. A single output keeps its
+  bias in NE register `0x490c` instead.
+- Depthwise at F = 4 (C >= 9) deals channel c to slot c mod 16, each channel
+  its bias then its taps. Depthwise with few channels (Apple uses F < 4 for
+  C <= 8) is the dense layout with one input channel per group. A
+  one-channel depthwise layer is an ordinary dense conv.
+
+The measured schedule rows go through the same rule (their F, NE and OCG
+come from the rows' Common and NECfg values); every existing kernel hash is
+unchanged.
 
 ## Parity and report corrections
 

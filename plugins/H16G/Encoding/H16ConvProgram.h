@@ -165,6 +165,20 @@ TransformerLinearProgram encodeWhisperStem2(
 /// Materialize Whisper's encoder-axis transpose
 /// [1,C,1500] -> [1,1500,C] for C in {384,512}.
 TransformerLinearProgram encodeWhisperTranspose(std::uint32_t channels);
+/// The tiling fields a stride-1 conv's kernel layout depends on: F =
+/// log2(output groups) (Common 0x3c bits 19-21), the active NE count and
+/// OCGSize (NECfg 0x40 bits 0-2).
+struct KernelTiling {
+    std::uint32_t outputGroupsLog2 = 4, activeNEs = 16, ocg = 0;
+};
+/// Kernel layout of a stride-1 dense or depthwise conv, decoded on the
+/// 2026-11-19 single-layer sweep (docs/ane/h16-h17-conv.md): the bytes of
+/// each of the 16 chunk slots (0: the slot is unused) and the section.
+std::array<std::uint32_t,16> kernelChunkBytes(Generation generation, ConvShape shape,
+                                              KernelTiling tiling);
+std::vector<std::uint8_t> packKernel(Generation generation, ConvShape shape, KernelTiling tiling,
+                                     const std::uint8_t *weights, std::size_t weightBytes,
+                                     const std::uint8_t *bias, std::size_t biasBytes);
 /// Pack registers into a task the way Apple's compiler does: the plain
 /// registers in the fewest dense/scatter records (split at the descriptor
 /// structure starts and 1 KiB blocks), then the relocation records. Header
