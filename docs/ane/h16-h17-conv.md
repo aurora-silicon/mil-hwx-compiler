@@ -103,29 +103,34 @@ executable chains use the DRAM edges described below.
 
 A 2x2 space-to-depth grid of a 1080p luma frame is 960x540. Five standalone
 biased layers at that size have measured rows: 1x1 4->32, depthwise 3x3 C32,
-1x1 32->32, dense 3x3 32->32 and 1x1 32->16. Wide surfaces add four named
-schedule facts:
+1x1 32->32, dense 3x3 32->32 and 1x1 32->16. The same network on the 720p
+(640x360) and VGA (320x240) grids has rows from the macOS 26.6.2 compiler
+(h16 and h17 choose the same tilings there; the 640x360 depthwise layer is the
+first L2-result row with a decoded result skew, `resultSkew` 0x20). Wide
+surfaces add these schedule facts:
 
-- Source tile width (`tileWidth`): the source row holds this many pixels
-  (128, 104, 256, 104 and 64 for the five rows) instead of the full width.
-  Source stride, plane and result base follow from it with the existing
-  formulas.
+- Source tile width: the source row holds 128, 104, 256, 104 and 64 pixels
+  for the five 960x540 rows instead of the full width. This was a per-row
+  field; it is now rule U1 (below) applied to the row's strip.
 - Outputs per kernel chunk: the 32-output dense layers put 4 outputs in each
   chunk and the 16-output layer 8, so each group of outputs repeats over
   16*G/Cout consecutive chunks. Inside a chunk the bias row comes first, then
   one row per input channel and tap holding the group's outputs. The 4->32
   layer keeps Cout/16 = 2. (This was a per-row field; it is now the general
   kernel layout rule, below, applied to the rows' F and NE.)
-- Result rows (`resultRows`): the depthwise row places its result base after
-  TileHeight+1 input rows (273), not TileHeight+k-1.
+- Result rows: the depthwise row places its result base after TileHeight+1
+  input rows (273), not TileHeight+k-1: the most input rows any row tile
+  reads (two tiles), now computed for every stride-1 row.
 - Header window (`headerWindow`): only the dense 3x3 row sets the 0xfff800
   bits of header word 4.
 
 Output channel count 16 is the reset value of `0x1c` and is not written.
-`tests/test_h16g_denoise_grid_parity.py` checks every register, the header
-(except ExeCycles), the tensors and the kernel section hash of all six layers
-against `research/oracles/h16/denoise_grid_*.json`, decoded from the macOS
-compiler's output for the same MIL and weights. On a J616s with Linux, each
+`tests/test_h16g_denoise_grid_parity.py` checks every register, the records,
+the header (except ExeCycles), the tensors and the kernel section hash of all
+six layers of the three grids against
+`research/oracles/{h16,h17}/denoise_grid_[640x360_|320x240_]*.json`, decoded
+from the macOS compiler's output for the same MIL and weights, and that each
+grid network compiles as one linked chain. On a J616s with Linux, each
 layer matches a CPU fp16 reference (relL2 8e-5 to 2e-4) and the six-layer
 DRAM chain runs a 960x540 frame in 3.8 ms of firmware time (relL2 6e-4).
 
@@ -136,8 +141,8 @@ The same MIL and weights compiled by the macOS 26.6.2 ANE compiler, h17 target
 all of which the H16G rows got wrong on the J700:
 
 - The dense 3x3 32->32 layer has its own schedule: TileHeight 405, 72-pixel
-  source tiles, source skew 0x20, Common `0x3c` = 0x81b3300 (bit 27 set, as
-  on the measured dense 3x3 64->64), result base after 406 rows.
+  source tiles, source skew 0x20, Common `0x3c` = 0x81b3300, result base after
+  406 rows. H17 sets Common bit 27 on every stride-1 dense 3x3 (sweep).
 - Grouped kernels keep the H16G group sizes (4 outputs per chunk for 32
   outputs, 8 for 16), but each group is written once, in the first chunk of
   its run; the repeated chunks are left out of the section and their
@@ -181,6 +186,25 @@ task of both generations. The facts
 of 31 shapes per generation, picked to exercise every branch, are in
 `research/oracles/{h16,h17}/conv_sweep_*.json` and are checked by
 `tests/test_h16_h17_conv_sweep_parity.py`.
+
+Tile registers of a stride-1 task follow from the row's choices (Common
+`0x3c`: F, ShMax, ShMin, ShPref; NECfg `0x40`: WUStack, FatTile, OCGSize;
+TileHeight; the skews). With the strip T = (128 << FatTile) >> ShPref and
+R = W rounded up to 8:
+
+- U1, L2 source pixels per channel row (`0x4114` = 2 px): 1x1
+  min(R, max(T, 32)); 3x3 min(R, max(floor, min(T + 8 + R - 2T', T + 40))),
+  T' = max(T, 16), floor 32 for T <= 16 and T + 32 above. The row is never
+  shrunk for capacity (that reading of 15 sweep tasks was the T = 16 floor).
+- Result base `0x414c` = inRows(TileHeight) * `0x4118`, inRows = the most input
+  rows a row tile reads, the window clipped to the image (1x1: min(TH, H);
+  3x3: TH + 2 with three or more tiles, TH + 1 with two, H with one).
+- L2-result mode: `0x4150` = 2 min(R, max(T, 32)), `0x4154` = Cout * `0x4150`
+  + result skew, `0x4158` = `0x415c` = Cout * `0x4150`.
+- H17 sets Common bit 27 on every dense 3x3.
+
+The measured stride-1 rows give the same values as their former per-row
+constants.
 
 Record packing. Apple's records for a task follow one rule; `pack()` uses it
 for every formula-built task. The registers the loader relocates (`0x4d00`,

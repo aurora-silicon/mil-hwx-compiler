@@ -4,6 +4,15 @@ One entry per day the compiler changes. Newest first. Releases are tagged on Git
 
 ## Unreleased
 
+- H16G/H17: compile camera-denoise's low-light network on the 720p
+  (640x360) and VGA (320x240) grids. New schedule rows from the macOS
+  26.6.2 compiler (h16 and h17 make the same choices); the stride-1 L2
+  source width (rule U1, never capacity-shrunk), result base and L2 result
+  row are now formulas of the row's tiling, replacing the `tileWidth` and
+  `resultRows` fields; H17 sets Common bit 27 on every stride-1 dense 3x3.
+  The denoise grid parity test checks all six layers of the three grids on
+  both targets (registers, records, header, tensors, kernel hash) and the
+  linked chains; 960x540 output is unchanged.
 - H16G/H17: lay out stride-1 conv kernels by the general rule decoded from
   the single-layer sweep: outputs split evenly over 2^F groups in rounds of
   2^OCG, NE >> F chunk slots per group (H16 copies, H17 the first only),

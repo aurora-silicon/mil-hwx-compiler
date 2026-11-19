@@ -29,14 +29,12 @@ struct Schedule {
     int ocg;
     // Input height of a non-square surface; 0 means height == width.
     U32 height = 0;
-    // Source tile width in pixels for wide surfaces; 0 keeps the measured
-    // square rule (the full width, 1x1 kernels capped at 64).
-    U32 tileWidth = 0;
-    // Input rows ahead of the result base; 0 keeps TileHeight*stride+k-1.
-    U32 resultRows = 0;
     // Standalone header word 4 carries the 0xfff800 window bits (always on
     // H17: macOS 26.6.2 sets them on every H17 denoise grid layer).
     bool headerWindow = true;
+    // L2 result skew in bytes (L2-result mode); -1 keeps the measured
+    // MobileNet form 4*(align64(2W)-2W).
+    int resultSkew = -1;
 };
 // Scheduler outputs, not extrapolated shape formulas. See h16-h17-conv.md.
 // Rows below the first block come from the round-2 corpus
@@ -75,18 +73,31 @@ constexpr Schedule schedules[] = {
     // Denoise CNN on the 2x2 space-to-depth grid of a 1080p luma frame
     // (960x540), standalone biased layers, from our own models compiled on
     // the M4 Pro (traces/ane/20261111-denoise-h16g-macos/grid).
-    {4,32,960,1,1,1,true,540,0,0x210000,true,1,540,128,0,false},
-    {32,32,960,3,1,32,true,272,0,0x211100,true,0,540,104,273,false},
-    {32,32,960,1,1,1,true,4,0x50,0x1a0000,true,10,540,256,0,false},
-    {32,32,960,3,1,1,true,256,0,0x1a2200,true,10,540,104,0},
-    {32,16,960,1,1,1,true,16,0x50,0xa2200,true,43,540,64,0,false},
+    {4,32,960,1,1,1,true,540,0,0x210000,true,1,540,false},
+    {32,32,960,3,1,32,true,272,0,0x211100,true,0,540,false},
+    {32,32,960,1,1,1,true,4,0x50,0x1a0000,true,10,540,false},
+    {32,32,960,3,1,1,true,256,0,0x1a2200,true,10,540},
+    {32,16,960,1,1,1,true,16,0x50,0xa2200,true,43,540,false},
+    // The same network on the 720p (640x360) and VGA (320x240) grids, from
+    // the macOS 26.6.2 compiler (h16 and h17 choose the same tilings; H17
+    // adds Common bit 27 on the dense 3x3, see task()).
+    {4,32,640,1,1,1,true,360,0,0x200000,true,1,360},
+    {32,32,640,3,1,32,true,360,0x20,0x233300,false,0,360,true,0x20},
+    {32,32,640,1,1,1,true,4,0,0x110000,true,0x1b,360},
+    {32,32,640,3,1,1,true,360,0,0x222200,true,1,360},
+    {32,16,640,1,1,1,true,8,0,0x90000,true,0x2b,360},
+    {4,32,320,1,1,1,true,240,0,0x210000,true,1,240},
+    {32,32,320,3,1,32,true,240,0,0x211100,true,0,240},
+    {32,32,320,1,1,1,true,4,0x50,0x1a0000,true,0xa,240},
+    {32,32,320,3,1,1,true,240,0,0x211100,true,1,240},
+    {32,16,320,1,1,1,true,8,0x50,0x120000,true,0x1a,240},
 };
 // H17 rows that differ from the shared table, decoded from the macOS 26.6.2
 // ANE compiler, h17 target (the same MIL and weights give the H16G rows above
 // on h16). H17 schedules the dense 3x3 on 72-pixel source tiles, 405 rows at a
 // time.
 constexpr Schedule h17Schedules[] = {
-    {32,32,960,3,1,1,true,405,0x20,0x81b3300,true,10,540,72,406},
+    {32,32,960,3,1,1,true,405,0x20,0x81b3300,true,10,540},
 };
 const Schedule *schedule(ConvShape s, Generation gen) {
     const Schedule *plain = nullptr;
@@ -304,6 +315,30 @@ std::array<U32,16> chunks(Generation gen, ConvShape s, bool sparse) {
     }
     return out;
 }
+// U1: L2 source pixels per channel row of a stride-1 conv with output strip
+// T = (128 << FatTile) >> ShPref (2026-11-19 sweep, all of H15-H18). R = W
+// rounded up to 8, T' = max(T, 16). 1x1: min(R, max(T, 32)). 3x3: the strip,
+// an 8 px block for the left halo and a lookahead, never more than the row:
+// min(R, max(floor, min(T + 8 + R - 2T', T + 40))), floor = 32 for T <= 16,
+// T + 32 above. Never shrunk for capacity.
+U32 sourcePixels(U32 kernel, U32 width, U32 strip) {
+    const U32 R=(width+7)&~7u;
+    if (kernel==1) return std::min(R,std::max(strip,32u));
+    const U32 Tq=std::max(strip,16u), floor=strip<=16 ? 32 : strip+32;
+    const U32 look=strip+8+R>=2*Tq ? strip+8+R-2*Tq : 0;
+    return std::min(R,std::max(floor,std::min(look,strip+40)));
+}
+// Most input rows a row tile of TileHeight output rows reads, the window
+// clipped to the image (stride 1).
+U32 inputRows(U32 kernel, U32 tileHeight, U32 height) {
+    const U32 pad=(kernel-1)/2;
+    U32 most=0;
+    for (U32 y=0; y<height; y+=tileHeight) {
+        const U32 lo=y>pad ? y-pad : 0, hi=std::min(height,std::min(height,y+tileHeight)+pad);
+        most=std::max(most,hi-lo);
+    }
+    return most;
+}
 Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned count,
           U32 srcBase, U32 resultBase, U32 kernelBase, U32 residentRow,
           U32 residentStride) {
@@ -337,16 +372,19 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     // Measured generation delta (r2): standalone depthwise C256 28->14.
     if (!h17 && dw && s.stride==2 && s.input.channels==256) r[0x3c]=0x233300;
     if (linked && !first && !last) r[0x3c] |= 0x1100;
-    if (h17 && s.kernel==3 && s.groups==1 && s.input.channels==64)
+    // H17 sets Common bit 27 on every stride-1 dense 3x3 (2026-11-19 sweep).
+    if (h17 && s.kernel==3 && !dw && s.stride==1)
         r[0x3c] |= 1u<<27;
     U32 ocg=0;
     if (p.ocg >= 0) ocg=U32(p.ocg);
     else if (!dw) for (U32 n=s.output.channels/16; n>1; n>>=1) ++ocg;
     if (ocg != 3) r[0x40]=ocg;
     r[0x4c]=h17 ? 0x200000 : 0x100000;
-    // The L2 source row is the row's bytes rounded up to 16 (7 -> 16,
-    // 14 -> 32, 28 -> 64); 1x1 kernels cap the row at 64 pixels.
-    const U32 srcPixels=p.tileWidth ? p.tileWidth
+    // Stride 1: L2 source pixels per channel row by rule U1 (sourcePixels).
+    // Stride 2 keeps the measured square rule: the row's bytes rounded up to
+    // 16, 1x1 kernels capped at 64 pixels.
+    const U32 strip=(128u<<(ocg>>3&1))>>(p.common>>8&7);
+    const U32 srcPixels=s.stride==1 ? sourcePixels(s.kernel,s.input.width,strip)
                                     : (s.kernel==1 ? std::min(s.input.width,64u) : s.input.width);
     const U32 srcRow=first ? ((2*srcPixels+15)&~15u) : residentRow;
     const U32 srcStride=first ? s.input.channels*srcRow+p.sourceSkew : residentStride;
@@ -357,14 +395,17 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     if (first) r[0x411c]=r[0x4120]=s.input.channels*srcRow;
     r[0x4148]=!linked ? (p.direct ? 0x50017a : 0x500172)
                                     : (last ? 0x142 : (first ? 0x500170 : 0x140));
-    if (!linked) resultBase=std::min(s.input.height,
-        p.resultRows ? p.resultRows : p.tileHeight*s.stride+s.kernel-1)*srcStride;
+    if (!linked) resultBase=(s.stride==1 ? inputRows(s.kernel,p.tileHeight,s.input.height)
+                             : std::min(s.input.height,p.tileHeight*s.stride+s.kernel-1))*srcStride;
     if (resultBase) r[0x414c]=resultBase;
     if (!p.direct || linked) {
         const U32 row=linked ? 2*s.output.width : 2*std::min(s.output.width,64u);
-        // The stem and depthwise use the full internal width.
-        const U32 dstRow=s.kernel==3 ? 2*s.output.width : row;
-        U32 skew=4*(align64(2*s.output.width)-2*s.output.width);
+        // The stem and depthwise use the full internal width. A stride-1
+        // standalone result row holds the strip, at least 32 pixels (U3).
+        const U32 dstRow=!linked && s.stride==1
+            ? 2*std::min((s.output.width+7)&~7u,std::max(strip,32u))
+            : (s.kernel==3 ? 2*s.output.width : row);
+        U32 skew=p.resultSkew>=0 ? U32(p.resultSkew) : 4*(align64(2*s.output.width)-2*s.output.width);
         if (linked && !last && dw) skew=0x80;
         if (linked && first && count==3) skew=0x20;
         r[0x4150]=dstRow; r[0x4154]=s.output.channels*dstRow+skew;
