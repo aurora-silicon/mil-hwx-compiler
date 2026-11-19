@@ -38,7 +38,8 @@ struct Schedule {
     U32 chunkOutputs = 0;
     // Input rows ahead of the result base; 0 keeps TileHeight*stride+k-1.
     U32 resultRows = 0;
-    // Standalone header word 4 carries the 0xfff800 window bits.
+    // Standalone header word 4 carries the 0xfff800 window bits (always on
+    // H17: macOS 26.6.2 sets them on every H17 denoise grid layer).
     bool headerWindow = true;
 };
 // Scheduler outputs, not extrapolated shape formulas. See h16-h17-conv.md.
@@ -84,8 +85,23 @@ constexpr Schedule schedules[] = {
     {32,32,960,3,1,1,true,256,0,0x1a2200,true,10,540,104,4,0},
     {32,16,960,1,1,1,true,16,0x50,0xa2200,true,43,540,64,8,0,false},
 };
-const Schedule *schedule(ConvShape s) {
+// H17 rows that differ from the shared table, decoded from the macOS 26.6.2
+// compiler cross-compiling the denoise grid layers with TargetArchitecture
+// h17 (the same MIL and weights give the H16G rows above on h16). H17
+// schedules the dense 3x3 on 72-pixel source tiles, 405 rows at a time. Its
+// chunkOutputs groups are not repeated (see chunks()).
+constexpr Schedule h17Schedules[] = {
+    {32,32,960,3,1,1,true,405,0x20,0x81b3300,true,10,540,72,4,406},
+};
+const Schedule *schedule(ConvShape s, Generation gen) {
     const Schedule *plain = nullptr;
+    if (gen == Generation::H17)
+        for (const auto &p : h17Schedules)
+            if (s.input.channels == p.cin && s.output.channels == p.cout &&
+                s.input.width == p.width && s.input.height == (p.height ? p.height : p.width) &&
+                s.kernel == p.kernel && s.stride == p.stride && s.groups == p.groups &&
+                s.bias == p.bias)
+                return &p;
     for (const auto &p : schedules)
         if (s.input.channels == p.cin && s.output.channels == p.cout &&
             s.input.width == p.width && s.input.height == (p.height ? p.height : p.width) &&
@@ -145,25 +161,51 @@ void range(Task &t, U32 lo, U32 hi, U32 flags = 0) {
 void pack(Task &t) {
     t.bytes.clear();
     for (U32 h : t.header) word(t.bytes, h);
+    // A chunk table with chunks left out (H17 groups): their coefficient is
+    // absent, or written disabled (bit 0 clear) inside a chain.
+    const bool sparseChunks = t.registers.count(0x5520) &&
+        (!t.registers.count(0x5524) || !(t.registers.at(0x5524) & 1));
     if (t.registers.count(0x5500)) {
         if (t.registers.count(0x5520)) {
             std::vector<U32> coefficients{0x5500};
-            for (U32 a=0x5520;a<=0x5540;a+=4) coefficients.push_back(a);
-            record(t,coefficients); range(t,0x5544,0x555c);
+            for (U32 a=0x5520;a<=0x5540;a+=4)
+                if (t.registers.count(a)) coefficients.push_back(a);
+            record(t,coefficients);
+            if (!sparseChunks) range(t,0x5544,0x555c);
         } else record(t,{0x5500});
     }
-    // Reset chunk size 64 is omitted, including mixed sparse tables.
-    // Split across a default hole; contiguous offsets/sizes share a record.
-    std::vector<U32> chunk;
-    for (const auto &[a,v] : t.registers) {
-        (void)v;
-        if (a < 0x5564 || a > 0x55dc) continue;
-        if (!chunk.empty() && a != chunk.back()+4) {
-            record(t,chunk); chunk.clear();
+    if (sparseChunks) {
+        // Apple's form: from each record's first register, a dense record
+        // while the next register follows it, else a scatter record taking
+        // every register up to 16 words past the first.
+        std::vector<U32> left;
+        for (const auto &[a,v] : t.registers) {
+            (void)v;
+            if (a >= 0x5544 && a <= 0x55dc) left.push_back(a);
         }
-        chunk.push_back(a);
+        for (std::size_t i = 0; i < left.size();) {
+            std::size_t j = i+1;
+            if (j < left.size() && left[j] == left[i]+4)
+                while (j < left.size() && left[j] == left[j-1]+4) ++j;
+            else
+                while (j < left.size() && left[j]-left[i] <= 64) ++j;
+            record(t,std::vector<U32>(left.begin()+i,left.begin()+j));
+            i = j;
+        }
+    } else {
+        // Reset chunk size 64 is omitted, including mixed sparse tables.
+        // Split across a default hole; contiguous offsets/sizes share a record.
+        std::vector<U32> chunk;
+        for (const auto &[a,v] : t.registers) {
+            (void)v;
+            if (a < 0x5564 || a > 0x55dc) continue;
+            if (!chunk.empty() && a != chunk.back()+4) {
+                record(t,chunk); chunk.clear();
+            }
+            chunk.push_back(a);
+        }
+        record(t,chunk);
     }
-    record(t,chunk);
     range(t,0x0004,0x000c); range(t,0x0014,0x004c);
     if (t.registers.count(0x4d08)) {
         std::vector<U32> sourceGeometry;
@@ -200,14 +242,19 @@ void pack(Task &t) {
 // lanes hold Cout/16 columns of Cin*taps rows (+1 bias row), padded to 64.
 // The sparse stride-2 vectors reproduce Apple's zero-skipping sections for
 // the campaign's BLOBFILE view only (descriptor parity, never packaging).
-std::array<U32,16> chunks(ConvShape s, bool sparse) {
+std::array<U32,16> chunks(Generation gen, ConvShape s, bool sparse) {
     std::array<U32,16> out{};
     const bool dw = s.groups == s.input.channels;
     const U32 taps = s.kernel*s.kernelWidth;
     const U32 rows = (dw ? 1 : s.input.channels)*taps + (s.bias ? 1 : 0);
-    const Schedule *p = schedule(s);
+    const Schedule *p = schedule(s, gen);
     if (s.stride == 1 && p && p->chunkOutputs) {
-        out.fill(align64(2*rows*p->chunkOutputs));
+        // H16G repeats each group over 16*chunkOutputs/Cout consecutive
+        // chunks; H17 puts it in the first of them only and leaves the rest
+        // out (size 0: no coefficient, offset or size register).
+        const U32 repeat = 16*p->chunkOutputs/s.output.channels;
+        for (unsigned i = 0; i < 16; ++i)
+            out[i] = gen != Generation::H17 || i % repeat == 0 ? align64(2*rows*p->chunkOutputs) : 0;
     } else if (s.stride == 1 || !sparse) {
         out.fill(align64(2*rows*(s.output.channels/16)));
     } else if (dw && s.input.channels == 64) out.fill(128);
@@ -226,7 +273,7 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
           U32 srcBase, U32 resultBase, U32 kernelBase, U32 residentRow,
           U32 residentStride) {
     const auto s = layer.shape;
-    const auto &p = *schedule(s);
+    const auto &p = *schedule(s, gen);
     const bool first = stage == 0, last = stage+1 == count;
     const bool linked = count != 1;
     const bool dw = s.groups == s.input.channels;
@@ -235,7 +282,7 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     // ExeCycles (header[1]) is unknown; zero is an explicit unmodelled hint.
     t.header = {stage,0, first ? (last ? 0x04000068u : 0x68u)
                                : (last ? 0x04000000u : 0u),
-                0, first ? ((!linked && !p.headerWindow) ? 0x68u : kDispatchLimitFirst) : (last ? kDispatchLimitFinal
+                0, first ? ((!linked && !p.headerWindow && !h17) ? 0x68u : kDispatchLimitFirst) : (last ? kDispatchLimitFinal
                                     : (h17 ? kDispatchLimitMiddleH17 : kDispatchLimitMiddleH16G)),
                 0,0, last ? 0u : (count == 2 ? 0x7fu
                                   : (first ? 0x01ffffffu : 0x7fffffffu)),
@@ -311,9 +358,10 @@ Task task(Generation gen, Layer layer, bool sparse, unsigned stage, unsigned cou
     }
     r[0x5500]=(stage+1)<<16 | (last ? 0x2c0 : 0x240) | (sparseKernel ? 0x20 : 0);
     r[0x5510]=kernelBase; r[0x5514]=0;
-    const auto sizes=layer.kernelChunks[0] ? layer.kernelChunks : chunks(s,sparse);
+    const auto sizes=layer.kernelChunks[0] ? layer.kernelChunks : chunks(gen,s,sparse);
     U32 offset=0;
     for (unsigned i=0; i<16; ++i) {
+        if (!sizes[i]) continue;
         r[0x5520+4*i]=stage<<16 | 0x21;
         if (i) r[0x5560+4*i]=offset;
         if (sizes[i]!=64) r[0x55a0+4*i]=sizes[i];
@@ -1159,7 +1207,7 @@ std::string convRefusal(ConvShape s) {
         return "only SAME surfaces are supported";
     if (s.input.width!=s.input.height && s.stride!=1)
         return "only the measured square surfaces are supported at stride 2";
-    if (!schedule(s)) return "geometry has no measured H16G/H17 schedule (TileHeight, skew, result mode)";
+    if (!schedule(s, Generation::H16G)) return "geometry has no measured H16G/H17 schedule (TileHeight, skew, result mode)";
     return {};
 }
 std::string executableRefusal(ConvShape s) {
@@ -1211,7 +1259,7 @@ Description describe(Generation gen, const std::vector<Layer> &layers, bool spar
         out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
         out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
         out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
-        U32 length=0; for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(s,sparseStride2)) length+=n;
+        U32 length=0; for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(gen,s,sparseStride2)) length+=n;
         kernelBase+=length;
         if (r.count(0x4150)) {residentRow=r.at(0x4150);residentStride=r.at(0x4154);}
         source=result;
@@ -1655,7 +1703,17 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
                       (h17 ? kDispatchLimitMiddleH17 : kDispatchLimitMiddleH16G)),
                   0,0,last ? 0u : 0x1fffffffu,last ? 0x00050009u : 0x00050001u};
         r[0x5500]=(i+1)<<16 | (last ? 0x2c0 : 0x240);
-        for (unsigned k=0;k<16;++k) r[0x5520+4*k]=i<<16 | 0x21;
+        // A chunk the table leaves out (H17 groups) is written disabled
+        // after the first task and left out in it, as in Apple's chained
+        // output. Unwritten registers reset per task (J700), so this follows
+        // Apple's form; it does not stop state carrying over.
+        const auto layerChunks=layers[i].kernelChunks[0] ? layers[i].kernelChunks
+                                                         : chunks(gen,layers[i].shape,true);
+        for (unsigned k=0;k<16;++k) {
+            if (layerChunks[k]) r[0x5520+4*k]=i<<16 | 0x21;
+            else if (first) r.erase(0x5520+4*k);
+            else r[0x5520+4*k]=i<<16 | 0x20;
+        }
         const U32 region=scratchRegionBytes;
         if (!first) {
             const U32 low=form==DramEdgeForm::Measured ? 0x41 : 0x21;
@@ -1677,7 +1735,7 @@ Description describeDramChain(Generation gen, const std::vector<Layer> &layers,
         out.stream.resize((out.stream.size()+15)&~std::size_t(15),0);
         out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
         out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
-        U32 length=0; for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(s,true)) length+=n;
+        U32 length=0; for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(gen,s,true)) length+=n;
         kernelBase+=length;
         out.tasks.push_back(std::move(t));
     }
@@ -1979,7 +2037,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
             // EXECUTE.  This is the linked equivalent of task()'s
             // 0x50017a/0x500172 distinction.
             r[0x4148]=variant.fieldSwap==MobileNetL2FieldSwap::LegacyTerminalDirect
-                ? 0x14a : (schedule(layers[i].shape)->direct ? 0x14a : 0x142);
+                ? 0x14a : (schedule(layers[i].shape, gen)->direct ? 0x14a : 0x142);
             if (i==1 && variant.fieldSwap==MobileNetL2FieldSwap::SentinelFirstEdgeGeometry) {
                 const U32 width=(mobileNetV1[0].width+mobileNetV1[0].stride-1)/
                                 mobileNetV1[0].stride;
@@ -2030,7 +2088,7 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
         out.kernelRelocations.push_back(out.stream.size()+t.kernelRelocation);
         out.stream.insert(out.stream.end(),t.bytes.begin(),t.bytes.end());
         U32 length=0;
-        for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(layers[i].shape,true))
+        for (U32 n:layers[i].kernelChunks[0] ? layers[i].kernelChunks : chunks(gen,layers[i].shape,true))
             length+=n;
         kernelBase+=length;
         out.tasks.push_back(std::move(t));
@@ -2046,8 +2104,8 @@ Description describeMobileNetL2(Generation gen, const std::vector<Layer> &layers
 // the outputs of group i*groups/16 (groups = Cout/chunkOutputs). In a chunk
 // the bias row comes first, then one row per input channel and tap (depthwise:
 // per tap), each row holding the group's outputs in order; chunks are padded
-// to 64 bytes.
-std::vector<std::uint8_t> packGroupedConv(ConvShape s, const std::uint8_t *weights,
+// to 64 bytes. H17 leaves out the chunks that would repeat a group.
+std::vector<std::uint8_t> packGroupedConv(Generation gen, ConvShape s, const std::uint8_t *weights,
                                           std::size_t size, const std::uint8_t *bias,
                                           std::size_t biasBytes, U32 group) {
     const bool dw = s.groups == s.input.channels;
@@ -2059,10 +2117,11 @@ std::vector<std::uint8_t> packGroupedConv(ConvShape s, const std::uint8_t *weigh
         throw std::invalid_argument("grouped conv kernel needs Cout*Cin/groups*k*k fp16 weights");
     const U32 groups = cout/group, rows = cin*taps + (s.bias ? 1 : 0);
     const U32 chunk = align64(2*rows*group);
-    std::vector<std::uint8_t> out(16*std::size_t(chunk), 0);
-    for (U32 i = 0; i < 16; ++i) {
+    const U32 repeat = gen == Generation::H17 ? 16/groups : 1;
+    std::vector<std::uint8_t> out(16/repeat*std::size_t(chunk), 0);
+    for (U32 i = 0; i < 16; i += repeat) {
         const U32 first = i*groups/16*group;
-        std::size_t at = std::size_t(i)*chunk;
+        std::size_t at = std::size_t(i/repeat)*chunk;
         const auto put = [&](const std::uint8_t *h) { out[at] = h[0]; out[at+1] = h[1]; at += 2; };
         if (s.bias) for (U32 o = 0; o < group; ++o) put(bias + 2*(first+o));
         for (U32 c = 0; c < cin; ++c)
@@ -2083,8 +2142,8 @@ h13::Program encodeConv(Generation gen, ConvShape s, const std::uint8_t *weights
             (bias && biasBytes!=std::size_t(s.output.channels)*2))
             throw std::invalid_argument("stride-2 conv needs Cout*Cin/groups*9 fp16 weights (and Cout bias halfwords)");
         constants=packSparseStride2(s,weights,bias,layer.kernelChunks);
-    } else if (const Schedule *p=schedule(s); p && p->chunkOutputs) {
-        constants=packGroupedConv(s,weights,size,bias,biasBytes,p->chunkOutputs);
+    } else if (const Schedule *p=schedule(s, gen); p && p->chunkOutputs) {
+        constants=packGroupedConv(gen,s,weights,size,bias,biasBytes,p->chunkOutputs);
     } else {
         constants=h13::packConvWeights(s,weights,size,bias,biasBytes);
     }
