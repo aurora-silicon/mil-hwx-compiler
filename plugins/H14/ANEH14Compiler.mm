@@ -393,7 +393,10 @@ static NSData *encodeHWX(const ane::h14::Program &program,
         initWithTaskCount:program.taskCount
         recordCount:program.programRecordCount
         formatCode:h14 ? 0 : program.unresolvedDescriptorWord
-        scratchByteLength:program.scratchAllocationBytes descriptorLayout:HWXProgramDescriptorLayoutLinear];
+        scratchByteLength:0 descriptorLayout:HWXProgramDescriptorLayoutLinear];
+    // A linear program keeps its scratch as the __DATA/__bss allocation the
+    // descriptor's +0x50 base names; it declares no mixed-layout scratch.
+    info.scratchAllocationByteLength = program.scratchAllocationBytes;
     info.unresolvedDescriptorWord = program.unresolvedDescriptorWord;
     info.h14ScratchDescriptorWord = program.scratchDescriptorWord;
     if (!program.kernelTable.empty())

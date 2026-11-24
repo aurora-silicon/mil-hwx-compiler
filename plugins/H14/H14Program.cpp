@@ -621,6 +621,16 @@ Program encodeNormParity(NormOperation operation, NormShape shape) {
     return program;
 }
 
+void setFormulaDescriptorWords(Program &program) {
+    if (!program.formulaBuilt || !program.taskCount)
+        throw std::invalid_argument("H14 descriptor words are derived only for formula-built programs");
+    if (program.taskCount > (std::numeric_limits<std::uint32_t>::max() - 6) / 14)
+        throw std::invalid_argument("H14 task count exceeds the descriptor record field");
+    program.programRecordCount = program.taskCount == 1 ? 17 : 14 * program.taskCount + 6;
+    program.unresolvedDescriptorWord = 0;
+    program.scratchDescriptorWord = 0;
+}
+
 std::vector<std::uint8_t> encodeANEC(const Program &program) {
     const auto sizes = taskSizes(program.taskStream);
     if (sizes.size() != program.taskCount || sizes.front() != program.firstTaskBytes)
