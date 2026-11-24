@@ -6,8 +6,9 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
                           NSString *format, BOOL linked, BOOL linkedRing,
                           NSString *researchCompactTaskMinimumBytes,
                           ANEDiagnosticEngine *diagnostics, NSError **error) {
-    if (![format isEqualToString:@"anec"])
-        return reject(diagnostics, @"H14 formula-built convolution currently emits ANEC; HWX descriptor cost fields remain unresolved",
+    const BOOL hwx = [format isEqualToString:@"hwx"];
+    if (!hwx && ![format isEqualToString:@"anec"])
+        return reject(diagnostics, @"H14 formula-built convolution emits ANEC or HWX",
                       nil, @"h14.conv-outside-envelope");
     if (function.inputs.count != 1 || function.returnValues.count != 1)
         return reject(diagnostics, @"H14 convolution needs one input and one result",
@@ -105,10 +106,21 @@ static BOOL emitConvGraph(ANEGraphFunction *function,
         NSMutableArray *intermediates = [NSMutableArray array];
         NSMutableDictionary *regions = [NSMutableDictionary dictionary];
         for (NSUInteger i = 0; i < programs.size(); ++i) {
-            const auto &p = programs[i];
+            auto &p = programs[i];
             NSData *payload = nil;
-            const auto anec = ane::h14::encodeANEC(p);
-            payload = [NSData dataWithBytes:anec.data() length:anec.size()];
+            if (hwx) {
+                // The HWX writer places __TEXT/__const at the first 64-byte
+                // boundary after the stream; the stream's coefficient
+                // addresses assume constantOffsetBytes.
+                if (p.constantOffsetBytes != ((p.taskStream.size() + 63) & ~std::size_t(63)))
+                    return reject(diagnostics, @"H14 HWX needs the constant section at the first 64-byte boundary after the task stream",
+                                  nil, @"h14.conv-outside-envelope");
+                ane::h14::setFormulaDescriptorWords(p);
+                payload = encodeHWX(p, HWXObjectArchitectureH14, @[], error);
+            } else {
+                const auto anec = ane::h14::encodeANEC(p);
+                payload = [NSData dataWithBytes:anec.data() length:anec.size()];
+            }
             if (!payload) return NO;
             NSDictionary *record = @{
                 @"file": [NSString stringWithFormat:@"program-%lu.%@", (unsigned long)i, format],

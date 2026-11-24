@@ -65,6 +65,45 @@ def compile_one(r, root):
     return run, out
 
 
+
+def check_h14_hwx(hwx_path, anec_path, scratch):
+    """The HWX carries the ANEC's task stream and constants unchanged, and its
+    descriptor names every BAR slot the stream uses (slot s at 0x10*(s+1))."""
+    h, a = hwx_path.read_bytes(), anec_path.read_bytes()
+    content = a[0x1000:0x1000 + struct.unpack_from('<Q', a, 0)[0]]
+    ncmds, pos, sections, descriptor = struct.unpack_from('<I', h, 16)[0], 32, {}, None
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from('<II', h, pos)
+        if cmd == 0x19:
+            seg = h[pos + 8:pos + 24].rstrip(b'\0').decode()
+            for k in range(struct.unpack_from('<I', h, pos + 64)[0]):
+                o = pos + 72 + 80 * k
+                name = h[o:o + 16].rstrip(b'\0').decode()
+                sections.setdefault((seg, name), []).append(struct.unpack_from('<QQI', h, o + 32))
+        elif cmd == 4 and size == 0x890:
+            descriptor = pos
+        pos += size
+    assert descriptor is not None
+    (tvm, tsize, toff), = sections[('__TEXT', '__text')]
+    (cvm, csize, coff), = sections[('__TEXT', '__const')]
+    offset = (tsize + 63) & ~63
+    assert content[:tsize] == h[toff:toff + tsize]
+    assert cvm == tvm + offset
+    assert content[offset:] == h[coff:coff + len(content) - offset]
+    q = lambda off: struct.unpack_from('<Q', h, descriptor + off)[0]
+    w = lambda off: struct.unpack_from('<I', h, descriptor + off)[0]
+    surfaces = sections[('__FVMLIB', '__const')] + sections[('__FVMLIB', '__data')]
+    assert q(0x10) == tvm and q(0x20) == cvm
+    assert (('__DATA', '__bss') in sections) == scratch
+    if scratch:
+        assert q(0x40) == sections[('__DATA', '__bss')][0][0]
+    assert q(0x50) == sections[('__FVMLIB', '__const')][0][0]
+    assert q(0x60) == sections[('__FVMLIB', '__data')][0][0]
+    tasks = w(0x830)
+    assert w(0x860) == (17 if tasks == 1 else 14 * tasks + 6)
+    assert w(0x858) == 0 and w(0x880) == 0
+    assert len(surfaces) == 2
+
 def linked_checks(root):
     checked = 0
     for path in sorted((ROOT / 'research/oracles/h14-mobile').glob('*chain*.json')):
@@ -78,13 +117,13 @@ def linked_checks(root):
                               '--output', str(case / 'out')], capture_output=True, text=True,
                              timeout=scaled_timeout(120))
         assert run.returncode == 0, (path.name, run.stderr)
-        if not checked:
-            refused = subprocess.run([COMPILER, '--target', 'H14', '--schedule', 'linked',
-                '--format', 'hwx', '--mil', str(case / 'model.mil'), '--model-root', str(case),
-                '--output', str(case / 'unresolved-hwx')], capture_output=True, text=True,
-                timeout=scaled_timeout(120))
-            assert refused.returncode != 0 and 'descriptor cost fields' in refused.stderr
-            assert not (case / 'unresolved-hwx').exists()
+        hwx_run = subprocess.run([COMPILER, '--target', 'H14', '--schedule', 'linked',
+            '--format', 'hwx', '--mil', str(case / 'model.mil'), '--model-root', str(case),
+            '--output', str(case / 'hwx')], capture_output=True, text=True,
+            timeout=scaled_timeout(120))
+        assert hwx_run.returncode == 0, (path.name, hwx_run.stderr)
+        check_h14_hwx(case / 'hwx/program-0.hwx', case / 'out/program-0.anec',
+                      r['parameters']['layers'] > 1)
         m = json.loads((case / 'out/manifest.json').read_text())
         assert len(m['programs']) == 1 and m['dispatchPlan'] == [0]
         assert len(m['scratch']['regions']) == r['parameters']['layers'] - 1

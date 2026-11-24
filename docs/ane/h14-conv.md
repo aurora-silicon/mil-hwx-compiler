@@ -228,9 +228,14 @@ a repeat count.
 
 ## Envelope and verification limits
 
-Formula-built convolutions emit ANEC. HWX remains available for the existing
-exact-parity forms; generic HWX is refused until its descriptor cost fields
-are derived.
+Formula-built convolutions emit ANEC or HWX. The HWX carries the ANEC's task
+stream and constants unchanged; its descriptor derives the record count at
++0x860 from the task count (17 for one task, 14 * tasks + 6 for more, as in
+every decoded convolution and chain), leaves the +0x858 and +0x880 hints zero
+(+0x880 is the key-9 entry H16G writes at +0x890, which formula-built H16G
+programs also leave zero) and writes the BAR slot table: slot s at
++0x10 * (s + 1), text_const in slot 1, scratch in slot 3, then the first
+input, the output and the other inputs.
 
 The generic path covers fp16 NCHW batch 1, square 1x1/3x3 dense or depthwise
 stride 1 and dense 1x1 stride 2, symmetric same/valid/custom padding and

@@ -143,16 +143,23 @@ static NSData *programDescriptor(uint64_t textAddress,uint64_t textConstAddress,
         return d;
     }
     if (architecture == HWXObjectArchitectureH14) {
-        // Decoded from research/oracles/h14: kind 4 in a 0x890-byte command,
-        // text_const at 0x20, resource slots 0..3 zero with the scratch base
-        // in slot 4, and a 32-word trailer whose function name is "main".
-        // The word at 0xc is not decoded by the campaign; it follows the
-        // other kind-4 descriptor.
+        // Decoded from research/oracles/h14: kind 4 in a 0x890-byte command
+        // and a 32-word trailer whose function name is "main". As on H16G,
+        // BAR slot s takes its base from the qword at 0x10 * (s + 1): text
+        // at 0x10, text_const (slot 1) at 0x20, the __DATA scratch (slot 3)
+        // at 0x40 when the program has one, then from slot 4 the first
+        // input, the output and the other inputs (resourceAddresses, in
+        // that order). The word at 0xc is not decoded by the campaign; it
+        // follows the other kind-4 descriptor.
         NSMutableData *d = [NSMutableData dataWithLength:0x890];
         writeU32(d,0,4); writeU32(d,4,0x890); writeU32(d,8,4);
         writeU32(d,0xc,0x222); writeU64(d,0x10,textAddress);
         writeU64(d,0x20,textConstAddress);
-        writeU64(d,0x50,scratchAddress);
+        if (info.scratchAllocationByteLength) writeU64(d,0x40,scratchAddress);
+        for (NSUInteger index = 0; index < MIN((NSUInteger)123,
+                                               resourceAddresses.count); ++index)
+            writeU64(d,0x50 + index * 0x10,
+                     resourceAddresses[index].unsignedLongLongValue);
         writeU64(d,0x810,textAddress);
         writeU32(d,0x820,4); writeU32(d,0x824,taskWordCount);
         writeU32(d,0x830,(uint32_t)info.taskCount);
@@ -716,6 +723,17 @@ static NSData *symbolTableCommand(uint32_t symbolOffset,
         [commands addObject:bufferReference(bindings[i],
             bindingVMs[i].unsignedLongLongValue)];
     NSMutableArray<NSNumber *> *resourceAddresses = [bindingVMs mutableCopy];
+    if (architecture == HWXObjectArchitectureH14) {
+        // H14 slots 4, 5, 6...: the first input, the output, the other inputs.
+        NSMutableArray<NSNumber *> *ins = [NSMutableArray array], *outs = [NSMutableArray array];
+        for (NSUInteger i = 0; i < bindings.count; ++i)
+            [(bindings[i].role == HWXObjectBindingRoleInput ? ins : outs) addObject:bindingVMs[i]];
+        [resourceAddresses removeAllObjects];
+        if (ins.count) [resourceAddresses addObject:ins[0]];
+        [resourceAddresses addObjectsFromArray:outs];
+        if (ins.count > 1)
+            [resourceAddresses addObjectsFromArray:[ins subarrayWithRange:NSMakeRange(1, ins.count - 1)]];
+    }
     if (hasKernel) [resourceAddresses addObject:@(kernelVM)];
     NSUInteger firstTaskBytes = programInfo.firstTaskByteLength ?: taskDescriptor.length;
     [commands addObject:programDescriptor(textVM,textConstVM,scratchVM,

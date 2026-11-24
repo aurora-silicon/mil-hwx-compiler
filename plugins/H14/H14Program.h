@@ -254,4 +254,14 @@ Program composePrograms(const std::vector<Program> &programs);
 std::vector<std::size_t> taskSizes(const std::vector<std::uint8_t> &stream);
 std::vector<std::uint8_t> encodeANEC(const Program &program);
 
+/// Fills the three H14 program-descriptor hints of a formula-built program
+/// for its HWX container. The record count at +0x860 follows the decoded
+/// convolution and chain corpus: 17 for one task, 14 * tasks + 6 for two or
+/// more (175 single-task convolutions and every multi-task conv/exp chain in
+/// research/oracles/h14*). The key-9 trailer word at +0x880 is the slot that
+/// H16G/H17 write at +0x890; formula-built H16G convolutions leave it zero and
+/// run on the 27.x firmware, so it stays zero here, as does the +0x858 word
+/// that every decoded single-program convolution leaves zero.
+void setFormulaDescriptorWords(Program &program);
+
 }
