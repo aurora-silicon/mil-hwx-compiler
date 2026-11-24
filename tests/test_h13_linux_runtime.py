@@ -46,7 +46,7 @@ def test_adapter_loads_real_libane():
     """The binding must resolve against a real libane_python.so: the dunder
     symbols break under class-body name mangling (`self.lib.__ane_src_size`
     looks up `_LibANEAdapter__ane_src_size`, which libane never exports), and
-    send/read are void entry points."""
+    checked send/read must return status."""
     library = find_real_library()
     if library is None:
         raise unittest.SkipTest(
@@ -57,8 +57,8 @@ def test_adapter_loads_real_libane():
     assert callable(adapter._src_size)
     assert callable(adapter._dst_size)
     assert callable(adapter._exec)
-    assert adapter._send.restype is None  # libane send/read return void
-    assert adapter._read.restype is None
+    assert adapter._send_checked.restype is ctypes.c_int
+    assert adapter._read_checked.restype is ctypes.c_int
 
 
 def test_adapter_rejects_library_without_libane_abi():
@@ -93,15 +93,17 @@ def test_call_sequence_matches_real_libane_abi():
         "outputs": [{"name": "y", "allocationBytes": 256}],
     }
     calls = h13_run_linux.LibANEAdapter.call_sequence(program)
-    assert calls[0].startswith("pyane_init(")
+    assert calls[0].startswith("ane_init_target(")
     assert not any("bind_kernel" in call or "exec_loop" in call for call in calls)
     assert calls[1].startswith("__ane_src_size(handle, 0)")
     assert calls[2].startswith("__ane_src_size(handle, 1)")
-    assert calls[3].startswith("__ane_dst_size(handle, 0)")
-    assert calls[4].startswith("__ane_send(handle, buffer, 0)")
-    assert calls[5].startswith("__ane_send(handle, buffer, 1)")
-    assert calls[6] == "ane_exec(handle)"
-    assert calls[7].startswith("__ane_read(handle, buffer, 0)")
+    assert calls[3].startswith("__ane_src_size(handle, 2) == 0")
+    assert calls[4].startswith("__ane_dst_size(handle, 0)")
+    assert calls[5].startswith("__ane_dst_size(handle, 1) == 0")
+    assert calls[6].startswith("ane_send_checked(handle, buffer, 128, 0)")
+    assert calls[7].startswith("ane_send_checked(handle, buffer, 128, 1)")
+    assert calls[8] == "ane_exec(handle)"
+    assert calls[9].startswith("ane_read_checked(handle, buffer, 256, 0)")
     assert calls[-1] == "pyane_free(handle)"
 
 
@@ -128,10 +130,10 @@ class ScriptedAdapter:
         return 0x1000
 
     def _src_size(self, handle, index):
-        return self.src_sizes[index]
+        return self.src_sizes[index] if index < len(self.src_sizes) else 0
 
     def _dst_size(self, handle, index):
-        return self.dst_sizes[index]
+        return self.dst_sizes[index] if index < len(self.dst_sizes) else 0
 
     def _send(self, handle, buffer, index):
         self.sent.append(index)
@@ -670,7 +672,7 @@ def test_benchmark_reads_program_artifacts_only_before_iterations():
             inspect_anec.local_file = saved_local_file
             h13_run_linux.PreparedProgram = saved_program
         program_reads = [name for name in reads if name.endswith(".anec")]
-        assert len(program_reads) == 2 * len(correct_surfaces), program_reads
+        assert len(program_reads) == len(correct_surfaces), program_reads
         assert all(program.closed == 1 for program in programs)
 
 def test_cli_refuses_native_timing_flags_on_dry_run():
